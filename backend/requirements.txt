@@ -1,0 +1,14 @@
+fastapi==0.104.0
+uvicorn==0.23.2
+sqlalchemy==2.0.40
+alembic==1.15.2
+psycopg2-binary==2.9.10
+pytest==7.4.3
+httpx==0.25.1
+celery==5.3.4
+redis==5.0.1
+python-jose==3.3.0
+python-multipart==0.0.6
+passlib[bcrypt]==1.7.4
+pydantic[email]==2.5.2
+python-dotenv==1.0.0
