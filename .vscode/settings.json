@@ -1,0 +1,15 @@
+{
+    "css.validate": true,
+    "css.lint.unknownProperties": "ignore",
+    "css.lint.validProperties": ["width", "height"],
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/CVS": true,
+        "**/.DS_Store": true,
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/env": true
+    }
+} 

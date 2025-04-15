@@ -5,30 +5,39 @@ import os
 from dotenv import load_dotenv
 import urllib.parse
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Get database connection parameters
-user = os.getenv("POSTGRES_USER")
-password = os.getenv("POSTGRES_PASSWORD")
-server = os.getenv("POSTGRES_SERVER")
-port = os.getenv("POSTGRES_PORT")
-db = os.getenv("POSTGRES_DB")
+user = os.getenv("POSTGRES_USER", "panashe")
+password = os.getenv("POSTGRES_PASSWORD", "panashe")
+host = os.getenv("POSTGRES_SERVER", "localhost")
+port = os.getenv("POSTGRES_PORT", "5432")
+database = os.getenv("POSTGRES_DB", "aiprojectmanagement")
 
-# Properly encode the password to handle special characters
-quoted_password = urllib.parse.quote_plus(password)
+# Print connection details for debugging
+print("Database connection details in database.py:")
+print(f"User: {user}")
+print(f"Password: {'*' * len(password)}")
+print(f"Server: {host}")
+print(f"Port: {port}")
+print(f"DB: {database}")
 
-# Create the database URL with proper encoding
-DATABASE_URL = f"postgresql://{user}:{quoted_password}@{server}:{port}/{db}"
+# URL encode the password to handle special characters
+encoded_password = urllib.parse.quote_plus(password)
 
-# Create SQLAlchemy engine
+# Create the database URL with encoded password
+DATABASE_URL = f"postgresql://{user}:{encoded_password}@{host}:{port}/{database}"
+print(f"Using DATABASE_URL: {DATABASE_URL}")
+
+# Create base class for models
+Base = declarative_base()
+
+# Create engine
 engine = create_engine(DATABASE_URL)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Create base class for models
-Base = declarative_base()
 
 # Dependency to get db session
 def get_db():

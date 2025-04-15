@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from sqlalchemy import create_engine
+from sqlalchemy.engine.url import URL
 
 from alembic import context
 
@@ -22,32 +23,21 @@ import models
 load_dotenv()
 
 # Get environment variables
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "panashe")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "panashe")
 POSTGRES_SERVER = os.getenv("POSTGRES_SERVER", "localhost")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "aiprojectmanagent")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "aiprojectmanagement")
 
-# Create database URL based on environment
-if ENVIRONMENT == "development":
-    # Use SQLite for development
-    SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
-else:
-    # Use PostgreSQL for production
-    # Encode password to handle special characters
-    quoted_password = urllib.parse.quote_plus(POSTGRES_PASSWORD)
-    
-    # Direct string concatenation to avoid interpolation issues
-    SQLALCHEMY_DATABASE_URL = "postgresql://" + POSTGRES_USER + ":" + quoted_password + "@" + POSTGRES_SERVER + ":" + POSTGRES_PORT + "/" + POSTGRES_DB
+# URL encode the password to handle special characters
+encoded_password = urllib.parse.quote_plus(POSTGRES_PASSWORD)
+
+# Create PostgreSQL database URL
+SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{encoded_password}@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-
-# Set raw sqlalchemy.url in alembic config
-# The key here is to use set_section_option instead of set_main_option
-config.set_section_option(config.config_ini_section, "sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -76,20 +66,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    # Instead of using config.get_main_option, we'll use our manually created URL
-    # Get environment variables
-    user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
-    server = os.getenv("POSTGRES_SERVER", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "aiprojectmanagent")
-    
-    # URL encode the password to handle special characters
-    encoded_password = urllib.parse.quote_plus(password)
-    
-    # Create the database URL with manual string concatenation
-    url = "postgresql://" + user + ":" + encoded_password + "@" + server + ":" + port + "/" + db
-
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -108,24 +85,13 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    # Instead of using config to create the engine, we'll create it directly
-    # Get environment variables
-    user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
-    server = os.getenv("POSTGRES_SERVER", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "aiprojectmanagent")
-    
-    # URL encode the password to handle special characters
-    encoded_password = urllib.parse.quote_plus(password)
-    
-    # Create the database URL with manual string concatenation
-    url = "postgresql://" + user + ":" + encoded_password + "@" + server + ":" + port + "/" + db
-    
-    # Create the engine directly
-    engine = create_engine(url)
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
-    with engine.connect() as connection:
+    with connectable.connect() as connection:
         context.configure(
             connection=connection, target_metadata=target_metadata
         )

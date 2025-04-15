@@ -63,7 +63,7 @@ export default function LoginPage() {
         
         {error && (
           <div className="bg-red-50 text-red-800 p-3 rounded-md text-sm">
-            {error}
+            {typeof error === 'object' ? JSON.stringify(error) : error}
             <button 
               className="float-right font-bold"
               onClick={clearError}

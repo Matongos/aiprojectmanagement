@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import axios from 'axios';
+import { toast } from 'react-hot-toast';
 
 // API URL - should be in environment variables
-const API_URL = 'http://localhost:8001';
+const API_URL = 'http://localhost:8003';
 
 // Axios instance with CORS config
 const api = axios.create({
@@ -21,7 +22,24 @@ interface User {
   username: string;
   email: string;
   full_name: string;
+  is_active: boolean;
   is_superuser: boolean;
+  profile_image_url?: string;
+  job_title?: string;
+  bio?: string;
+}
+
+interface ProfileUpdateData {
+  email?: string;
+  full_name?: string;
+  password?: string;
+  current_password?: string;
+  profile_image_url?: string;
+  job_title?: string;
+  bio?: string;
+  is_active?: boolean;
+  is_superuser?: boolean;
+  new_password?: string;
 }
 
 interface AuthState {
@@ -34,6 +52,18 @@ interface AuthState {
   register: (email: string, username: string, full_name: string, password: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
+  updateProfile: (profileData: ProfileUpdateData) => Promise<void>;
+  registerUser: (email: string, username: string, full_name: string, password: string, is_superuser: boolean) => Promise<void>;
+}
+
+interface ApiError {
+  response?: {
+    data?: {
+      detail?: string | { [key: string]: unknown };
+    };
+    status?: number;
+  };
+  message?: string;
 }
 
 // Create auth store with persistence
@@ -52,48 +82,87 @@ export const useAuthStore = create<AuthState>()(
         try {
           console.log(`Attempting login for: ${username}`);
           
-          // Create form data for token endpoint
-          const formData = new FormData();
+          // Create form data
+          const formData = new URLSearchParams();
           formData.append('username', username);
           formData.append('password', password);
-
-          // Use URLSearchParams for proper form submission
-          const params = new URLSearchParams();
-          params.append('username', username);
-          params.append('password', password);
-
-          const response = await axios.post(`${API_URL}/auth/login`, params, {
+          
+          const response = await axios.post(`${API_URL}/auth/login`, formData, {
             headers: {
-              'Content-Type': 'application/x-www-form-urlencoded'
-            }
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
           });
           
+          console.log("Raw response:", response);
           const data = response.data;
-          console.log("Login successful:", data);
+          console.log("Login response data:", data);
 
-          // Set auth state
+          if (!data || !data.user) {
+            console.error("Invalid response format:", data);
+            throw new Error('Invalid response format from server');
+          }
+
+          // Ensure all user fields are properly mapped
+          const userData: User = {
+            id: data.user.id,
+            username: data.user.username,
+            email: data.user.email,
+            full_name: data.user.full_name,
+            is_active: data.user.is_active ?? true,
+            is_superuser: data.user.is_superuser ?? false,
+            profile_image_url: data.user.profile_image_url || '',
+            job_title: data.user.job_title || '',
+            bio: data.user.bio || ''
+          };
+
+          console.log("Processed user data:", userData);
+
+          if (!data.access_token) {
+            console.error("No access token in response");
+            throw new Error('No access token received from server');
+          }
+
           set({
-            user: {
-              id: data.user_id,
-              username: data.username,
-              email: data.email,
-              full_name: data.full_name,
-              is_superuser: data.is_superuser
-            },
+            user: userData,
             token: data.access_token,
             isAuthenticated: true,
             isLoading: false,
             error: null
           });
 
-          // Set axios default auth header
-          axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
-        } catch (error: any) {
+          // Set authorization header for subsequent requests
+          api.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
+          
+          toast.success('Login successful!');
+        } catch (error: unknown) {
           console.error("Login error:", error);
+          
+          let errorMessage = 'Login failed. Please try again.';
+          
+          if (isApiError(error)) {
+            console.error("API Error response:", error.response);
+            const responseData = error.response?.data;
+            
+            if (typeof responseData === 'string') {
+              errorMessage = responseData;
+            } else if (typeof responseData?.detail === 'string') {
+              errorMessage = responseData.detail;
+            } else if (responseData?.detail && typeof responseData.detail === 'object') {
+              errorMessage = JSON.stringify(responseData.detail);
+            }
+            
+            // Add status code to error message for debugging
+            if (error.response?.status) {
+              errorMessage += ` (Status: ${error.response.status})`;
+            }
+          }
+          
           set({
             isLoading: false,
-            error: error.response?.data?.detail || 'Login failed. Please try again.'
+            error: errorMessage
           });
+          
+          toast.error(errorMessage);
         }
       },
 
@@ -113,14 +182,17 @@ export const useAuthStore = create<AuthState>()(
           const data = response.data;
           console.log("Registration successful:", data);
 
-          // Set auth state
           set({
             user: {
               id: data.user_id,
               username: data.username,
               email: data.email,
               full_name: data.full_name,
-              is_superuser: data.is_superuser
+              is_active: data.is_active ?? true,
+              is_superuser: data.is_superuser,
+              profile_image_url: data.profile_image_url,
+              job_title: data.job_title,
+              bio: data.bio
             },
             token: data.access_token,
             isAuthenticated: true,
@@ -128,14 +200,30 @@ export const useAuthStore = create<AuthState>()(
             error: null
           });
 
-          // Set axios default auth header
           axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error("Registration error:", error);
+          
+          let errorMessage = 'Registration failed. Please try again.';
+          
+          if (isApiError(error)) {
+            const responseData = error.response?.data;
+            
+            if (typeof responseData === 'string') {
+              errorMessage = responseData;
+            } else if (typeof responseData?.detail === 'string') {
+              errorMessage = responseData.detail;
+            } else if (responseData?.detail && typeof responseData.detail === 'object') {
+              errorMessage = JSON.stringify(responseData.detail);
+            }
+          }
+          
           set({
             isLoading: false,
-            error: error.response?.data?.detail || 'Registration failed. Please try again.'
+            error: errorMessage
           });
+          
+          toast.error(errorMessage);
         }
       },
 
@@ -156,10 +244,110 @@ export const useAuthStore = create<AuthState>()(
       // Clear error function
       clearError: () => {
         set({ error: null });
+      },
+
+      // Add updateProfile function
+      updateProfile: async (profileData: ProfileUpdateData) => {
+        set({ isLoading: true, error: null });
+        try {
+          console.log("Updating profile with data:", profileData);
+          
+          // Prepare the request data
+          const requestData: ProfileUpdateData = {};
+          
+          // Handle password update separately
+          if (profileData.password) {
+            if (!profileData.current_password) {
+              throw new Error("Current password is required to change password");
+            }
+            requestData.new_password = profileData.password;
+            requestData.current_password = profileData.current_password;
+          }
+          
+          // Add other fields if they exist
+          if (profileData.email) requestData.email = profileData.email;
+          if (profileData.full_name) requestData.full_name = profileData.full_name;
+          if (profileData.profile_image_url) requestData.profile_image_url = profileData.profile_image_url;
+          if (profileData.job_title) requestData.job_title = profileData.job_title;
+          if (profileData.bio) requestData.bio = profileData.bio;
+          
+          console.log("Sending request data:", requestData);
+          
+          const response = await axios.patch<User>(`${API_URL}/users/me/profile`, requestData, {
+            headers: {
+              'Authorization': `Bearer ${useAuthStore.getState().token}`
+            }
+          });
+          
+          const updatedUser = response.data;
+          console.log("Profile update successful:", updatedUser);
+
+          // Update the local state with the new user data
+          set((state) => {
+            if (!state.user) return state;
+            
+            return {
+              ...state,
+              user: {
+                ...state.user,
+                email: updatedUser.email,
+                full_name: updatedUser.full_name,
+                profile_image_url: updatedUser.profile_image_url,
+                job_title: updatedUser.job_title,
+                bio: updatedUser.bio
+              },
+              isLoading: false,
+              error: null
+            };
+          });
+
+          toast.success('Profile updated successfully');
+        } catch (error: unknown) {
+          console.error("Profile update error:", error);
+          
+          let errorMessage = 'Profile update failed. Please try again.';
+          
+          if (isApiError(error)) {
+            const responseData = error.response?.data;
+            
+            if (typeof responseData === 'string') {
+              errorMessage = responseData;
+            } else if (typeof responseData?.detail === 'string') {
+              errorMessage = responseData.detail;
+            } else if (responseData?.detail && typeof responseData.detail === 'object') {
+              errorMessage = JSON.stringify(responseData.detail);
+            }
+          }
+          
+          set({
+            isLoading: false,
+            error: errorMessage
+          });
+          
+          toast.error(errorMessage);
+        }
+      },
+
+      registerUser: async (email: string, username: string, full_name: string, password: string, is_superuser: boolean = false) => {
+        try {
+          const response = await api.post('/users/', {
+            email,
+            username,
+            full_name,
+            password,
+            is_superuser,
+          });
+          set({ user: response.data });
+          toast.success('Registration successful!');
+        } catch (error) {
+          console.error('Registration error:', error);
+          toast.error('Registration failed. Please try again.');
+          throw error;
+        }
       }
     }),
     {
-      name: 'auth-storage', // name of the item in storage
+      name: 'auth-storage',
       partialize: (state) => ({
         user: state.user,
         token: state.token,
@@ -167,4 +355,13 @@ export const useAuthStore = create<AuthState>()(
       })
     }
   )
-); 
+);
+
+// Type guard for API errors
+function isApiError(error: unknown): error is ApiError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error
+  );
+} 

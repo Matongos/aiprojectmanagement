@@ -15,6 +15,7 @@ const registerSchema = z.object({
   full_name: z.string().min(2, 'Full name must be at least 2 characters'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
   confirmPassword: z.string().min(6, 'Confirm password must be at least 6 characters'),
+  is_superuser: z.boolean().default(false),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ['confirmPassword'],
@@ -42,6 +43,7 @@ export default function RegisterPage() {
       full_name: '',
       password: '',
       confirmPassword: '',
+      is_superuser: false,
     },
   });
 
@@ -54,7 +56,7 @@ export default function RegisterPage() {
 
   // Handle form submission
   const onSubmit = async (data: RegisterFormValues) => {
-    await registerUser(data.email, data.username, data.full_name, data.password);
+    await registerUser(data.email, data.username, data.full_name, data.password, data.is_superuser);
   };
 
   return (
@@ -72,7 +74,7 @@ export default function RegisterPage() {
         
         {error && (
           <div className="bg-red-50 text-red-800 p-3 rounded-md text-sm">
-            {error}
+            {typeof error === 'object' ? JSON.stringify(error) : error}
             <button 
               className="float-right font-bold"
               onClick={clearError}
@@ -173,6 +175,18 @@ export default function RegisterPage() {
               {errors.confirmPassword && (
                 <p className="mt-1 text-sm text-red-600">{errors.confirmPassword.message}</p>
               )}
+            </div>
+
+            <div className="flex items-center">
+              <input
+                id="is_superuser"
+                type="checkbox"
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                {...register('is_superuser')}
+              />
+              <label htmlFor="is_superuser" className="ml-2 block text-sm text-gray-900">
+                Create as superuser
+              </label>
             </div>
           </div>
 
