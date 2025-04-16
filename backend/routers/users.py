@@ -263,6 +263,27 @@ async def deactivate_user(
     
     return user
 
+@router.delete("/me")
+async def delete_user_me(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete current user's own account.
+    """
+    user_id = current_user["id"]
+    
+    # Delete user using the service
+    error = user_service.delete_user(db, user_id)
+    
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {"message": "Account deleted successfully"}
+
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
     user_id: int,
@@ -270,9 +291,8 @@ async def delete_user(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Delete a user.
-    Only superusers can delete users.
-    Users cannot delete themselves.
+    Delete a user account.
+    Only superusers can delete other users' accounts.
     """
     # Check if user is superuser
     if not current_user["is_superuser"]:
@@ -281,15 +301,15 @@ async def delete_user(
             detail="Not enough permissions"
         )
     
-    # Prevent self-deletion
-    if current_user["id"] == user_id:
+    # Prevent superuser from deleting their own account through this endpoint
+    if user_id == current_user["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot delete your own account"
+            detail="Cannot delete own account through this endpoint. Use /users/me endpoint instead."
         )
     
     # Delete user using the service
-    success, error = user_service.delete_user(db, user_id)
+    error = user_service.delete_user(db, user_id)
     
     if error:
         raise HTTPException(
@@ -297,7 +317,7 @@ async def delete_user(
             detail=error
         )
     
-    return None
+    return {"message": "User deleted successfully"}
 
 @router.patch("/me/profile", response_model=UserResponse)
 async def update_my_profile(

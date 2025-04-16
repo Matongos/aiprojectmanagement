@@ -27,6 +27,7 @@ interface User {
   profile_image_url?: string;
   job_title?: string;
   bio?: string;
+  access_token?: string;
 }
 
 interface ProfileUpdateData {
@@ -82,14 +83,12 @@ export const useAuthStore = create<AuthState>()(
         try {
           console.log(`Attempting login for: ${username}`);
           
-          // Create form data
-          const formData = new URLSearchParams();
-          formData.append('username', username);
-          formData.append('password', password);
-          
-          const response = await axios.post(`${API_URL}/auth/login`, formData, {
+          const response = await axios.post(`${API_URL}/auth/login`, {
+            username,
+            password
+          }, {
             headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Type': 'application/json',
             },
           });
           
@@ -112,7 +111,8 @@ export const useAuthStore = create<AuthState>()(
             is_superuser: data.user.is_superuser ?? false,
             profile_image_url: data.user.profile_image_url || '',
             job_title: data.user.job_title || '',
-            bio: data.user.bio || ''
+            bio: data.user.bio || '',
+            access_token: data.access_token
           };
 
           console.log("Processed user data:", userData);
@@ -192,7 +192,8 @@ export const useAuthStore = create<AuthState>()(
               is_superuser: data.is_superuser,
               profile_image_url: data.profile_image_url,
               job_title: data.job_title,
-              bio: data.bio
+              bio: data.bio,
+              access_token: data.access_token
             },
             token: data.access_token,
             isAuthenticated: true,
@@ -294,7 +295,8 @@ export const useAuthStore = create<AuthState>()(
                 full_name: updatedUser.full_name,
                 profile_image_url: updatedUser.profile_image_url,
                 job_title: updatedUser.job_title,
-                bio: updatedUser.bio
+                bio: updatedUser.bio,
+                access_token: updatedUser.access_token
               },
               isLoading: false,
               error: null

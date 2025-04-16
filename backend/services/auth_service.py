@@ -123,79 +123,72 @@ def register_user(db: Session, email: str, username: str, full_name: str, passwo
         db.rollback()
         return None, str(e)
 
-def authenticate_user(db: Session, username: str, password: str):
-    """Authenticate a user using direct database connection if the ORM connection fails."""
+async def authenticate_user(db: Session, username: str, password: str):
+    """Authenticate a user and return user data with access token."""
     try:
         print(f"Authenticating user: {username}")
         
-        # Try with the provided session first
-        try:
-            # Find user with username - use text() properly
-            query = text("""
-                SELECT id, username, email, full_name, hashed_password, is_active, is_superuser,
-                       profile_image_url, job_title, bio
-                FROM users WHERE username = :username
-            """)
-            result = db.execute(query, {"username": username}).fetchone()
+        # Find user with username and check if they are active
+        query = text("""
+            SELECT id, username, email, full_name, hashed_password, is_active, is_superuser,
+                   profile_image_url, job_title, bio
+            FROM users 
+            WHERE username = :username AND is_active = true
+        """)
+        result = db.execute(query, {"username": username}).fetchone()
+        
+        if not result:
+            print(f"User not found or inactive: {username}")
+            return None, "Incorrect username or password"
             
-            if result:
-                print(f"User found through ORM session: {username}")
-                user = {
-                    "id": result[0],
-                    "username": result[1],
-                    "email": result[2],
-                    "full_name": result[3],
-                    "hashed_password": result[4],
-                    "is_active": result[5],
-                    "is_superuser": result[6],
-                    "profile_image_url": result[7],
-                    "job_title": result[8],
-                    "bio": result[9]
-                }
-                
-                if not verify_password(password, user["hashed_password"]):
-                    return None, "Incorrect password"
-                    
-                if not user["is_active"]:
-                    return None, "Inactive user"
-                    
-                # Create access token
-                access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-                access_token = create_access_token(
-                    data={"sub": user["username"], "id": user["id"]},
-                    expires_delta=access_token_expires
-                )
-                
-                print(f"Authentication successful for user: {username}")
-                
-                # Return user data without hashed_password
-                user_data = {
-                    "id": user["id"],
-                    "username": user["username"],
-                    "email": user["email"],
-                    "full_name": user["full_name"],
-                    "is_active": user["is_active"],
-                    "is_superuser": user["is_superuser"],
-                    "profile_image_url": user["profile_image_url"],
-                    "job_title": user["job_title"],
-                    "bio": user["bio"],
-                    "access_token": access_token,
-                    "token_type": "bearer"
-                }
-                return user_data, None
+        user = {
+            "id": result[0],
+            "username": result[1],
+            "email": result[2],
+            "full_name": result[3],
+            "hashed_password": result[4],
+            "is_active": result[5],
+            "is_superuser": result[6],
+            "profile_image_url": result[7],
+            "job_title": result[8],
+            "bio": result[9]
+        }
+        
+        if not verify_password(password, user["hashed_password"]):
+            print(f"Invalid password for user: {username}")
+            return None, "Incorrect username or password"
             
-            print(f"User not found in ORM session: {username}")
-            return None, "User not found"
-            
-        except Exception as orm_error:
-            print(f"ORM session error: {str(orm_error)}")
-            traceback.print_exc()
-            return None, f"Database error: {str(orm_error)}"
-            
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["username"], "id": user["id"]},
+            expires_delta=access_token_expires
+        )
+        
+        print(f"Authentication successful for user: {username}")
+        
+        # Return user data without hashed_password
+        user_data = {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "email": user["email"],
+                "full_name": user["full_name"],
+                "is_active": user["is_active"],
+                "is_superuser": user["is_superuser"],
+                "profile_image_url": user["profile_image_url"],
+                "job_title": user["job_title"],
+                "bio": user["bio"]
+            }
+        }
+        return user_data, None
+        
     except Exception as e:
         print(f"Authentication error: {str(e)}")
         traceback.print_exc()
-        return None, f"Authentication error: {str(e)}"
+        return None, "Incorrect username or password"
 
 def get_user_by_id(db: Session, user_id: int):
     """Get a user by ID."""

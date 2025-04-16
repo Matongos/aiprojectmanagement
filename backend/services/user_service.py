@@ -258,25 +258,31 @@ def update_user(db: Session, user_id: int, user_data: dict):
         db.rollback()
         return None, f"Error updating user: {str(e)}"
 
-def delete_user(db: Session, user_id: int):
-    """Delete a user."""
+def delete_user(db: Session, user_id: int) -> str:
+    """Delete a user by ID."""
     try:
         # Check if user exists
         user = get_user_by_id(db, user_id)
-        
         if not user:
-            return False, "User not found"
+            return "User not found"
         
-        # Delete user
+        # Check if user is the last superuser
+        if user["is_superuser"]:
+            query = text("SELECT COUNT(*) FROM users WHERE is_superuser = true")
+            superuser_count = db.execute(query).scalar()
+            if superuser_count <= 1:
+                return "Cannot delete the last superuser account"
+        
+        # Delete the user
         delete_query = text("DELETE FROM users WHERE id = :id")
         db.execute(delete_query, {"id": user_id})
         db.commit()
         
-        return True, None
+        return None
         
     except Exception as e:
         db.rollback()
-        return False, f"Error deleting user: {str(e)}"
+        return f"Error deleting user: {str(e)}"
 
 def activate_user(db: Session, user_id: int):
     """Activate a user."""

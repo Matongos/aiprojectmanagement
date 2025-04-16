@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, Header, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Header, status, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, Union
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+import json
 
 from database import get_db
 import services.auth_service as auth_service
 
+# Create OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 # Function to get current user from token
@@ -45,19 +47,43 @@ async def get_current_user(db: Session = Depends(get_db), token: str = Depends(o
         )
 
 # Export the get_current_user function explicitly
-__all__ = ["get_current_user", "router"]
+__all__ = ["get_current_user", "router", "oauth2_scheme"]
 
 # Create models for request bodies
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., description="Your username", examples=["testuser123"])
+    password: str = Field(..., description="Your password", examples=["testpassword123"])
 
 class RegisterRequest(BaseModel):
-    username: str
-    password: str
-    email: Optional[str] = None
-    full_name: Optional[str] = None
-    is_superuser: Optional[bool] = False
+    username: str = Field(..., description="Desired username", examples=["newuser"])
+    password: str = Field(..., description="Desired password", examples=["strongpassword123"])
+    email: Optional[str] = Field(None, description="Email address", examples=["user@example.com"])
+    full_name: Optional[str] = Field(None, description="Full name", examples=["New User"])
+    is_superuser: Optional[bool] = Field(False, description="Whether user is superuser", examples=[False])
+
+class UserResponse(BaseModel):
+    id: int = Field(..., description="User ID", examples=[1])
+    username: str = Field(..., description="Username", examples=["testuser123"])
+    email: str = Field(..., description="Email address", examples=["user@example.com"])
+    full_name: str = Field(..., description="Full name", examples=["Test User"])
+    is_superuser: bool = Field(..., description="Whether user is superuser", examples=[False])
+    is_active: bool = Field(..., description="Whether user is active", examples=[True])
+    profile_image_url: Optional[str] = Field(None, description="Profile image URL", examples=["https://example.com/profile.jpg"])
+    job_title: Optional[str] = Field(None, description="Job title", examples=["Software Developer"])
+    bio: Optional[str] = Field(None, description="User bio", examples=["A passionate developer"])
+
+class LoginResponse(BaseModel):
+    access_token: str = Field(..., description="JWT access token", examples=["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."])
+    token_type: str = Field(..., description="Token type", examples=["bearer"])
+    user: UserResponse
+
+class RegisterResponse(BaseModel):
+    id: int = Field(..., description="User ID", examples=[1])
+    username: str = Field(..., description="Username", examples=["newuser"])
+    email: str = Field(..., description="Email address", examples=["user@example.com"])
+    full_name: str = Field(..., description="Full name", examples=["New User"])
+    is_superuser: bool = Field(..., description="Whether user is superuser", examples=[False])
+    is_active: bool = Field(..., description="Whether user is active", examples=[True])
 
 # Create a router
 router = APIRouter(
@@ -65,52 +91,59 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
-@router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@router.post("/login", response_model=LoginResponse)
+async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """
-    OAuth2 compatible token login, get an access token for future requests.
-    """
-    print(f"Login attempt for user: {form_data.username}")
+    Authenticate user and return access token.
     
-    # Use the auth service to authenticate
-    try:
-        user_data, error = auth_service.authenticate_user(db, form_data.username, form_data.password)
+    Args:
+        login_data: LoginRequest containing username and password
+        db: Database session
         
+    Returns:
+        LoginResponse with access token and user details
+    """
+    try:
+        user_data, error = await authenticate_user(db, login_data.username, login_data.password)
         if error:
-            print(f"Authentication error: {error}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Login failed: {error}",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail=error
             )
-            
-        print(f"Login successful for user: {form_data.username}")
-        print(f"User details: {user_data}")
-        
-        return {
-            "access_token": user_data["access_token"],
-            "token_type": "bearer",
-            "user": {
-                "id": user_data["id"],
-                "username": user_data["username"],
-                "email": user_data["email"],
-                "full_name": user_data["full_name"],
-                "is_superuser": user_data["is_superuser"],
-                "is_active": user_data.get("is_active", True),
-                "profile_image_url": user_data.get("profile_image_url"),
-                "job_title": user_data.get("job_title"),
-                "bio": user_data.get("bio")
-            }
-        }
+        return user_data
     except Exception as e:
-        print(f"Login exception: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {str(e)}"
+            detail=str(e)
         )
 
-@router.post("/register")
-async def register(request: RegisterRequest, db: Session = Depends(get_db)):
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    responses={
+        200: {
+            "description": "Successful registration",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "username": "newuser",
+                        "email": "user@example.com",
+                        "full_name": "New User",
+                        "is_superuser": False,
+                        "is_active": True
+                    }
+                }
+            }
+        },
+        400: {"description": "Bad request"},
+        422: {"description": "Validation error"}
+    }
+)
+async def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db)
+):
     """Register endpoint with database connection."""
     print(f"Registering new user: {request.username}")
     

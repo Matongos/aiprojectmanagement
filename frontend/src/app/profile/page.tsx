@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Image from 'next/image';
+import { toast } from 'react-hot-toast';
 
 // Form validation schema
 const profileSchema = z.object({
@@ -224,8 +225,8 @@ export default function ProfilePage() {
         </div>
 
         {/* Edit Profile Form */}
-        <div className="bg-white shadow rounded-lg p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-6">Edit Profile</h2>
+        <div className="bg-white shadow rounded-lg p-6 mb-8">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Edit Profile</h2>
           
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
@@ -365,6 +366,58 @@ export default function ProfilePage() {
             </div>
           </form>
         </div>
+
+        {/* Delete Account Section */}
+        <div className="bg-white shadow rounded-lg p-6 mb-8">
+          <h2 className="text-xl font-bold text-red-600 mb-4">Delete Account</h2>
+          <p className="text-gray-600 mb-4">
+            Warning: This action cannot be undone. All your data will be permanently deleted.
+          </p>
+          <button
+            onClick={() => {
+              if (window.confirm('Are you sure you want to delete your account? This action cannot be undone.')) {
+                // Call the delete account function from auth store
+                fetch('http://localhost:8003/users/me', {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${user?.access_token}`
+                  }
+                })
+                .then(response => {
+                  if (response.ok) {
+                    toast.success('Account deleted successfully');
+                    router.push('/auth/login');
+                  } else {
+                    toast.error('Failed to delete account');
+                  }
+                })
+                .catch(error => {
+                  console.error('Error deleting account:', error);
+                  toast.error('Failed to delete account');
+                });
+              }
+            }}
+            className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          >
+            Delete Account
+          </button>
+        </div>
+
+        {/* Admin Section - Only visible to superusers */}
+        {user?.is_superuser && (
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Admin Actions</h2>
+            <p className="text-gray-600 mb-4">
+              As an administrator, you can manage other users through the admin dashboard.
+            </p>
+            <button
+              onClick={() => router.push('/admin/users')}
+              className="bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+            >
+              Manage Users
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
