@@ -192,6 +192,7 @@ def update_user(db: Session, user_id: int, user_data: dict):
         update_fields = []
         params = {"id": user_id}
         
+        # Regular user fields
         if "email" in user_data and user_data["email"] is not None:
             update_fields.append("email = :email")
             params["email"] = user_data["email"]
@@ -199,10 +200,6 @@ def update_user(db: Session, user_id: int, user_data: dict):
         if "full_name" in user_data and user_data["full_name"] is not None:
             update_fields.append("full_name = :full_name")
             params["full_name"] = user_data["full_name"]
-            
-        if "password" in user_data and user_data["password"] is not None:
-            update_fields.append("hashed_password = :hashed_password")
-            params["hashed_password"] = auth_service.get_password_hash(user_data["password"])
             
         if "profile_image_url" in user_data and user_data["profile_image_url"] is not None:
             update_fields.append("profile_image_url = :profile_image_url")
@@ -215,33 +212,43 @@ def update_user(db: Session, user_id: int, user_data: dict):
         if "bio" in user_data and user_data["bio"] is not None:
             update_fields.append("bio = :bio")
             params["bio"] = user_data["bio"]
-        
+            
+        # Admin-only fields
         if "is_active" in user_data and user_data["is_active"] is not None:
             update_fields.append("is_active = :is_active")
             params["is_active"] = user_data["is_active"]
-        
+            
         if "is_superuser" in user_data and user_data["is_superuser"] is not None:
             update_fields.append("is_superuser = :is_superuser")
             params["is_superuser"] = user_data["is_superuser"]
+            
+        # Password update
+        if "password" in user_data and user_data["password"] is not None:
+            hashed_password = auth_service.get_password_hash(user_data["password"])
+            update_fields.append("hashed_password = :hashed_password")
+            params["hashed_password"] = hashed_password
         
-        # Add updated_at field
+        if not update_fields:
+            return user, None
+            
+        # Add updated_at timestamp
         update_fields.append("updated_at = CURRENT_TIMESTAMP")
         
-        # If no fields to update, return current user
-        if len(update_fields) == 1:  # Only updated_at
-            return user, None
-        
-        # Create and execute update query
+        # Build and execute update query
         update_query = text(f"""
-        UPDATE users
-        SET {", ".join(update_fields)}
-        WHERE id = :id
-        RETURNING id, username, email, full_name, is_active, is_superuser, profile_image_url, job_title, bio
+            UPDATE users 
+            SET {', '.join(update_fields)}
+            WHERE id = :id
+            RETURNING id, username, email, full_name, is_active, is_superuser, 
+                     profile_image_url, job_title, bio
         """)
         
         result = db.execute(update_query, params).fetchone()
         db.commit()
         
+        if not result:
+            return None, "Failed to update user"
+            
         return {
             "id": result[0],
             "username": result[1],
@@ -259,21 +266,14 @@ def update_user(db: Session, user_id: int, user_data: dict):
         return None, f"Error updating user: {str(e)}"
 
 def delete_user(db: Session, user_id: int) -> str:
-    """Delete a user by ID."""
+    """Delete a user."""
     try:
         # Check if user exists
         user = get_user_by_id(db, user_id)
         if not user:
             return "User not found"
-        
-        # Check if user is the last superuser
-        if user["is_superuser"]:
-            query = text("SELECT COUNT(*) FROM users WHERE is_superuser = true")
-            superuser_count = db.execute(query).scalar()
-            if superuser_count <= 1:
-                return "Cannot delete the last superuser account"
-        
-        # Delete the user
+            
+        # Delete user
         delete_query = text("DELETE FROM users WHERE id = :id")
         db.execute(delete_query, {"id": user_id})
         db.commit()

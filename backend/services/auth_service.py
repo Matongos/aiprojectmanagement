@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import traceback
 import urllib.parse
 from fastapi import HTTPException
+from models.users import User
 
 # Load environment variables
 load_dotenv()
@@ -51,10 +52,24 @@ except Exception as e:
 def verify_password(plain_password, hashed_password):
     """Verify a password against a hash."""
     try:
-        return pwd_context.verify(plain_password, hashed_password)
+        print(f"\n=== Password Verification ===")
+        print(f"Plain password: {plain_password}")
+        print(f"Hashed password: {hashed_password[:10]}...")
+        
+        result = pwd_context.verify(plain_password, hashed_password)
+        print(f"Verification result: {'✅ Success' if result else '❌ Failed'}")
+        
+        if not result:
+            print("❌ Password verification failed")
+            # Try to hash the plain password to see if it matches
+            test_hash = pwd_context.hash(plain_password)
+            print(f"Test hash of plain password: {test_hash[:10]}...")
+            print(f"Hash comparison: {'✅ Matches' if test_hash == hashed_password else '❌ Does not match'}")
+            
+        return result
     except Exception as e:
-        print(f"Password verification error: {e}")
-        # Simple fallback check (not for production)
+        print(f"❌ Password verification error: {e}")
+        traceback.print_exc()
         return False
 
 def get_password_hash(password):
@@ -77,118 +92,117 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def register_user(db: Session, email: str, username: str, full_name: str, password: str, is_superuser: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
     """Register a new user."""
     try:
+        print(f"Registering new user: {username}")
+        
         # Check if user already exists
-        existing_user = db.execute(
-            text("SELECT * FROM users WHERE username = :username OR email = :email"),
-            {"username": username, "email": email}
-        ).fetchone()
+        existing_user = db.query(User).filter(
+            (User.username == username) | (User.email == email)
+        ).first()
         
         if existing_user:
+            print(f"User already exists: {username}")
             return None, "Username or email already exists"
         
         # Hash the password
+        print(f"Hashing password for user: {username}")
         hashed_password = get_password_hash(password)
+        print(f"Generated hash for user {username}: {hashed_password}")
         
-        # Insert new user
-        result = db.execute(
-            text("""
-                INSERT INTO users (email, username, full_name, hashed_password, is_active, is_superuser)
-                VALUES (:email, :username, :full_name, :hashed_password, :is_active, :is_superuser)
-                RETURNING id, email, username, full_name, is_active, is_superuser
-            """),
-            {
-                "email": email,
-                "username": username,
-                "full_name": full_name,
-                "hashed_password": hashed_password,
-                "is_active": True,
-                "is_superuser": is_superuser
-            }
-        ).fetchone()
+        # Create new user
+        new_user = User(
+            email=email,
+            username=username,
+            full_name=full_name,
+            hashed_password=hashed_password,
+            is_active=True,
+            is_superuser=is_superuser
+        )
         
+        db.add(new_user)
         db.commit()
+        db.refresh(new_user)
         
-        if result:
-            return {
-                "id": result.id,
-                "email": result.email,
-                "username": result.username,
-                "full_name": result.full_name,
-                "is_active": result.is_active,
-                "is_superuser": result.is_superuser
-            }, None
-        return None, "Failed to create user"
+        print(f"Successfully created user: {username}")
+        
+        return {
+            "id": new_user.id,
+            "email": new_user.email,
+            "username": new_user.username,
+            "full_name": new_user.full_name,
+            "is_active": new_user.is_active,
+            "is_superuser": new_user.is_superuser
+        }, None
         
     except Exception as e:
         db.rollback()
+        print(f"Error registering user: {str(e)}")
+        traceback.print_exc()
         return None, str(e)
 
 async def authenticate_user(db: Session, username: str, password: str):
     """Authenticate a user and return user data with access token."""
     try:
-        print(f"Authenticating user: {username}")
+        print(f"\n=== Authentication Attempt ===")
+        print(f"Username: {username}")
         
         # Find user with username and check if they are active
-        query = text("""
-            SELECT id, username, email, full_name, hashed_password, is_active, is_superuser,
-                   profile_image_url, job_title, bio
-            FROM users 
-            WHERE username = :username AND is_active = true
-        """)
-        result = db.execute(query, {"username": username}).fetchone()
+        user = db.query(User).filter(
+            User.username == username,
+            User.is_active == True
+        ).first()
         
-        if not result:
-            print(f"User not found or inactive: {username}")
+        if not user:
+            print(f"❌ User not found or inactive: {username}")
             return None, "Incorrect username or password"
             
-        user = {
-            "id": result[0],
-            "username": result[1],
-            "email": result[2],
-            "full_name": result[3],
-            "hashed_password": result[4],
-            "is_active": result[5],
-            "is_superuser": result[6],
-            "profile_image_url": result[7],
-            "job_title": result[8],
-            "bio": result[9]
-        }
+        print(f"✅ User found: {user.username}")
+        print(f"  - Is Active: {user.is_active}")
+        print(f"  - Hashed Password: {user.hashed_password[:10]}...")
         
-        if not verify_password(password, user["hashed_password"]):
-            print(f"Invalid password for user: {username}")
-            return None, "Incorrect username or password"
+        try:
+            # Verify password
+            if not verify_password(password, user.hashed_password):
+                print(f"❌ Password verification failed for user: {username}")
+                return None, "Incorrect username or password"
+                
+            print(f"✅ Password verified successfully")
             
-        # Create access token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user["username"], "id": user["id"]},
-            expires_delta=access_token_expires
-        )
-        
-        print(f"Authentication successful for user: {username}")
-        
-        # Return user data without hashed_password
-        user_data = {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": {
-                "id": user["id"],
-                "username": user["username"],
-                "email": user["email"],
-                "full_name": user["full_name"],
-                "is_active": user["is_active"],
-                "is_superuser": user["is_superuser"],
-                "profile_image_url": user["profile_image_url"],
-                "job_title": user["job_title"],
-                "bio": user["bio"]
+            # Create access token
+            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            access_token = create_access_token(
+                data={"sub": user.username, "id": user.id},
+                expires_delta=access_token_expires
+            )
+            
+            print(f"✅ Access token created successfully")
+            
+            # Return user data without hashed_password
+            user_data = {
+                "access_token": access_token,
+                "token_type": "bearer",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "full_name": user.full_name,
+                    "is_active": user.is_active,
+                    "is_superuser": user.is_superuser,
+                    "profile_image_url": user.profile_image_url,
+                    "job_title": user.job_title,
+                    "bio": user.bio
+                }
             }
-        }
-        return user_data, None
+            return user_data, None
+            
+        except Exception as e:
+            print(f"❌ Error during authentication: {str(e)}")
+            traceback.print_exc()
+            return None, "Authentication failed"
         
     except Exception as e:
-        print(f"Authentication error: {str(e)}")
+        print(f"❌ Authentication error: {str(e)}")
         traceback.print_exc()
-        return None, "Incorrect username or password"
+        return None, "Authentication failed"
 
 def get_user_by_id(db: Session, user_id: int):
     """Get a user by ID."""

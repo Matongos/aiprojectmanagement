@@ -6,9 +6,12 @@ from typing import Optional, Union
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import json
+import traceback
+from datetime import datetime, timedelta
 
 from database import get_db
-import services.auth_service as auth_service
+from services import auth_service
+from models.users import User
 
 # Create OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
@@ -104,17 +107,70 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         LoginResponse with access token and user details
     """
     try:
-        user_data, error = await authenticate_user(db, login_data.username, login_data.password)
-        if error:
+        print(f"\n=== Login Attempt ===")
+        print(f"Username: {login_data.username}")
+        
+        # First check if user exists
+        user = db.query(User).filter(User.username == login_data.username).first()
+        if not user:
+            print(f"❌ User not found: {login_data.username}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error
+                detail="Incorrect username or password"
             )
-        return user_data
+            
+        print(f"✅ User found: {user.username}")
+        print(f"User is active: {user.is_active}")
+        
+        if not user.is_active:
+            print("❌ User is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive"
+            )
+            
+        # Verify password
+        if not auth_service.verify_password(login_data.password, user.hashed_password):
+            print("❌ Password verification failed")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+            
+        print("✅ Password verified successfully")
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=auth_service.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = auth_service.create_access_token(
+            data={"sub": user.username, "id": user.id},
+            expires_delta=access_token_expires
+        )
+        
+        # Return user data and token
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "is_superuser": user.is_superuser,
+                "is_active": user.is_active,
+                "profile_image_url": user.profile_image_url,
+                "job_title": user.job_title,
+                "bio": user.bio
+            }
+        }
+        
+    except HTTPException as he:
+        raise he
     except Exception as e:
+        print(f"❌ Login error: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"An error occurred during login: {str(e)}"
         )
 
 @router.post(

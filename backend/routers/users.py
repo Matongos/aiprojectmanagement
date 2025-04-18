@@ -32,6 +32,8 @@ class UserUpdate(BaseModel):
     profile_image_url: Optional[str] = None
     job_title: Optional[str] = None
     bio: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_superuser: Optional[bool] = None
 
 class UserCreate(BaseModel):
     username: str
@@ -209,23 +211,27 @@ async def activate_user(
     Activate a user.
     Only superusers can activate users.
     """
-    # Check if user is superuser
     if not current_user["is_superuser"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
     
-    # Activate user using the service
-    user, error = user_service.activate_user(db, user_id)
+    user = user_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
     
+    updated_user, error = user_service.update_user(db, user_id, {"is_active": True})
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error
         )
     
-    return user
+    return updated_user
 
 @router.patch("/{user_id}/deactivate", response_model=UserResponse)
 async def deactivate_user(
@@ -235,33 +241,93 @@ async def deactivate_user(
 ):
     """
     Deactivate a user.
-    Superusers can deactivate any user.
-    Users cannot deactivate themselves.
+    Only superusers can deactivate users.
     """
-    # Check if user is superuser
     if not current_user["is_superuser"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
     
-    # Prevent self-deactivation
-    if current_user["id"] == user_id:
+    user = user_service.get_user_by_id(db, user_id)
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot deactivate your own account"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
     
-    # Deactivate user using the service
-    user, error = user_service.deactivate_user(db, user_id)
-    
+    updated_user, error = user_service.update_user(db, user_id, {"is_active": False})
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error
         )
     
-    return user
+    return updated_user
+
+@router.patch("/{user_id}/make-admin", response_model=UserResponse)
+async def make_admin(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Make a user an admin.
+    Only superusers can make other users admins.
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    
+    user = user_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    updated_user, error = user_service.update_user(db, user_id, {"is_superuser": True})
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return updated_user
+
+@router.patch("/{user_id}/remove-admin", response_model=UserResponse)
+async def remove_admin(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Remove admin privileges from a user.
+    Only superusers can remove admin privileges.
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    
+    user = user_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    updated_user, error = user_service.update_user(db, user_id, {"is_superuser": False})
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return updated_user
 
 @router.delete("/me")
 async def delete_user_me(
@@ -291,33 +357,34 @@ async def delete_user(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Delete a user account.
-    Only superusers can delete other users' accounts.
+    Delete a user.
+    Users can delete their own account.
+    Superusers can delete any account.
     """
-    # Check if user is superuser
-    if not current_user["is_superuser"]:
+    # Check permissions
+    if current_user["id"] != user_id and not current_user["is_superuser"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
     
-    # Prevent superuser from deleting their own account through this endpoint
-    if user_id == current_user["id"]:
+    # Check if user exists
+    user = user_service.get_user_by_id(db, user_id)
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete own account through this endpoint. Use /users/me endpoint instead."
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
     
     # Delete user using the service
     error = user_service.delete_user(db, user_id)
-    
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error
         )
     
-    return {"message": "User deleted successfully"}
+    return None
 
 @router.patch("/me/profile", response_model=UserResponse)
 async def update_my_profile(

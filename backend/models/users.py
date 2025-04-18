@@ -29,15 +29,15 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
+    # Relationships with explicit foreign keys
     roles = relationship("Role", secondary=user_role, back_populates="users")
-    projects = relationship("ProjectMember", back_populates="user")
-    tasks = relationship("TaskAssignment", back_populates="user")
+    projects = relationship("ProjectMember", back_populates="user", foreign_keys="ProjectMember.user_id")
+    tasks = relationship("TaskAssignment", back_populates="user", foreign_keys="TaskAssignment.user_id")
     created_projects = relationship("Project", back_populates="creator", foreign_keys="Project.created_by")
     created_tasks = relationship("Task", back_populates="creator", foreign_keys="Task.created_by")
-    time_entries = relationship("TimeEntry", back_populates="user")
-    notifications = relationship("Notification", back_populates="user")
-    comments = relationship("Comment", back_populates="user")
+    time_entries = relationship("TimeEntry", back_populates="user", foreign_keys="TimeEntry.user_id")
+    notifications = relationship("Notification", back_populates="user", foreign_keys="Notification.user_id")
+    comments = relationship("Comment", back_populates="user", foreign_keys="Comment.user_id")
 
 class Role(Base):
     __tablename__ = "roles"
