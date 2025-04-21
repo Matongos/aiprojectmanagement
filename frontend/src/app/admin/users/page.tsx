@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,15 +40,7 @@ export default function UsersPage() {
   const { token, user: currentUser } = useAuthStore();
   const router = useRouter();
 
-  useEffect(() => {
-    if (!currentUser?.is_superuser) {
-      router.push("/");
-      return;
-    }
-    fetchUsers();
-  }, [currentUser, router]);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -64,7 +56,7 @@ export default function UsersPage() {
         throw new Error("User does not have admin privileges");
       }
 
-      const response = await fetch("http://localhost:8003/users/", {
+      const response = await fetch("http://192.168.56.1:8003/users/", {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -83,9 +75,22 @@ export default function UsersPage() {
       const data = await response.json();
       console.log("Raw response data:", data);
 
-      // Handle paginated response
-      if (data.users && Array.isArray(data.users)) {
-        const validatedUsers = data.users.map(user => {
+      // Handle direct array response
+      if (Array.isArray(data)) {
+        const validatedUsers = data.map(user => {
+          console.log("Processing user:", user);
+          if (!user.id || !user.username || !user.email || !user.full_name) {
+            console.error("Invalid user object:", user);
+            throw new Error(`Invalid user data received. Missing required fields: ${JSON.stringify(user)}`);
+          }
+          return user;
+        });
+
+        console.log("Validated users:", validatedUsers);
+        setUsers(validatedUsers);
+      } else if (data.users && Array.isArray(data.users)) {
+        // Handle paginated response
+        const validatedUsers = data.users.map((user: User) => {
           console.log("Processing user:", user);
           if (!user.id || !user.username || !user.email || !user.full_name) {
             console.error("Invalid user object:", user);
@@ -106,11 +111,19 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, currentUser]);
+
+  useEffect(() => {
+    if (!currentUser?.is_superuser) {
+      router.push("/");
+      return;
+    }
+    fetchUsers();
+  }, [currentUser, router, fetchUsers]);
 
   const handleActivateUser = async (userId: number) => {
     try {
-      const response = await fetch(`http://localhost:8003/users/${userId}/activate`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/activate`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -131,7 +144,7 @@ export default function UsersPage() {
 
   const handleDeactivateUser = async (userId: number) => {
     try {
-      const response = await fetch(`http://localhost:8003/users/${userId}/deactivate`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/deactivate`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -152,7 +165,7 @@ export default function UsersPage() {
 
   const handleMakeAdmin = async (userId: number) => {
     try {
-      const response = await fetch(`http://localhost:8003/users/${userId}/make-admin`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/make-admin`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -173,7 +186,7 @@ export default function UsersPage() {
 
   const handleRemoveAdmin = async (userId: number) => {
     try {
-      const response = await fetch(`http://localhost:8003/users/${userId}/remove-admin`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/remove-admin`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -198,7 +211,7 @@ export default function UsersPage() {
     }
 
     try {
-      const response = await fetch(`http://localhost:8003/users/${userId}`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,

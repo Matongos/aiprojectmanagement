@@ -47,7 +47,7 @@ export default function CreateUserPage() {
   const onSubmit = async (data: UserFormValues) => {
     try {
       setLoading(true);
-      const response = await fetch("http://localhost:8003/users/", {
+      const response = await fetch("http://192.168.56.1:8003/users/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

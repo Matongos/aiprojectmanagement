@@ -4,7 +4,7 @@ import axios from 'axios';
 import { toast } from 'react-hot-toast';
 
 // API URL - should be in environment variables
-const API_URL = 'http://localhost:8003';
+const API_URL = 'http://192.168.56.1:8003';
 
 // Axios instance with CORS config
 const api = axios.create({
@@ -83,17 +83,23 @@ export const useAuthStore = create<AuthState>()(
         try {
           console.log(`Attempting login for: ${username}`);
           
-          const response = await axios.post(`${API_URL}/auth/login`, {
-            username,
-            password
-          }, {
+          const response = await fetch(`${API_URL}/auth/login`, {
+            method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Access-Control-Allow-Origin': '*'
             },
+            mode: 'cors',
+            body: JSON.stringify({ username, password })
           });
-          
-          console.log("Raw response:", response);
-          const data = response.data;
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
           console.log("Login response data:", data);
 
           if (!data || !data.user) {
@@ -139,22 +145,8 @@ export const useAuthStore = create<AuthState>()(
           
           let errorMessage = 'Login failed. Please try again.';
           
-          if (isApiError(error)) {
-            console.error("API Error response:", error.response);
-            const responseData = error.response?.data;
-            
-            if (typeof responseData === 'string') {
-              errorMessage = responseData;
-            } else if (typeof responseData?.detail === 'string') {
-              errorMessage = responseData.detail;
-            } else if (responseData?.detail && typeof responseData.detail === 'object') {
-              errorMessage = JSON.stringify(responseData.detail);
-            }
-            
-            // Add status code to error message for debugging
-            if (error.response?.status) {
-              errorMessage += ` (Status: ${error.response.status})`;
-            }
+          if (error instanceof Error) {
+            errorMessage = error.message;
           }
           
           set({

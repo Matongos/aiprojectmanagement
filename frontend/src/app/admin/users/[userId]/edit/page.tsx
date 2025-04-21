@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ interface User {
 }
 
 export default function EditUserPage({ params }: { params: { userId: string } }) {
-  const resolvedParams = use(params);
+  const userId = params.userId;
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
       return;
     }
     fetchUser();
-  }, [currentUser, router, resolvedParams.userId]);
+  }, [currentUser, router, userId]);
 
   const fetchUser = async () => {
     try {
@@ -55,7 +55,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
         throw new Error("No authentication token found");
       }
 
-      const response = await fetch(`http://localhost:8003/users/${resolvedParams.userId}`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -93,7 +93,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
       }
 
       // Prepare the update data
-      const updateData: any = {
+      const updateData: Record<string, string> = {
         username: formData.username,
         email: formData.email,
         full_name: formData.full_name,
@@ -109,7 +109,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
         updateData.password = formData.new_password;
       }
 
-      const response = await fetch(`http://localhost:8003/users/${resolvedParams.userId}`, {
+      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${token}`,

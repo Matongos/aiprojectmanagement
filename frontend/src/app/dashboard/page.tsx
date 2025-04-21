@@ -79,10 +79,17 @@ export default function DashboardPage() {
                         <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                           <div className="relative h-32 w-32">
                             <Image
-                              src={user.profile_image_url}
+                              src={user.profile_image_url && user.profile_image_url.startsWith('data:') 
+                                ? user.profile_image_url 
+                                : "/placeholder-profile.svg"}
                               alt="Profile"
                               fill
                               className="rounded-full object-cover"
+                              onError={(e) => {
+                                console.error("Error loading profile image");
+                                // Replace with a fallback image
+                                (e.target as HTMLImageElement).src = "/placeholder-profile.svg";
+                              }}
                             />
                           </div>
                         </dd>
