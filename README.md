@@ -1,60 +1,117 @@
-# AI-Enhanced Project Management System
+# AI Project Management System
 
-This repository contains the codebase for an AI-enhanced project management system with adaptive scheduling, real-time risk assessment, and predictive resource allocation.
+A full-stack application for managing projects with AI assistance.
 
-## Development Setup
+## Project Structure
 
-### Prerequisites
-- Python 3.10+
+```
+.
+├── backend/           # FastAPI backend
+├── frontend/         # Next.js frontend
+└── .github/          # GitHub Actions workflows
+```
+
+## Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- PostgreSQL 13+
 - Git
 
-### Automatic Setup (Windows)
-1. Clone the repository
-2. Run the setup script:
-```
-setup.cmd
+## Backend Setup
+
+1. Create a virtual environment:
+```bash
+cd backend
+python -m venv env
+.\env\Scripts\activate  # Windows
+source env/bin/activate  # Linux/Mac
 ```
 
-### Manual Setup
-1. Clone the repository
-2. Create a Python virtual environment:
-```
-python -m venv venv
-```
-3. Activate the virtual environment:
-   - Windows: `venv\Scripts\activate`
-   - Unix/MacOS: `source venv/bin/activate`
-4. Install backend dependencies:
-```
-cd backend
+2. Install dependencies:
+```bash
 pip install -r requirements.txt
 ```
 
-## Running the Application
-
-### Backend (FastAPI)
-1. Activate the virtual environment if not already activated
-2. Run the backend server:
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your database credentials
 ```
-python backend/main.py
+
+4. Run database migrations:
+```bash
+alembic upgrade head
 ```
-3. Access the API at `http://localhost:8001`
 
-## Project Structure
-- `backend/` - FastAPI backend application
-- `docs/` - Project documentation
-  - `docs/setup-guide.md` - Detailed setup instructions
-  - `docs/detailed-specs/` - Comprehensive project specifications and roadmap
+5. Start the development server:
+```bash
+uvicorn main:app --reload
+```
 
-## Tech Stack
-- **Backend**: FastAPI, SQLAlchemy, Uvicorn
-- **AI/ML**: Ollama, Sentence-Transformers
-- **Database**: PostgreSQL, Redis
-- **Frontend**: Next.js, ShadCN/ui, Tailwind CSS
+## Frontend Setup
 
-## Project Roadmap
+1. Install dependencies:
+```bash
+cd frontend
+npm install
+```
 
-For the complete development roadmap, refer to the following documents:
-- `ROADMAP.md` - High-level project roadmap
-- `docs/detailed-specs/custom-roadmap.md` - Detailed implementation roadmap
-- `docs/detailed-specs/odoo-analysis.md` - Comprehensive analysis of project management features 
+2. Set up environment variables:
+```bash
+cp .env.example .env.local
+# Edit .env.local with your API URL
+```
+
+3. Start the development server:
+```bash
+npm run dev
+```
+
+## Development Workflow
+
+1. Create a new branch for your feature:
+```bash
+git checkout -b feature/your-feature-name
+```
+
+2. Make your changes and commit them:
+```bash
+git add .
+git commit -m "Description of your changes"
+```
+
+3. Push your branch and create a pull request:
+```bash
+git push origin feature/your-feature-name
+```
+
+## Testing
+
+Backend:
+```bash
+cd backend
+pytest
+```
+
+Frontend:
+```bash
+cd frontend
+npm test
+```
+
+## CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration and deployment:
+
+- Backend workflow: `.github/workflows/backend.yml`
+- Frontend workflow: `.github/workflows/frontend.yml`
+
+The workflows run on:
+- Push to main branch
+- Pull requests
+- Manual triggers
+
+## License
+
+MIT 

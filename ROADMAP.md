@@ -63,8 +63,8 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 | 2 | Frontend authentication integration  | Frontend |✅ Backend auth | Login/signup flow |
 | 3 | User management system  | Backend | Auth system |✅ CRUD for users |
 | 3 | User profile UI  | Frontend | User API |✅ Profile screens |
-| 4 | Role-based permissions  | Backend | User system | Permission system |
-| 4 | CI/CD pipeline setup  | DevOps | Repo setup | GitHub Actions workflow |
+| 4 | Role-based permissions  | Backend |✅ User system | Permission system |
+| 4 | CI/CD pipeline setup  | DevOps |✅ Repo setup | GitHub Actions workflow |
 
 **Deliverables:**
 - Working authentication system
