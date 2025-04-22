@@ -46,7 +46,17 @@ async def get_current_user(db: Session = Depends(get_db), token: str = Depends(o
                 headers={"WWW-Authenticate": "Bearer"},
             )
             
+        # Check if user is active
+        if not user.get("is_active"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User is inactive",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
         return user
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

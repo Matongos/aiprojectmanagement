@@ -209,7 +209,7 @@ def get_user_by_id(db: Session, user_id: int):
     try:
         query = text("""
             SELECT id, username, email, full_name, is_active, is_superuser,
-                   profile_image_url, job_title, bio
+                   profile_image_url, job_title, bio, hashed_password
             FROM users 
             WHERE id = :id
         """)
@@ -227,7 +227,8 @@ def get_user_by_id(db: Session, user_id: int):
             "is_superuser": result[5],
             "profile_image_url": result[6],
             "job_title": result[7],
-            "bio": result[8]
+            "bio": result[8],
+            "hashed_password": result[9]  # Include hashed_password for password verification
         }
     except Exception as e:
         print(f"Error getting user by ID: {str(e)}")
