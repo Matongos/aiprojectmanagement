@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import traceback
 import urllib.parse
 from fastapi import HTTPException
-from models.users import User
+from models.user import User
 
 # Load environment variables
 load_dotenv()
@@ -342,4 +342,15 @@ def decode_token(token: str):
     except jwt.JWTError as e:
         raise HTTPException(status_code=401, detail=f"Could not validate credentials: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Token validation error: {str(e)}") 
+        raise HTTPException(status_code=401, detail=f"Token validation error: {str(e)}")
+
+def verify_token(token: str) -> Optional[int]:
+    """Verify a JWT token and return the user ID."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("id")
+        if user_id is None:
+            return None
+        return user_id
+    except jwt.JWTError:
+        return None 

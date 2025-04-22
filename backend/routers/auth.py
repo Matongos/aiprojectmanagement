@@ -8,10 +8,15 @@ from sqlalchemy import text
 import json
 import traceback
 from datetime import datetime, timedelta
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+import os
+from dotenv import load_dotenv
+import urllib.parse
 
 from database import get_db
 from services import auth_service
-from models.users import User
+from models.user import User
 
 # Create OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
