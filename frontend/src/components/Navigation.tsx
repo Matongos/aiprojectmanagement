@@ -1,55 +1,201 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { Bell, MessageSquare, User, LogOut } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useRouter } from 'next/navigation';
 
 export default function Navigation() {
   const { user, isAuthenticated, logout } = useAuthStore();
+  const pathname = usePathname();
+  const router = useRouter();
+  
+  const isAdmin = user?.is_superuser === true;
+
+  const handleLogout = () => {
+    logout();
+    router.push('/auth/login');
+  };
 
   return (
-    <nav className="bg-white shadow">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <nav className="bg-gray-900 text-white shadow-lg">
+      <div className="max-w-full mx-auto px-4">
         <div className="flex justify-between h-16">
-          <div className="flex">
-            <div className="flex-shrink-0 flex items-center">
-              <Link href="/" className="text-xl font-bold text-gray-900">
-                AI Project Management
-              </Link>
-            </div>
+          {/* Left side - Logo/Brand */}
+          <div className="flex items-center">
+            <Link href="/" className="text-xl font-semibold text-blue-400 hover:text-blue-300">
+              AI PROJECT MANAGEMENT
+            </Link>
           </div>
           
-          <div className="flex items-center">
-            {isAuthenticated ? (
-              <div className="flex items-center space-x-4">
-                <span className="text-gray-700">Welcome, {user?.full_name}</span>
+          {/* Center - Main navigation links */}
+          {isAuthenticated && (
+            <div className="hidden md:flex items-center space-x-6">
+              <Link
+                href="/dashboard"
+                className={`px-3 py-2 text-sm font-medium ${
+                  pathname === '/dashboard' 
+                    ? 'border-b-2 border-blue-400 text-blue-400' 
+                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                }`}
+              >
+                Dashboard
+              </Link>
+              
+              <Link
+                href="/dashboard/projects"
+                className={`px-3 py-2 text-sm font-medium ${
+                  pathname.startsWith('/dashboard/projects') 
+                    ? 'border-b-2 border-blue-400 text-blue-400' 
+                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                }`}
+              >
+                Projects
+              </Link>
+              
+              <Link
+                href="/dashboard/tasks"
+                className={`px-3 py-2 text-sm font-medium ${
+                  pathname.startsWith('/dashboard/tasks') 
+                    ? 'border-b-2 border-blue-400 text-blue-400' 
+                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                }`}
+              >
+                Tasks
+              </Link>
+              
+              {/* Temporarily disabled until reporting is implemented */}
+              <span
+                className={`px-3 py-2 text-sm font-medium text-gray-500 cursor-not-allowed`}
+                title="Coming soon"
+              >
+                Reporting (Coming Soon)
+              </span>
+              
+              {/* Admin link only for admins */}
+              {isAdmin && (
                 <Link
-                  href="/profile"
-                  className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                  href="/admin/users"
+                  className={`px-3 py-2 text-sm font-medium ${
+                    pathname.startsWith('/admin') 
+                      ? 'border-b-2 border-blue-400 text-blue-400' 
+                      : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                  }`}
                 >
-                  Profile
+                  Admin
                 </Link>
-                <button
-                  onClick={logout}
-                  className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                >
-                  Logout
+              )}
+            </div>
+          )}
+          
+          {/* Right side - User info and actions */}
+          <div className="hidden md:flex items-center space-x-6">
+            {isAuthenticated ? (
+              <>
+                {/* Notification Icon */}
+                <button className="text-gray-300 hover:text-blue-300">
+                  <Bell className="h-5 w-5" />
                 </button>
-              </div>
+                
+                {/* Messages Icon */}
+                <button className="text-gray-300 hover:text-blue-300">
+                  <MessageSquare className="h-5 w-5" />
+                </button>
+                
+                {/* User Profile Dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="focus:outline-none">
+                    <div className="flex items-center hover:text-blue-300">
+                      <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center mr-2">
+                        {user?.full_name ? user.full_name[0].toUpperCase() : "U"}
+                      </div>
+                      <div className="text-sm">
+                        <div className="font-medium">{user?.full_name || "User"}</div>
+                        <div className="text-xs text-gray-400">My Company</div>
+                      </div>
+                    </div>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="mt-2 bg-gray-800 text-gray-100 border border-gray-700">
+                    <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer hover:bg-gray-700">
+                      <User className="h-4 w-4 mr-2 text-blue-400" />
+                      <span>Profile</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator className="bg-gray-700" />
+                    <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-red-400">
+                      <LogOut className="h-4 w-4 mr-2" />
+                      <span>Logout</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             ) : (
-              <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2">
                 <Link
                   href="/auth/login"
-                  className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                  className="text-gray-300 hover:text-blue-300 px-3 py-2 rounded-md text-sm font-medium"
                 >
                   Login
                 </Link>
                 <Link
                   href="/auth/register"
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700"
+                  className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-500"
                 >
                   Register
                 </Link>
               </div>
+            )}
+          </div>
+          
+          {/* Mobile menu section */}
+          <div className="md:hidden flex items-center space-x-2">
+            {isAuthenticated ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger className="focus:outline-none">
+                  <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center">
+                    {user?.full_name ? user.full_name[0].toUpperCase() : "U"}
+                  </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="mt-2 bg-gray-800 text-gray-100 border border-gray-700">
+                  <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer hover:bg-gray-700">
+                    <User className="h-4 w-4 mr-2 text-blue-400" />
+                    <span>Profile</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push('/dashboard')} className="cursor-pointer hover:bg-gray-700">
+                    <span>Dashboard</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push('/dashboard/projects')} className="cursor-pointer hover:bg-gray-700">
+                    <span>Projects</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push('/dashboard/tasks')} className="cursor-pointer hover:bg-gray-700">
+                    <span>Tasks</span>
+                  </DropdownMenuItem>
+                  {isAdmin && (
+                    <DropdownMenuItem onClick={() => router.push('/admin/users')} className="cursor-pointer hover:bg-gray-700">
+                      <span>Admin</span>
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator className="bg-gray-700" />
+                  <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-red-400">
+                    <LogOut className="h-4 w-4 mr-2" />
+                    <span>Logout</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Link
+                href="/auth/login"
+                className="text-gray-300 hover:text-blue-300 px-3 py-2 rounded-md text-sm font-medium"
+              >
+                Login
+              </Link>
             )}
           </div>
         </div>

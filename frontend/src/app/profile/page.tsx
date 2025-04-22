@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { toast } from "react-hot-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { API_BASE_URL } from "@/lib/constants";
+import AuthWrapper from "@/components/AuthWrapper";
 
 interface User {
   id: number;
@@ -23,6 +25,14 @@ interface User {
 }
 
 export default function ProfilePage() {
+  return (
+    <AuthWrapper>
+      <ProfileContent />
+    </AuthWrapper>
+  );
+}
+
+function ProfileContent() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,36 +46,57 @@ export default function ProfilePage() {
     confirm_password: "",
   });
   const [showPasswordFields, setShowPasswordFields] = useState(false);
-  const { token, user: currentUser } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
-    if (!currentUser) {
-      router.push("/auth/login");
-      return;
-    }
     fetchUser();
-  }, [currentUser, router]);
+  }, []);
 
   const fetchUser = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      if (!token) {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
         throw new Error("No authentication token found");
       }
 
-      if (!currentUser?.id) {
-        throw new Error("User ID not found");
+      // We can now safely assume authentication is valid due to AuthWrapper
+      let userId;
+      
+      // Check if we already have user data in store
+      const { user: storeUser } = useAuthStore.getState();
+      if (storeUser && storeUser.id) {
+        userId = storeUser.id;
+      } else {
+        // If no user in store, fetch from /me endpoint
+        try {
+          const meResponse = await fetch(`${API_BASE_URL}/users/me`, {
+            headers: {
+              Authorization: `Bearer ${storedToken}`,
+              "Content-Type": "application/json",
+            },
+          });
+          
+          if (!meResponse.ok) {
+            throw new Error("Failed to fetch current user");
+          }
+          
+          const meData = await meResponse.json();
+          console.log("Fetched current user:", meData);
+          userId = meData.id;
+        } catch (error) {
+          console.error("Error fetching current user:", error);
+          throw new Error("Could not determine user ID");
+        }
       }
 
-      console.log("Fetching user data for ID:", currentUser.id);
-      console.log("Using token:", token);
-
-      const response = await fetch(`http://192.168.56.1:8003/users/${currentUser.id}`, {
+      console.log("Fetching user data for ID:", userId);
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -100,11 +131,12 @@ export default function ProfilePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      if (!token) {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
         throw new Error("No authentication token found");
       }
 
-      if (!currentUser?.id) {
+      if (!user?.id) {
         throw new Error("User ID not found");
       }
 
@@ -127,10 +159,10 @@ export default function ProfilePage() {
 
       console.log("Updating user profile with data:", updateData);
 
-      const response = await fetch(`http://192.168.56.1:8003/users/me/profile`, {
+      const response = await fetch(`${API_BASE_URL}/users/me/profile`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(updateData),
@@ -167,14 +199,15 @@ export default function ProfilePage() {
     }
 
     try {
-      if (!token) {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
         throw new Error("No authentication token found");
       }
 
-      const response = await fetch(`http://localhost:8003/users/${currentUser?.id}`, {
+      const response = await fetch(`${API_BASE_URL}/users/${user?.id}`, {
         method: "DELETE",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -202,10 +235,15 @@ export default function ProfilePage() {
         const formData = new FormData();
         formData.append('profile_image', file);
 
-        const response = await fetch(`http://192.168.56.1:8003/users/me/profile-image`, {
+        const storedToken = localStorage.getItem('token');
+        if (!storedToken) {
+          throw new Error("No authentication token found");
+        }
+
+        const response = await fetch(`${API_BASE_URL}/users/me/profile-image`, {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${storedToken}`,
           },
           body: formData,
         });
@@ -224,7 +262,7 @@ export default function ProfilePage() {
   };
 
   if (loading) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="p-4">Loading profile data...</div>;
   }
 
   if (error) {

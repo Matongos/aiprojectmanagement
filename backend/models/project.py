@@ -1,15 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.orm import relationship
 from datetime import datetime
-import enum
 from .base import Base
-
-class ProjectStatus(str, enum.Enum):
-    PLANNING = "planning"
-    IN_PROGRESS = "in_progress"
-    ON_HOLD = "on_hold"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
 
 class Project(Base):
     __tablename__ = "projects"
@@ -17,21 +9,23 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    status = Column(Enum(ProjectStatus), default=ProjectStatus.PLANNING)
-    start_date = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(50), default="planning")
+    start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    owner = relationship("User", back_populates="owned_projects")
-    
-    # Optional fields
-    budget = Column(Integer, nullable=True)
+    budget = Column(Float, default=0.0)
     priority = Column(Integer, default=1)
     tags = Column(String(255), nullable=True)
     
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Use strings for relationship to avoid circular imports
+    creator = relationship("User", foreign_keys=[created_by], backref="created_projects")
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+    # Relationships
+    tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<Project {self.name}>" 

@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import RedirectResponse
 from routers import auth, users, roles, projects, tasks
 from database import engine, Base
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from database import get_db
+import requests
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -37,6 +42,16 @@ app.include_router(users.router)
 app.include_router(roles.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
+
+# Add a token endpoint to maintain compatibility with frontend
+@app.post("/token")
+async def token_endpoint(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """
+    Token endpoint for backward compatibility with frontend.
+    This forwards the request to the auth login function.
+    """
+    # Simply use the login function from the auth router
+    return await auth.login(form_data=form_data, login_data=None, db=db)
 
 # Custom OpenAPI schema
 def custom_openapi():

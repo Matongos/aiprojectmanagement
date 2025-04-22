@@ -16,6 +16,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { toast } from "react-hot-toast";
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -26,8 +27,9 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const router = useRouter();
-  const { login, error: authError } = useAuthStore();
+  const { login } = useAuthStore();
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -40,38 +42,61 @@ export default function LoginPage() {
   const onSubmit = async (data: LoginFormValues) => {
     try {
       setLoading(true);
-      await login(data.username, data.password);
-      router.push("/");
+      setErrorMessage("");
+      console.log("Attempting login with:", data.username);
+      
+      const success = await login(data.username, data.password);
+      
+      if (success) {
+        console.log("Login successful, redirecting to dashboard");
+        toast.success("Login successful!");
+        // Small delay to allow state to update
+        setTimeout(() => {
+          router.push("/dashboard");
+        }, 500);
+      } else {
+        console.error("Login failed");
+        setErrorMessage("Invalid username or password");
+        toast.error("Login failed. Please check your credentials.");
+      }
     } catch (err) {
       console.error("Login error:", err);
+      setErrorMessage(err instanceof Error ? err.message : "An unexpected error occurred");
+      toast.error("Login error. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow">
+    <div className="min-h-screen flex items-center justify-center bg-gray-900">
+      <div className="max-w-md w-full space-y-8 p-8 bg-gray-800 rounded-lg shadow-xl border border-gray-700">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-blue-400">
             Sign in to your account
           </h2>
         </div>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-            {authError && (
-              <div className="text-sm text-red-500 text-center">{authError}</div>
+            {errorMessage && (
+              <div className="text-sm text-red-400 text-center p-2 bg-red-900/20 rounded border border-red-800">
+                {errorMessage}
+              </div>
             )}
             <FormField
               control={form.control}
               name="username"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Username</FormLabel>
+                  <FormLabel className="text-gray-300">Username</FormLabel>
                   <FormControl>
-                    <Input {...field} />
+                    <Input 
+                      {...field} 
+                      autoComplete="username" 
+                      className="bg-gray-700 border-gray-600 text-gray-100 focus:border-blue-500 focus:ring-blue-500"
+                    />
                   </FormControl>
-                  <FormMessage />
+                  <FormMessage className="text-red-400" />
                 </FormItem>
               )}
             />
@@ -80,15 +105,24 @@ export default function LoginPage() {
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Password</FormLabel>
+                  <FormLabel className="text-gray-300">Password</FormLabel>
                   <FormControl>
-                    <Input {...field} type="password" />
+                    <Input 
+                      {...field} 
+                      type="password" 
+                      autoComplete="current-password" 
+                      className="bg-gray-700 border-gray-600 text-gray-100 focus:border-blue-500 focus:ring-blue-500"
+                    />
                   </FormControl>
-                  <FormMessage />
+                  <FormMessage className="text-red-400" />
                 </FormItem>
               )}
             />
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button 
+              type="submit" 
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white" 
+              disabled={loading}
+            >
               {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>

@@ -1,361 +1,245 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import { API_BASE_URL } from '../lib/constants';
 
-// API URL - should be in environment variables
-const API_URL = 'http://192.168.56.1:8003';
-
-// Axios instance with CORS config
-const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json'
-  },
-  withCredentials: false
-});
-
-// Types
-interface User {
-  id: number;
+// User type
+export interface User {
+  id: string;
   username: string;
   email: string;
   full_name: string;
-  is_active: boolean;
-  is_superuser: boolean;
+  is_active?: boolean;
+  is_superuser?: boolean;
   profile_image_url?: string;
   job_title?: string;
   bio?: string;
   access_token?: string;
 }
 
-interface ProfileUpdateData {
-  email?: string;
+// Profile update data type
+export interface ProfileUpdateData {
   full_name?: string;
-  password?: string;
-  current_password?: string;
-  profile_image_url?: string;
   job_title?: string;
   bio?: string;
-  is_active?: boolean;
-  is_superuser?: boolean;
-  new_password?: string;
+  profile_image_url?: string;
 }
 
-interface AuthState {
+// Auth store interface
+interface AuthStore {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
-  login: (username: string, password: string) => Promise<void>;
-  register: (email: string, username: string, full_name: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
-  clearError: () => void;
   updateProfile: (profileData: ProfileUpdateData) => Promise<void>;
   registerUser: (email: string, username: string, full_name: string, password: string, is_superuser: boolean) => Promise<void>;
+  loadingUserData: boolean;
+  checkAuth: () => Promise<boolean>;
 }
 
-interface ApiError {
-  response?: {
-    data?: {
-      detail?: string | { [key: string]: unknown };
-    };
-    status?: number;
-  };
-  message?: string;
-}
+// Create auth store
+export const useAuthStore = create<AuthStore>((set, get) => {
+  // Initialize token from localStorage if available
+  const storedToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  
+  return {
+    user: null,
+    token: storedToken,
+    isAuthenticated: !!storedToken,
+    isLoading: false,
+    error: null,
+    loadingUserData: true,
 
-// Create auth store with persistence
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      user: null,
-      token: null,
-      isAuthenticated: false,
-      isLoading: false,
-      error: null,
-
-      // Login function
-      login: async (username: string, password: string) => {
+    // Login function
+    login: async (username: string, password: string) => {
+      try {
+        console.log(`Attempting login for: ${username} to ${API_BASE_URL}/token`);
         set({ isLoading: true, error: null });
-        try {
-          console.log(`Attempting login for: ${username}`);
-          
-          const response = await fetch(`${API_URL}/auth/login`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-              'Access-Control-Allow-Origin': '*'
-            },
-            mode: 'cors',
-            body: JSON.stringify({ username, password })
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-          }
-
-          const data = await response.json();
-          console.log("Login response data:", data);
-
-          if (!data || !data.user) {
-            console.error("Invalid response format:", data);
-            throw new Error('Invalid response format from server');
-          }
-
-          // Ensure all user fields are properly mapped
-          const userData: User = {
-            id: data.user.id,
-            username: data.user.username,
-            email: data.user.email,
-            full_name: data.user.full_name,
-            is_active: data.user.is_active ?? true,
-            is_superuser: data.user.is_superuser ?? false,
-            profile_image_url: data.user.profile_image_url || '',
-            job_title: data.user.job_title || '',
-            bio: data.user.bio || '',
-            access_token: data.access_token
-          };
-
-          console.log("Processed user data:", userData);
-
-          if (!data.access_token) {
-            console.error("No access token in response");
-            throw new Error('No access token received from server');
-          }
-
-          set({
-            user: userData,
-            token: data.access_token,
-            isAuthenticated: true,
-            isLoading: false,
-            error: null
-          });
-
-          // Set authorization header for subsequent requests
-          api.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
-          
-          toast.success('Login successful!');
-        } catch (error: unknown) {
-          console.error("Login error:", error);
-          
-          let errorMessage = 'Login failed. Please try again.';
-          
-          if (error instanceof Error) {
-            errorMessage = error.message;
-          }
-          
-          set({
-            isLoading: false,
-            error: errorMessage
-          });
-          
-          toast.error(errorMessage);
-        }
-      },
-
-      // Register function
-      register: async (email: string, username: string, full_name: string, password: string) => {
-        set({ isLoading: true, error: null });
-        try {
-          console.log("Registering new user:", username);
-          
-          const response = await axios.post(`${API_URL}/auth/register`, {
-            email,
-            username,
-            full_name,
-            password
-          });
-          
-          const data = response.data;
-          console.log("Registration successful:", data);
-
-          set({
-            user: {
-              id: data.user_id,
-              username: data.username,
-              email: data.email,
-              full_name: data.full_name,
-              is_active: data.is_active ?? true,
-              is_superuser: data.is_superuser,
-              profile_image_url: data.profile_image_url,
-              job_title: data.job_title,
-              bio: data.bio,
-              access_token: data.access_token
-            },
-            token: data.access_token,
-            isAuthenticated: true,
-            isLoading: false,
-            error: null
-          });
-
-          axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
-        } catch (error: unknown) {
-          console.error("Registration error:", error);
-          
-          let errorMessage = 'Registration failed. Please try again.';
-          
-          if (isApiError(error)) {
-            const responseData = error.response?.data;
-            
-            if (typeof responseData === 'string') {
-              errorMessage = responseData;
-            } else if (typeof responseData?.detail === 'string') {
-              errorMessage = responseData.detail;
-            } else if (responseData?.detail && typeof responseData.detail === 'object') {
-              errorMessage = JSON.stringify(responseData.detail);
-            }
-          }
-          
-          set({
-            isLoading: false,
-            error: errorMessage
-          });
-          
-          toast.error(errorMessage);
-        }
-      },
-
-      // Logout function
-      logout: () => {
-        // Remove auth header
-        delete axios.defaults.headers.common['Authorization'];
         
-        // Clear state
-        set({
-          user: null,
-          token: null,
-          isAuthenticated: false,
+        // Create form data
+        const formData = new URLSearchParams();
+        formData.append('username', username);
+        formData.append('password', password);
+        
+        const response = await fetch(`${API_BASE_URL}/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: formData.toString(),
+          cache: 'no-store'
+        });
+
+        console.log("Login response status:", response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Login error response:", errorText);
+          set({ error: 'Invalid credentials', isLoading: false });
+          return false;
+        }
+
+        const data = await response.json();
+        console.log("Login response data received:", !!data);
+        
+        if (!data.access_token) {
+          console.error("No access token in response");
+          set({ error: 'Authentication failed', isLoading: false });
+          return false;
+        }
+        
+        // Store token in localStorage
+        localStorage.setItem('token', data.access_token);
+        
+        // Update state
+        set({ 
+          token: data.access_token, 
+          isAuthenticated: true,
+          user: data.user,
+          isLoading: false,
           error: null
         });
-      },
+        
+        console.log("Login successful, user data:", data.user);
+        
+        // Fetch additional user details if needed
+        const authenticated = await get().checkAuth();
+        return authenticated;
+      } catch (error) {
+        console.error('Login error:', error);
+        set({ 
+          error: error instanceof Error ? error.message : 'An error occurred during login', 
+          isLoading: false,
+          isAuthenticated: false
+        });
+        return false;
+      }
+    },
 
-      // Clear error function
-      clearError: () => {
-        set({ error: null });
-      },
+    // Logout function
+    logout: () => {
+      localStorage.removeItem('token');
+      set({ token: null, isAuthenticated: false, user: null });
+      toast.success('Logged out successfully');
+    },
 
-      // Add updateProfile function
-      updateProfile: async (profileData: ProfileUpdateData) => {
-        set({ isLoading: true, error: null });
-        try {
-          console.log("Updating profile with data:", profileData);
-          
-          // Prepare the request data
-          const requestData: ProfileUpdateData = {};
-          
-          // Handle password update separately
-          if (profileData.password) {
-            if (!profileData.current_password) {
-              throw new Error("Current password is required to change password");
-            }
-            requestData.new_password = profileData.password;
-            requestData.current_password = profileData.current_password;
-          }
-          
-          // Add other fields if they exist
-          if (profileData.email) requestData.email = profileData.email;
-          if (profileData.full_name) requestData.full_name = profileData.full_name;
-          if (profileData.profile_image_url) requestData.profile_image_url = profileData.profile_image_url;
-          if (profileData.job_title) requestData.job_title = profileData.job_title;
-          if (profileData.bio) requestData.bio = profileData.bio;
-          
-          console.log("Sending request data:", requestData);
-          
-          const response = await axios.patch<User>(`${API_URL}/users/me/profile`, requestData, {
-            headers: {
-              'Authorization': `Bearer ${useAuthStore.getState().token}`
-            }
-          });
-          
-          const updatedUser = response.data;
-          console.log("Profile update successful:", updatedUser);
+    // Update profile function
+    updateProfile: async (profileData: ProfileUpdateData) => {
+      try {
+        const { token } = get();
+        if (!token) throw new Error('Not authenticated');
 
-          // Update the local state with the new user data
-          set((state) => {
-            if (!state.user) return state;
-            
-            return {
-              ...state,
-              user: {
-                ...state.user,
-                email: updatedUser.email,
-                full_name: updatedUser.full_name,
-                profile_image_url: updatedUser.profile_image_url,
-                job_title: updatedUser.job_title,
-                bio: updatedUser.bio,
-                access_token: updatedUser.access_token
-              },
-              isLoading: false,
-              error: null
-            };
-          });
-
-          toast.success('Profile updated successfully');
-        } catch (error: unknown) {
-          console.error("Profile update error:", error);
-          
-          let errorMessage = 'Profile update failed. Please try again.';
-          
-          if (isApiError(error)) {
-            const responseData = error.response?.data;
-            
-            if (typeof responseData === 'string') {
-              errorMessage = responseData;
-            } else if (typeof responseData?.detail === 'string') {
-              errorMessage = responseData.detail;
-            } else if (responseData?.detail && typeof responseData.detail === 'object') {
-              errorMessage = JSON.stringify(responseData.detail);
-            }
-          }
-          
-          set({
-            isLoading: false,
-            error: errorMessage
-          });
-          
-          toast.error(errorMessage);
+        const response = await fetch(`${API_BASE_URL}/users/me`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(profileData)
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to update profile');
         }
-      },
+        
+        const updatedUser = await response.json();
+        
+        // Update local user data
+        set({
+          user: updatedUser
+        });
 
-      registerUser: async (email: string, username: string, full_name: string, password: string, is_superuser: boolean = false) => {
-        try {
-          const response = await api.post('/users/', {
+        toast.success('Profile updated successfully!');
+      } catch (error) {
+        console.error('Failed to update profile:', error);
+        toast.error('Failed to update profile');
+        throw error;
+      }
+    },
+
+    // Register user function
+    registerUser: async (email: string, username: string, full_name: string, password: string, is_superuser: boolean) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/users/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
             email,
             username,
             full_name,
             password,
-            is_superuser,
-          });
-          set({ user: response.data });
-          toast.success('Registration successful!');
-        } catch (error) {
-          console.error('Registration error:', error);
-          toast.error('Registration failed. Please try again.');
-          throw error;
+            is_superuser
+          })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Failed to register user');
         }
+        
+        toast.success('User registered successfully!');
+      } catch (error) {
+        console.error('Registration error:', error);
+        toast.error('Failed to register user');
+        throw error;
       }
-    }),
-    {
-      name: 'auth-storage',
-      partialize: (state) => ({
-        user: state.user,
-        token: state.token,
-        isAuthenticated: state.isAuthenticated
-      })
-    }
-  )
-);
+    },
 
-// Type guard for API errors
-function isApiError(error: unknown): error is ApiError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'response' in error
-  );
-} 
+    checkAuth: async () => {
+      set({ loadingUserData: true });
+      const token = localStorage.getItem('token');
+      
+      if (token) {
+        try {
+          console.log("Checking authentication with token");
+          const response = await fetch(`${API_BASE_URL}/users/me`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            cache: 'no-store'
+          });
+
+          console.log("Auth check response status:", response.status);
+
+          if (response.ok) {
+            const user = await response.json();
+            console.log("Authentication successful, user data:", user);
+            set({ token, isAuthenticated: true, user, loadingUserData: false, error: null });
+            return true;
+          } else {
+            console.error("Authentication check failed, status:", response.status);
+            // Clear invalid token
+            localStorage.removeItem('token');
+            set({ 
+              token: null, 
+              isAuthenticated: false, 
+              user: null, 
+              loadingUserData: false,
+              error: 'Session expired. Please log in again.'
+            });
+            return false;
+          }
+        } catch (error) {
+          console.error('Error checking auth:', error);
+          localStorage.removeItem('token');
+          set({ 
+            token: null, 
+            isAuthenticated: false, 
+            user: null, 
+            loadingUserData: false,
+            error: 'Authentication error. Please log in again.'
+          });
+          return false;
+        }
+      } else {
+        console.log("No token found in storage");
+        set({ token: null, isAuthenticated: false, user: null, loadingUserData: false });
+        return false;
+      }
+    }
+  };
+}); 

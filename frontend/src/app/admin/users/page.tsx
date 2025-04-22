@@ -20,6 +20,8 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
+import AuthWrapper from "@/components/AuthWrapper";
+import { API_BASE_URL } from "@/lib/constants";
 
 interface User {
   id: number;
@@ -34,21 +36,36 @@ interface User {
 }
 
 export default function UsersPage() {
+  return (
+    <AuthWrapper>
+      <AdminUsersContent />
+    </AuthWrapper>
+  );
+}
+
+function AdminUsersContent() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { token, user: currentUser } = useAuthStore();
+  const { user: currentUser } = useAuthStore();
   const router = useRouter();
+
+  // Redirect non-admin users
+  useEffect(() => {
+    if (currentUser && !currentUser.is_superuser) {
+      toast.error("You don't have permission to access this page");
+      router.push("/");
+    }
+  }, [currentUser, router]);
 
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       console.log("Fetching users...");
-      console.log("Current token:", token);
-      console.log("Current user:", currentUser);
       
-      if (!token) {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
         throw new Error("No authentication token found");
       }
 
@@ -56,9 +73,9 @@ export default function UsersPage() {
         throw new Error("User does not have admin privileges");
       }
 
-      const response = await fetch("http://192.168.56.1:8003/users/", {
+      const response = await fetch(`${API_BASE_URL}/users/`, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -111,22 +128,23 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, currentUser]);
+  }, [currentUser]);
 
   useEffect(() => {
-    if (!currentUser?.is_superuser) {
-      router.push("/");
-      return;
-    }
     fetchUsers();
-  }, [currentUser, router, fetchUsers]);
+  }, [fetchUsers]);
 
   const handleActivateUser = async (userId: number) => {
     try {
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/activate`, {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/activate`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -144,10 +162,15 @@ export default function UsersPage() {
 
   const handleDeactivateUser = async (userId: number) => {
     try {
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/deactivate`, {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/deactivate`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -165,10 +188,15 @@ export default function UsersPage() {
 
   const handleMakeAdmin = async (userId: number) => {
     try {
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/make-admin`, {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/make-admin`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -186,10 +214,15 @@ export default function UsersPage() {
 
   const handleRemoveAdmin = async (userId: number) => {
     try {
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}/remove-admin`, {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/remove-admin`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -211,10 +244,15 @@ export default function UsersPage() {
     }
 
     try {
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
+      const storedToken = localStorage.getItem('token');
+      if (!storedToken) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
         method: "DELETE",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storedToken}`,
         },
       });
 
@@ -235,7 +273,7 @@ export default function UsersPage() {
   };
 
   if (loading) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="p-4">Loading users...</div>;
   }
 
   if (error) {
@@ -339,14 +377,14 @@ export default function UsersPage() {
                           Make Admin
                         </DropdownMenuItem>
                       )}
-                      {user.is_superuser && user.id !== currentUser?.id && (
+                      {user.is_superuser && user.id !== Number(currentUser?.id) && (
                         <DropdownMenuItem
                           onClick={() => handleRemoveAdmin(user.id)}
                         >
                           Remove Admin
                         </DropdownMenuItem>
                       )}
-                      {user.id !== currentUser?.id && (
+                      {user.id !== Number(currentUser?.id) && (
                         <DropdownMenuItem
                           onClick={() => handleDeleteUser(user.id)}
                           className="text-red-600"

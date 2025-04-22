@@ -1,35 +1,47 @@
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Dict, Any
+from datetime import datetime, date
 from pydantic import BaseModel, Field
-from models.project import ProjectStatus
 
 class ProjectBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
+    name: str
     description: Optional[str] = None
-    status: ProjectStatus = ProjectStatus.PLANNING
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    budget: Optional[int] = None
-    priority: int = Field(default=1, ge=1, le=5)
-    tags: Optional[str] = None
+    key: str = Field(..., min_length=1, max_length=10)
+    status: str = "active"
+    privacy_level: str = "private"
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    color: str = "#3498db"
+    is_template: bool = False
+    meta_data: Optional[Dict[str, Any]] = None
 
 class ProjectCreate(ProjectBase):
     pass
 
-class ProjectUpdate(ProjectBase):
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    status: Optional[ProjectStatus] = None
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    key: Optional[str] = Field(None, min_length=1, max_length=10)
+    status: Optional[str] = None
+    privacy_level: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    color: Optional[str] = None
+    is_template: Optional[bool] = None
+    meta_data: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
-class ProjectInDB(ProjectBase):
+class ProjectInDBBase(ProjectBase):
     id: int
-    owner_id: int
+    created_by: Optional[int] = None
     created_at: datetime
-    updated_at: datetime
-    is_active: bool
+    updated_at: Optional[datetime] = None
+    is_active: bool = True
 
     class Config:
         from_attributes = True
 
-class Project(ProjectInDB):
+class Project(ProjectInDBBase):
+    pass
+
+class ProjectInDB(ProjectInDBBase):
     pass 

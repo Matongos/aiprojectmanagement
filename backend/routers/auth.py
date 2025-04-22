@@ -110,12 +110,17 @@ router = APIRouter(
 )
 
 @router.post("/login", response_model=LoginResponse)
-async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+async def login(
+    login_data: LoginRequest = Body(None),
+    form_data: OAuth2PasswordRequestForm = Depends(None),
+    db: Session = Depends(get_db)
+):
     """
     Authenticate user and return access token.
     
     Args:
-        login_data: LoginRequest containing username and password
+        login_data: LoginRequest containing username and password (for JSON requests)
+        form_data: OAuth2PasswordRequestForm containing username and password (for form requests)
         db: Database session
         
     Returns:
@@ -123,12 +128,26 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """
     try:
         print(f"\n=== Login Attempt ===")
-        print(f"Username: {login_data.username}")
+        
+        # Determine which authentication method is being used
+        if login_data is not None:
+            username = login_data.username
+            password = login_data.password
+            print(f"Username from JSON: {username}")
+        elif form_data is not None:
+            username = form_data.username
+            password = form_data.password
+            print(f"Username from form: {username}")
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No credentials provided"
+            )
         
         # First check if user exists
-        user = db.query(User).filter(User.username == login_data.username).first()
+        user = db.query(User).filter(User.username == username).first()
         if not user:
-            print(f"❌ User not found: {login_data.username}")
+            print(f"❌ User not found: {username}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password"
@@ -145,7 +164,7 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             )
             
         # Verify password
-        if not auth_service.verify_password(login_data.password, user.hashed_password):
+        if not auth_service.verify_password(password, user.hashed_password):
             print("❌ Password verification failed")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

@@ -47,5 +47,27 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         db.commit()
         db.refresh(db_obj)
         return db_obj
+    
+    def get_tasks_by_priority(
+        self, db: Session, *, priority: str, skip: int = 0, limit: int = 100
+    ) -> List[Task]:
+        return (
+            db.query(self.model)
+            .filter(Task.priority == priority)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+    
+    def get_overdue_tasks(
+        self, db: Session, *, current_date, skip: int = 0, limit: int = 100
+    ) -> List[Task]:
+        return (
+            db.query(self.model)
+            .filter(Task.due_date < current_date, Task.status != TaskStatus.DONE)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
 
 task = CRUDTask(Task) 

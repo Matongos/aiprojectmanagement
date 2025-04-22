@@ -1,9 +1,8 @@
 from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-import uuid
 
-from database import Base
+from .base import Base
 
 class User(Base):
     __tablename__ = "users"
@@ -23,10 +22,9 @@ class User(Base):
 
     # Relationships
     roles = relationship("Role", secondary="user_role", back_populates="users", lazy="joined")
-    projects = relationship("ProjectMember", back_populates="user", foreign_keys="ProjectMember.user_id")
-    tasks = relationship("TaskAssignment", back_populates="user", foreign_keys="TaskAssignment.user_id")
-    created_projects = relationship("Project", back_populates="creator", foreign_keys="Project.created_by")
-    created_tasks = relationship("Task", back_populates="creator", foreign_keys="Task.created_by")
-    time_entries = relationship("TimeEntry", back_populates="user", foreign_keys="TimeEntry.user_id")
-    notifications = relationship("Notification", back_populates="user", foreign_keys="Notification.user_id")
-    comments = relationship("Comment", back_populates="user", foreign_keys="Comment.user_id") 
+    assigned_tasks = relationship("Task", foreign_keys="Task.assignee_id", back_populates="assignee")
+    created_tasks = relationship("Task", foreign_keys="Task.creator_id", back_populates="creator")
+    created_projects = relationship("Project", foreign_keys="Project.created_by", back_populates="creator")
+
+    def __repr__(self):
+        return f"<User {self.username}>" 
