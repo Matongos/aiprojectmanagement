@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "react-hot-toast";
+import React from "react";
+import { fetchApi, putApi } from "@/lib/api-helper";
+import { API_BASE_URL } from "@/lib/constants";
 
 interface Project {
   id: number;
@@ -16,6 +19,8 @@ interface Project {
 }
 
 export default function EditProjectPage({ params }: { params: { id: string } }) {
+  const projectId = params.id;
+  
   const [project, setProject] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -26,24 +31,7 @@ export default function EditProjectPage({ params }: { params: { id: string } }) 
   useEffect(() => {
     const fetchProject = async () => {
       try {
-        if (!token) {
-          throw new Error("No authentication token found");
-        }
-
-        const response = await fetch(
-          `http://192.168.56.1:8003/projects/${params.id}`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch project");
-        }
-
-        const data = await response.json();
+        const data = await fetchApi<Project>(`/projects/${projectId}`);
         setProject(data);
         setName(data.name);
         setDescription(data.description);
@@ -55,36 +43,18 @@ export default function EditProjectPage({ params }: { params: { id: string } }) 
     };
 
     fetchProject();
-  }, [params.id, token, router]);
+  }, [projectId, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-
-      const response = await fetch(
-        `http://192.168.56.1:8003/projects/${params.id}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            name,
-            description,
-            status: project?.status,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to update project");
-      }
+      await putApi(`/projects/${projectId}`, {
+        name,
+        description,
+        status: project?.status,
+      });
 
       toast.success("Project updated successfully");
       router.push("/dashboard/projects");

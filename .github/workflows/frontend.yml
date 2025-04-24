@@ -21,11 +21,16 @@ jobs:
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-        cache: 'npm'
         
     - name: Install dependencies
       working-directory: ./frontend
-      run: npm ci
+      run: |
+        # Check if package-lock.json exists, if not create it with npm install
+        if [ ! -f "package-lock.json" ]; then
+          npm install
+        else
+          npm ci
+        fi
       
     - name: Run tests
       working-directory: ./frontend
@@ -46,11 +51,16 @@ jobs:
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-        cache: 'npm'
         
     - name: Install dependencies
       working-directory: ./frontend
-      run: npm ci
+      run: |
+        # Check if package-lock.json exists, if not create it with npm install
+        if [ ! -f "package-lock.json" ]; then
+          npm install
+        else
+          npm ci
+        fi
       
     - name: Build
       working-directory: ./frontend

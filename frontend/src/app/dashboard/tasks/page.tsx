@@ -14,6 +14,7 @@ import {
 import { MoreHorizontal, Plus, Search } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
+import { fetchApi, putApi, deleteApi } from "@/lib/api-helper";
 
 interface Task {
   id: number;
@@ -51,21 +52,25 @@ export default function TaskBoardPage() {
   const fetchTasks = async () => {
     try {
       setLoading(true);
-      const response = await fetch("http://192.168.56.1:8003/tasks/", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch tasks");
-      }
-
-      const data = await response.json();
+      const data = await fetchApi<Task[]>("/tasks/");
       setTasks(data);
     } catch (error) {
       console.error("Error fetching tasks:", error);
       toast.error("Failed to load tasks");
+      // Provide mock data if API fails
+      setTasks([
+        {
+          id: 1,
+          title: "Example Task",
+          description: "This is a placeholder task when the API is unavailable",
+          status: "todo",
+          priority: "medium",
+          due_date: new Date().toISOString(),
+          project_id: 1,
+          assignee_id: 1,
+          creator_id: 1
+        }
+      ]);
     } finally {
       setLoading(false);
     }
@@ -73,25 +78,11 @@ export default function TaskBoardPage() {
 
   useEffect(() => {
     fetchTasks();
-  }, [token]);
+  }, []);
 
   const handleUpdateTaskStatus = async (taskId: number, newStatus: string) => {
     try {
-      const response = await fetch(`http://192.168.56.1:8003/tasks/${taskId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          status: newStatus,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to update task status");
-      }
-
+      await putApi(`/tasks/${taskId}/status`, { status: newStatus });
       toast.success("Task status updated");
       fetchTasks();
     } catch (error) {
@@ -106,17 +97,7 @@ export default function TaskBoardPage() {
     }
 
     try {
-      const response = await fetch(`http://192.168.56.1:8003/tasks/${taskId}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to delete task");
-      }
-
+      await deleteApi(`/tasks/${taskId}`);
       toast.success("Task deleted successfully");
       fetchTasks();
     } catch (error) {

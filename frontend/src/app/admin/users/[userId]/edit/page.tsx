@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "react-hot-toast";
+import React from "react";
+import { fetchApi, putApi } from "@/lib/api-helper";
 
 interface User {
   id: number;
@@ -22,6 +24,7 @@ interface User {
 
 export default function EditUserPage({ params }: { params: { userId: string } }) {
   const userId = params.userId;
+  
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +38,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
     confirm_password: "",
   });
   const [showPasswordFields, setShowPasswordFields] = useState(false);
-  const { token, user: currentUser } = useAuthStore();
+  const { user: currentUser } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
@@ -51,22 +54,7 @@ export default function EditUserPage({ params }: { params: { userId: string } })
       setLoading(true);
       setError(null);
       
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch user: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await fetchApi<User>(`/users/${userId}`);
       setUser(data);
       setFormData(prev => ({
         ...prev,
@@ -88,10 +76,6 @@ export default function EditUserPage({ params }: { params: { userId: string } })
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-
       // Prepare the update data
       const updateData: Record<string, string> = {
         username: formData.username,
@@ -109,20 +93,8 @@ export default function EditUserPage({ params }: { params: { userId: string } })
         updateData.password = formData.new_password;
       }
 
-      const response = await fetch(`http://192.168.56.1:8003/users/${userId}`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updateData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to update user");
-      }
-
+      await putApi<User>(`/users/${userId}`, updateData);
+      
       toast.success("User updated successfully");
       router.push("/admin/users");
     } catch (error) {

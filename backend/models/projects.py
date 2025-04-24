@@ -2,7 +2,7 @@ from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, T
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from database import Base
+from .base import Base
 
 # Association table for project tags
 project_tag = Table(

@@ -18,8 +18,8 @@ from database import get_db
 from services import auth_service
 from models.user import User
 
-# Create OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+# Create OAuth2 scheme - use the token endpoint instead of login
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 # Function to get current user from token
 async def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
@@ -111,16 +111,14 @@ router = APIRouter(
 
 @router.post("/login", response_model=LoginResponse)
 async def login(
-    login_data: LoginRequest = Body(None),
-    form_data: OAuth2PasswordRequestForm = Depends(None),
+    login_data: LoginRequest,
     db: Session = Depends(get_db)
 ):
     """
     Authenticate user and return access token.
     
     Args:
-        login_data: LoginRequest containing username and password (for JSON requests)
-        form_data: OAuth2PasswordRequestForm containing username and password (for form requests)
+        login_data: LoginRequest containing username and password
         db: Database session
         
     Returns:
@@ -129,20 +127,9 @@ async def login(
     try:
         print(f"\n=== Login Attempt ===")
         
-        # Determine which authentication method is being used
-        if login_data is not None:
-            username = login_data.username
-            password = login_data.password
-            print(f"Username from JSON: {username}")
-        elif form_data is not None:
-            username = form_data.username
-            password = form_data.password
-            print(f"Username from form: {username}")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No credentials provided"
-            )
+        username = login_data.username
+        password = login_data.password
+        print(f"Username from JSON: {username}")
         
         # First check if user exists
         user = db.query(User).filter(User.username == username).first()
@@ -204,7 +191,93 @@ async def login(
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred during login: {str(e)}"
+            detail=f"Login failed: {str(e)}"
+        )
+
+# Add a new endpoint for token that uses OAuth2 form - this keeps compatibility with tools expecting OAuth2        
+@router.post("/token", response_model=LoginResponse)
+async def get_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    """
+    OAuth2 compatible token endpoint.
+    
+    Args:
+        form_data: OAuth2PasswordRequestForm containing username and password
+        db: Database session
+        
+    Returns:
+        LoginResponse with access token and user details
+    """
+    try:
+        print(f"\n=== Token Request ===")
+        
+        username = form_data.username
+        password = form_data.password
+        print(f"Username from form: {username}")
+        
+        # First check if user exists
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            print(f"❌ User not found: {username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+            
+        print(f"✅ User found: {user.username}")
+        print(f"User is active: {user.is_active}")
+        
+        if not user.is_active:
+            print("❌ User is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive"
+            )
+            
+        # Verify password
+        if not auth_service.verify_password(password, user.hashed_password):
+            print("❌ Password verification failed")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+            
+        print("✅ Password verified successfully")
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=auth_service.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = auth_service.create_access_token(
+            data={"sub": user.username, "id": user.id},
+            expires_delta=access_token_expires
+        )
+        
+        # Return user data and token
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "is_superuser": user.is_superuser,
+                "is_active": user.is_active,
+                "profile_image_url": user.profile_image_url,
+                "job_title": user.job_title,
+                "bio": user.bio
+            }
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ Token request error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Token request failed: {str(e)}"
         )
 
 @router.post(

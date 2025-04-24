@@ -12,18 +12,57 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+
+// Custom Link component that renders consistently between server and client
+const LinkComponent = ({ href, className, children }) => {
+  return (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+};
 
 export default function Navigation() {
   const { user, isAuthenticated, logout } = useAuthStore();
   const pathname = usePathname();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   
   const isAdmin = user?.is_superuser === true;
+
+  // Only run on client to prevent hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleLogout = () => {
     logout();
     router.push('/auth/login');
   };
+
+  // If not mounted yet, render a skeleton version that matches server output
+  if (!mounted) {
+    return (
+      <nav className="bg-gray-900 text-white shadow-lg">
+        <div className="max-w-full mx-auto px-4">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <Link href="/" className="text-xl font-semibold text-blue-400 hover:text-blue-300">
+                AI PROJECT MANAGEMENT
+              </Link>
+            </div>
+            <div className="hidden md:flex items-center space-x-6">
+              {/* Empty space for nav links */}
+            </div>
+            <div className="md:hidden flex items-center space-x-2">
+              {/* Empty space for mobile menu */}
+            </div>
+          </div>
+        </div>
+      </nav>
+    );
+  }
 
   return (
     <nav className="bg-gray-900 text-white shadow-lg">
@@ -39,7 +78,7 @@ export default function Navigation() {
           {/* Center - Main navigation links */}
           {isAuthenticated && (
             <div className="hidden md:flex items-center space-x-6">
-              <Link
+              <LinkComponent
                 href="/dashboard"
                 className={`px-3 py-2 text-sm font-medium ${
                   pathname === '/dashboard' 
@@ -48,9 +87,9 @@ export default function Navigation() {
                 }`}
               >
                 Dashboard
-              </Link>
+              </LinkComponent>
               
-              <Link
+              <LinkComponent
                 href="/dashboard/projects"
                 className={`px-3 py-2 text-sm font-medium ${
                   pathname.startsWith('/dashboard/projects') 
@@ -59,9 +98,9 @@ export default function Navigation() {
                 }`}
               >
                 Projects
-              </Link>
+              </LinkComponent>
               
-              <Link
+              <LinkComponent
                 href="/dashboard/tasks"
                 className={`px-3 py-2 text-sm font-medium ${
                   pathname.startsWith('/dashboard/tasks') 
@@ -70,7 +109,7 @@ export default function Navigation() {
                 }`}
               >
                 Tasks
-              </Link>
+              </LinkComponent>
               
               {/* Temporarily disabled until reporting is implemented */}
               <span
@@ -82,7 +121,7 @@ export default function Navigation() {
               
               {/* Admin link only for admins */}
               {isAdmin && (
-                <Link
+                <LinkComponent
                   href="/admin/users"
                   className={`px-3 py-2 text-sm font-medium ${
                     pathname.startsWith('/admin') 
@@ -91,7 +130,7 @@ export default function Navigation() {
                   }`}
                 >
                   Admin
-                </Link>
+                </LinkComponent>
               )}
             </div>
           )}

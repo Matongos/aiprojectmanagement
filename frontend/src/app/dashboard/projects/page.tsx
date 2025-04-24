@@ -50,6 +50,7 @@ function ProjectsContent() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
   const { user, token } = useAuthStore();
   const router = useRouter();
   
@@ -58,7 +59,7 @@ function ProjectsContent() {
   // Check if user can delete/edit projects (admin or project owner)
   const isAdmin = user?.is_superuser === true;
 
-  const fetchProjects = async () => {
+  const fetchProjects = async (search?: string) => {
     try {
       setLoading(true);
       setError(null);
@@ -70,12 +71,16 @@ function ProjectsContent() {
         throw new Error("No authentication token found");
       }
 
-      const response = await fetch(`${API_BASE_URL}/projects/`, {
+      // Build the API URL based on whether we're searching or not
+      const apiUrl = search 
+        ? `${API_BASE_URL}/projects/search/?query=${encodeURIComponent(search)}`
+        : `${API_BASE_URL}/projects/`;
+
+      const response = await fetch(apiUrl, {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json"
         },
-        // Add cache: 'no-store' to prevent caching
         cache: 'no-store'
       });
 
@@ -107,10 +112,28 @@ function ProjectsContent() {
       fetchProjects();
     }
   }, [user, token]);
-
-  const filteredProjects = projects.filter((project) =>
-    project.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  
+  // Handle search input with debounce
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value;
+    setSearchQuery(query);
+    
+    // Clear any existing timeout
+    if (searchTimeout) {
+      clearTimeout(searchTimeout);
+    }
+    
+    // Set a new timeout for the search
+    const timeout = setTimeout(() => {
+      if (query.trim().length > 0) {
+        fetchProjects(query);
+      } else {
+        fetchProjects();
+      }
+    }, 500); // 500ms debounce
+    
+    setSearchTimeout(timeout);
+  };
 
   const handleDeleteProject = async (projectId: number) => {
     if (!window.confirm("Are you sure you want to delete this project?")) {
@@ -169,7 +192,7 @@ function ProjectsContent() {
     return (
       <div className="p-4">
         <div className="text-red-500 mb-4">Error: {error}</div>
-        <Button onClick={fetchProjects}>Retry</Button>
+        <Button onClick={() => fetchProjects()}>Retry</Button>
       </div>
     );
   }
@@ -201,7 +224,7 @@ function ProjectsContent() {
           <Input
             placeholder="Search projects..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={handleSearchChange}
             className="w-64"
           />
           <div className="flex gap-2">
@@ -231,7 +254,7 @@ function ProjectsContent() {
 
       {viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProjects.map((project) => (
+          {projects.map((project) => (
             <Card key={project.id} className="p-6">
               <div className="flex justify-between items-start mb-4">
                 <h3 className="text-lg font-semibold">{project.name}</h3>
@@ -300,7 +323,7 @@ function ProjectsContent() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredProjects.map((project) => (
+              {projects.map((project) => (
                 <TableRow key={project.id}>
                   <TableCell className="font-medium">{project.name}</TableCell>
                   <TableCell>{project.description}</TableCell>

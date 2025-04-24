@@ -2,7 +2,7 @@ from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, T
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from database import Base
+from .base import Base
 
 # Association table for task tags
 task_tag = Table(
@@ -33,6 +33,7 @@ class Task(Base):
     priority = Column(String, default="medium")
     parent_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     estimated_hours = Column(Numeric(8, 2), nullable=True)
     start_date = Column(DateTime(timezone=True), nullable=True)
     due_date = Column(DateTime(timezone=True), nullable=True)
@@ -47,6 +48,7 @@ class Task(Base):
     project = relationship("Project", back_populates="tasks")
     stage = relationship("ProjectStage", back_populates="tasks")
     creator = relationship("User", back_populates="created_tasks", foreign_keys=[created_by])
+    assignee = relationship("User", back_populates="assigned_tasks", foreign_keys=[assignee_id])
     parent = relationship("Task", remote_side=[id], back_populates="subtasks")
     subtasks = relationship("Task", back_populates="parent", remote_side=[parent_task_id])
     milestone = relationship("Milestone", back_populates="tasks")
@@ -74,7 +76,7 @@ class TaskAssignment(Base):
 
     # Relationships
     task = relationship("Task", back_populates="assignments")
-    user = relationship("User", back_populates="tasks", foreign_keys=[user_id])
+    user = relationship("User", foreign_keys=[user_id])
     assigner = relationship("User", foreign_keys=[assigned_by])
 
 class TimeEntry(Base):

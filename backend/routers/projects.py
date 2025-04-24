@@ -30,6 +30,22 @@ async def read_projects(
     )
     return projects
 
+@router.get("/search/", response_model=List[ProjectSchema])
+async def search_projects(
+    query: str = Query(..., description="Search query for projects"),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Search for projects by name, key, or description.
+    """
+    projects = project_crud.search_projects(
+        db=db, user_id=current_user["id"], query=query, skip=skip, limit=limit
+    )
+    return projects
+
 @router.get("/{project_id}", response_model=ProjectSchema)
 async def read_project(
     project_id: int,

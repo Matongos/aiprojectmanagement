@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Table, ForeignKey, Index
 from sqlalchemy.orm import relationship
-from database import Base
+from .base import Base
 
 # Association table for role-permission relationship
 role_permission = Table(

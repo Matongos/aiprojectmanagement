@@ -5,7 +5,7 @@ from schemas.project import ProjectCreate, ProjectUpdate
 from crud.base import CRUDBase
 import string
 import random
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 
 class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
     def get_by_owner(
@@ -84,6 +84,29 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
             db.query(self.model)
             .filter(Project.created_by == user_id)
             .order_by(desc(Project.updated_at))
+            .limit(limit)
+            .all()
+        )
+        
+    def search_projects(
+        self, db: Session, *, user_id: int, query: str, skip: int = 0, limit: int = 100
+    ) -> List[Project]:
+        """
+        Search for projects by name, key, or description.
+        Results are filtered to only include projects created by the user.
+        """
+        search_query = f"%{query}%"
+        return (
+            db.query(self.model)
+            .filter(Project.created_by == user_id)
+            .filter(
+                or_(
+                    Project.name.ilike(search_query),
+                    Project.key.ilike(search_query),
+                    Project.description.ilike(search_query)
+                )
+            )
+            .offset(skip)
             .limit(limit)
             .all()
         )

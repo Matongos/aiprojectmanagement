@@ -11,10 +11,20 @@ interface AuthWrapperProps {
 
 export default function AuthWrapper({ children }: AuthWrapperProps) {
   const [isLoading, setIsLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
   const { token, isAuthenticated, checkAuth, user } = useAuthStore();
   const router = useRouter();
 
+  // First, handle client-side mounting to prevent hydration errors
   useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  // Then handle authentication logic only after component is mounted
+  useEffect(() => {
+    // Skip auth check during SSR or before mounting
+    if (!isMounted) return;
+
     async function verifyAuth() {
       setIsLoading(true);
       console.log("AuthWrapper: Verifying authentication, token present:", !!token);
@@ -46,7 +56,12 @@ export default function AuthWrapper({ children }: AuthWrapperProps) {
     }
     
     verifyAuth();
-  }, [checkAuth, router, token, isAuthenticated, user]);
+  }, [checkAuth, router, token, isAuthenticated, user, isMounted]);
+
+  // Return a simpler loading state during SSR to avoid hydration mismatches
+  if (!isMounted) {
+    return <>{children}</>;
+  }
 
   if (isLoading) {
     return (

@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { API_BASE_URL } from "@/lib/constants";
 import AuthWrapper from "@/components/AuthWrapper";
+import { fetchApi, patchApi, deleteApi } from "@/lib/api-helper";
 
 interface User {
   id: number;
@@ -47,82 +48,96 @@ function ProfileContent() {
   });
   const [showPasswordFields, setShowPasswordFields] = useState(false);
   const router = useRouter();
+  const { token, user: authUser } = useAuthStore();
 
   useEffect(() => {
+    // Check if user is authenticated before making API calls
+    if (!token) {
+      console.log("No authentication token found, redirecting to login");
+      router.push("/auth/login");
+      return;
+    }
+    
     fetchUser();
-  }, []);
+  }, [token, router]);
 
   const fetchUser = async () => {
+    if (!token) {
+      console.error("Token not available, cannot fetch user data");
+      router.push("/auth/login");
+      return;
+    }
+    
     try {
       setLoading(true);
       setError(null);
       
-      const storedToken = localStorage.getItem('token');
-      if (!storedToken) {
-        throw new Error("No authentication token found");
+      // Use authUser from store if available
+      if (authUser) {
+        console.log("Using user from auth store:", authUser);
+        // Initialize with data from auth store while we fetch the full profile
+        setUser(authUser as unknown as User);
+        setFormData(prev => ({
+          ...prev,
+          username: authUser.username || "",
+          email: authUser.email || "",
+          full_name: authUser.full_name || "",
+          job_title: authUser.job_title || "",
+          bio: authUser.bio || "",
+        }));
       }
-
-      // We can now safely assume authentication is valid due to AuthWrapper
-      let userId;
       
-      // Check if we already have user data in store
-      const { user: storeUser } = useAuthStore.getState();
-      if (storeUser && storeUser.id) {
-        userId = storeUser.id;
-      } else {
-        // If no user in store, fetch from /me endpoint
-        try {
-          const meResponse = await fetch(`${API_BASE_URL}/users/me`, {
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-              "Content-Type": "application/json",
-            },
-          });
-          
-          if (!meResponse.ok) {
-            throw new Error("Failed to fetch current user");
-          }
-          
-          const meData = await meResponse.json();
-          console.log("Fetched current user:", meData);
-          userId = meData.id;
-        } catch (error) {
-          console.error("Error fetching current user:", error);
-          throw new Error("Could not determine user ID");
-        }
+      // First get current user from /me endpoint
+      const currentUser = await fetchApi<User>('/users/me', {}, false);
+      console.log("Fetched current user:", currentUser);
+      
+      if (!currentUser || !currentUser.id) {
+        throw new Error("Could not determine user ID");
       }
-
-      console.log("Fetching user data for ID:", userId);
       
-      const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
-        headers: {
-          Authorization: `Bearer ${storedToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Error response:", errorText);
-        throw new Error(`Failed to fetch user: ${response.status} - ${errorText}`);
-      }
-
-      const data = await response.json();
-      console.log("User data received:", data);
+      console.log("Fetching user data for ID:", currentUser.id);
       
-      setUser(data);
+      // Then get detailed user information
+      const userData = await fetchApi<User>(`/users/${currentUser.id}`, {}, false);
+      console.log("User data received:", userData);
+      
+      setUser(userData);
       setFormData(prev => ({
         ...prev,
-        username: data.username,
-        email: data.email,
-        full_name: data.full_name,
-        job_title: data.job_title || "",
-        bio: data.bio || "",
+        username: userData.username,
+        email: userData.email,
+        full_name: userData.full_name,
+        job_title: userData.job_title || "",
+        bio: userData.bio || "",
       }));
     } catch (error) {
       console.error("Error fetching user:", error);
       setError(error instanceof Error ? error.message : "Failed to load user");
-      toast.error("Failed to load user");
+      toast.error("Failed to load user profile data");
+      
+      // Set mock data if API fails
+      if (!user && authUser) {
+        const mockUser = {
+          id: typeof authUser.id === 'string' ? parseInt(authUser.id, 10) : (authUser.id || 1),
+          username: authUser.username || "user",
+          email: authUser.email || "user@example.com",
+          full_name: authUser.full_name || "User Name",
+          is_active: true,
+          is_superuser: authUser.is_superuser || false,
+          profile_image_url: authUser.profile_image_url,
+          job_title: authUser.job_title || "Developer",
+          bio: authUser.bio || "No bio available"
+        };
+        setUser(mockUser as User);
+        setFormData(prev => ({
+          ...prev,
+          username: mockUser.username,
+          email: mockUser.email,
+          full_name: mockUser.full_name,
+          job_title: mockUser.job_title || "",
+          bio: mockUser.bio || "",
+        }));
+      }
     } finally {
       setLoading(false);
     }
@@ -131,11 +146,6 @@ function ProfileContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const storedToken = localStorage.getItem('token');
-      if (!storedToken) {
-        throw new Error("No authentication token found");
-      }
-
       if (!user?.id) {
         throw new Error("User ID not found");
       }
@@ -159,23 +169,7 @@ function ProfileContent() {
 
       console.log("Updating user profile with data:", updateData);
 
-      const response = await fetch(`${API_BASE_URL}/users/me/profile`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${storedToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updateData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("Error response:", errorData);
-        throw new Error(errorData.detail || `Failed to update user: ${response.status}`);
-      }
-
-      const updatedData = await response.json();
-      console.log("Profile updated successfully:", updatedData);
+      await patchApi('/users/me/profile', updateData);
       
       toast.success("Profile updated successfully");
       fetchUser();
@@ -199,23 +193,16 @@ function ProfileContent() {
     }
 
     try {
-      const storedToken = localStorage.getItem('token');
-      if (!storedToken) {
-        throw new Error("No authentication token found");
+      if (!user?.id) {
+        throw new Error("User ID not found");
       }
-
-      const response = await fetch(`${API_BASE_URL}/users/${user?.id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${storedToken}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to delete account");
-      }
-
+      
+      await deleteApi(`/users/${user.id}`);
       toast.success("Account deleted successfully");
+      
+      // Log out and redirect
+      const { logout } = useAuthStore.getState();
+      logout();
       router.push("/auth/login");
     } catch (error) {
       console.error("Error deleting account:", error);
@@ -240,6 +227,7 @@ function ProfileContent() {
           throw new Error("No authentication token found");
         }
 
+        // File upload requires a direct fetch with FormData
         const response = await fetch(`${API_BASE_URL}/users/me/profile-image`, {
           method: 'POST',
           headers: {
@@ -286,16 +274,21 @@ function ProfileContent() {
             <div className="relative">
               <Avatar className="h-20 w-20">
                 <AvatarImage 
-                  src={user.profile_image_url && user.profile_image_url.startsWith('data:') 
-                    ? user.profile_image_url 
-                    : "/placeholder-profile.svg"}
+                  src={user.profile_image_url ? (
+                    // Check if it's a valid URL
+                    user.profile_image_url.startsWith('http') || 
+                    user.profile_image_url.startsWith('/') || 
+                    user.profile_image_url.startsWith('data:') 
+                      ? user.profile_image_url 
+                      : '/placeholder-profile.svg'
+                  ) : '/placeholder-profile.svg'}
                   alt={`${user.full_name}'s profile`}
                   onError={(e) => {
-                    console.error("Error loading profile image");
-                    (e.target as HTMLImageElement).style.display = 'none';
+                    console.error("Error loading profile image, falling back to placeholder");
+                    (e.target as HTMLImageElement).src = '/placeholder-profile.svg';
                   }}
                 />
-                <AvatarFallback>{user.username.charAt(0).toUpperCase()}</AvatarFallback>
+                <AvatarFallback>{user.full_name.charAt(0).toUpperCase()}</AvatarFallback>
               </Avatar>
               <label 
                 htmlFor="profile-image" 

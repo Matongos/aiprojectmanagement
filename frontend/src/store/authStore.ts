@@ -55,13 +55,16 @@ export const useAuthStore = create<AuthStore>((set, get) => {
     // Login function
     login: async (username: string, password: string) => {
       try {
-        console.log(`Attempting login for: ${username} to ${API_BASE_URL}/token`);
+        console.log(`Attempting login for ${username}`);
         set({ isLoading: true, error: null });
         
-        // Create form data
+        // Create form data - only username and password, nothing else
         const formData = new URLSearchParams();
         formData.append('username', username);
         formData.append('password', password);
+        
+        // Log what we're sending
+        console.log("Form data being sent:", formData.toString());
         
         const response = await fetch(`${API_BASE_URL}/token`, {
           method: 'POST',
@@ -69,7 +72,6 @@ export const useAuthStore = create<AuthStore>((set, get) => {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
           body: formData.toString(),
-          cache: 'no-store'
         });
 
         console.log("Login response status:", response.status);
@@ -82,7 +84,7 @@ export const useAuthStore = create<AuthStore>((set, get) => {
         }
 
         const data = await response.json();
-        console.log("Login response data received:", !!data);
+        console.log("Login response data:", data);
         
         if (!data.access_token) {
           console.error("No access token in response");
@@ -103,10 +105,7 @@ export const useAuthStore = create<AuthStore>((set, get) => {
         });
         
         console.log("Login successful, user data:", data.user);
-        
-        // Fetch additional user details if needed
-        const authenticated = await get().checkAuth();
-        return authenticated;
+        return true;
       } catch (error) {
         console.error('Login error:', error);
         set({ 

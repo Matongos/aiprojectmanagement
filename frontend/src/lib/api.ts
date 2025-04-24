@@ -1,24 +1,11 @@
+// Import API_BASE_URL from constants
+import { API_BASE_URL } from './constants';
+import { fetchApi } from './api-helper';
+
 // Dashboard API calls
 export async function getRecentProjects(): Promise<any[]> {
   try {
-    const token = localStorage.getItem('token');
-    
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-    
-    const response = await fetch(`${API_BASE_URL}/projects/recent`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to fetch recent projects');
-    }
-    
-    const data = await response.json();
-    return data;
+    return await fetchApi<any[]>('/projects/recent');
   } catch (error) {
     console.error('Error fetching recent projects:', error);
     // Return mock data for now
@@ -53,24 +40,7 @@ export async function getRecentProjects(): Promise<any[]> {
 
 export async function getUpcomingTasks(): Promise<any[]> {
   try {
-    const token = localStorage.getItem('token');
-    
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-    
-    const response = await fetch(`${API_BASE_URL}/tasks/upcoming`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to fetch upcoming tasks');
-    }
-    
-    const data = await response.json();
-    return data;
+    return await fetchApi<any[]>('/tasks/upcoming');
   } catch (error) {
     console.error('Error fetching upcoming tasks:', error);
     // Return mock data for now

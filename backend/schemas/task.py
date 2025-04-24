@@ -1,13 +1,16 @@
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field
-from models.task import TaskStatus, TaskPriority
+
+# Define task status and priority as literals
+TaskStatus = Literal["todo", "in_progress", "review", "done", "cancelled"]
+TaskPriority = Literal["low", "medium", "high", "urgent"]
 
 class TaskBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    status: TaskStatus = TaskStatus.TODO
-    priority: TaskPriority = TaskPriority.MEDIUM
+    status: TaskStatus = "todo"
+    priority: TaskPriority = "medium"
     due_date: Optional[datetime] = None
     estimated_hours: Optional[int] = None
     actual_hours: Optional[int] = None
@@ -26,7 +29,7 @@ class TaskUpdate(TaskBase):
 class TaskInDB(TaskBase):
     id: int
     project_id: int
-    creator_id: int
+    created_by: int
     assignee_id: Optional[int]
     created_at: datetime
     updated_at: datetime
