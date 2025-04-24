@@ -41,8 +41,14 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
     def create_with_creator(
         self, db: Session, *, obj_in: TaskCreate, creator_id: int
     ) -> Task:
+        # Convert Pydantic model to dict
         obj_in_data = obj_in.model_dump()
+        
+        # Create new Task object
+        # Don't include assignee_id in the constructor
         db_obj = self.model(**obj_in_data, created_by=creator_id)
+        
+        # Add to session, commit and refresh
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)

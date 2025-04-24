@@ -13,7 +13,6 @@ class TaskBase(BaseModel):
     priority: TaskPriority = "medium"
     due_date: Optional[datetime] = None
     estimated_hours: Optional[int] = None
-    actual_hours: Optional[int] = None
     tags: Optional[str] = None
 
 class TaskCreate(TaskBase):
@@ -32,7 +31,7 @@ class TaskInDB(TaskBase):
     created_by: int
     assignee_id: Optional[int]
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

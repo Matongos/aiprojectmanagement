@@ -204,35 +204,26 @@ async def authenticate_user(db: Session, username: str, password: str):
         traceback.print_exc()
         return None, "Authentication failed"
 
-def get_user_by_id(db: Session, user_id: int):
-    """Get a user by ID."""
-    try:
-        query = text("""
-            SELECT id, username, email, full_name, is_active, is_superuser,
-                   profile_image_url, job_title, bio, hashed_password
-            FROM users 
-            WHERE id = :id
-        """)
-        result = db.execute(query, {"id": user_id}).fetchone()
-        
-        if not result:
-            return None
-            
-        return {
-            "id": result[0],
-            "username": result[1],
-            "email": result[2],
-            "full_name": result[3],
-            "is_active": result[4],
-            "is_superuser": result[5],
-            "profile_image_url": result[6],
-            "job_title": result[7],
-            "bio": result[8],
-            "hashed_password": result[9]  # Include hashed_password for password verification
-        }
-    except Exception as e:
-        print(f"Error getting user by ID: {str(e)}")
+def get_user_by_id(db, user_id: int):
+    """Get user by ID."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
         return None
+    
+    # Convert to dict to match expected format in the auth router
+    user_dict = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+        "profile_image_url": user.profile_image_url,
+        "job_title": user.job_title,
+        "bio": user.bio
+    }
+    
+    return user_dict
 
 def get_user_from_token(token: str, db: Session):
     """Validate a JWT token and return the user."""

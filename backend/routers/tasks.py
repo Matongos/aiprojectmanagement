@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, date
@@ -20,22 +20,22 @@ router = APIRouter(
 async def create_task(
     task: TaskCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Create a new task with the current user as creator."""
-    return task_crud.create_with_creator(db=db, obj_in=task, creator_id=current_user.id)
+    return task_crud.create_with_creator(db=db, obj_in=task, creator_id=current_user["id"])
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get tasks assigned to the current user."""
-    if not current_user.is_superuser:
+    if not current_user["is_superuser"]:
         tasks = task_crud.get_by_assignee(
-            db=db, assignee_id=current_user.id, skip=skip, limit=limit
+            db=db, assignee_id=current_user["id"], skip=skip, limit=limit
         )
     else:
         tasks = task_crud.get_multi(db=db, skip=skip, limit=limit)
@@ -47,7 +47,7 @@ async def read_project_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get all tasks for a specific project."""
     tasks = task_crud.get_by_project(
@@ -59,13 +59,13 @@ async def read_project_tasks(
 async def read_task(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get a specific task by ID."""
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not current_user.is_superuser and db_task.assignee_id != current_user.id and db_task.created_by != current_user.id:
+    if not current_user["is_superuser"] and db_task.assignee_id != current_user["id"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return db_task
 
@@ -74,13 +74,13 @@ async def update_task(
     task_id: int,
     task: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Update a specific task."""
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not current_user.is_superuser and db_task.created_by != current_user.id:
+    if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return task_crud.update(db=db, db_obj=db_task, obj_in=task)
 
@@ -88,13 +88,13 @@ async def update_task(
 async def delete_task(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Delete a specific task."""
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not current_user.is_superuser and db_task.created_by != current_user.id:
+    if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     task_crud.remove(db=db, id=task_id)
     return None
@@ -105,14 +105,14 @@ async def read_tasks_by_status(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get tasks filtered by status."""
     tasks = task_crud.get_by_status(
         db=db, status=status, skip=skip, limit=limit
     )
-    if not current_user.is_superuser:
-        tasks = [t for t in tasks if t.assignee_id == current_user.id or t.created_by == current_user.id]
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/priority/{priority}", response_model=List[TaskSchema])
@@ -121,14 +121,14 @@ async def read_tasks_by_priority(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get tasks filtered by priority."""
     tasks = task_crud.get_tasks_by_priority(
         db=db, priority=priority, skip=skip, limit=limit
     )
-    if not current_user.is_superuser:
-        tasks = [t for t in tasks if t.assignee_id == current_user.id or t.created_by == current_user.id]
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/overdue/", response_model=List[TaskSchema])
@@ -136,15 +136,15 @@ async def read_overdue_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get all overdue tasks for the current user."""
     current_date = datetime.utcnow().date()
     tasks = task_crud.get_overdue_tasks(
         db=db, current_date=current_date, skip=skip, limit=limit
     )
-    if not current_user.is_superuser:
-        tasks = [t for t in tasks if t.assignee_id == current_user.id or t.created_by == current_user.id]
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/upcoming/", response_model=List[TaskSchema])
@@ -153,7 +153,7 @@ async def read_upcoming_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get tasks due in the next X days."""
     current_date = datetime.utcnow().date()
@@ -170,8 +170,8 @@ async def read_upcoming_tasks(
         .all()
     )
     
-    if not current_user.is_superuser:
-        tasks = [t for t in tasks if t.assignee_id == current_user.id or t.created_by == current_user.id]
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     
     return tasks
 
@@ -180,13 +180,13 @@ async def update_task_status(
     task_id: int,
     status: TaskStatus,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Update just the status of a task."""
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not current_user.is_superuser and db_task.created_by != current_user.id:
+    if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     return task_crud.update(db=db, db_obj=db_task, obj_in={"status": status})
@@ -196,12 +196,12 @@ async def read_created_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """Get all tasks created by the current user."""
     tasks = (
         db.query(Task)
-        .filter(Task.created_by == current_user.id)
+        .filter(Task.created_by == current_user["id"])
         .offset(skip)
         .limit(limit)
         .all()
@@ -212,14 +212,14 @@ async def read_created_tasks(
 async def read_recent_tasks(
     *,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Dict = Depends(get_current_user),
     limit: int = 5,
 ):
     """
     Retrieve recent tasks for the current user.
     """
     tasks = task_crud.get_recent_tasks(
-        db=db, user_id=current_user.id, limit=limit
+        db=db, user_id=current_user["id"], limit=limit
     )
     return tasks
 
@@ -228,7 +228,7 @@ async def read_over_budget_tasks(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
     """
     Get tasks where actual hours exceed estimated hours.
@@ -239,7 +239,7 @@ async def read_over_budget_tasks(
     )
     
     # Filter tasks for regular users to only see their own or assigned tasks
-    if not current_user.is_superuser:
-        tasks = [t for t in tasks if t.assignee_id == current_user.id or t.created_by == current_user.id]
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     
     return tasks 
