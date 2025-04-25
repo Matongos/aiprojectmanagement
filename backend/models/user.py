@@ -29,6 +29,7 @@ class User(Base):
     time_entries = relationship("TimeEntry", back_populates="user")
     comments = relationship("Comment", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    uploaded_files = relationship("FileAttachment", back_populates="user")
 
     def __repr__(self):
         return f"<User {self.username}>" 

@@ -1,6 +1,7 @@
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from datetime import datetime
 from pydantic import BaseModel, Field
+from .file_attachment import FileAttachment
 
 # Define task status and priority as literals
 TaskStatus = Literal["todo", "in_progress", "review", "done", "cancelled"]
@@ -37,4 +38,4 @@ class TaskInDB(TaskBase):
         from_attributes = True
 
 class Task(TaskInDB):
-    pass 
+    attachments: Optional[List[FileAttachment]] = None 

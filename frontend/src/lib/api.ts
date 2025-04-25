@@ -83,4 +83,58 @@ export async function getUpcomingTasks(): Promise<any[]> {
       },
     ];
   }
-} 
+}
+
+// File attachment API functions
+export const getTaskAttachments = async (taskId: number) => {
+  const response = await fetch(`/api/tasks/${taskId}/attachments`, {
+    headers: {
+      'Authorization': `Bearer ${getToken()}`
+    }
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to fetch task attachments');
+  }
+  
+  return response.json();
+};
+
+export const uploadTaskAttachment = async (taskId: number, file: File, description?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('task_id', taskId.toString());
+  
+  if (description) {
+    formData.append('description', description);
+  }
+  
+  const response = await fetch('/api/file-attachments', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${getToken()}`
+    },
+    body: formData
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to upload file');
+  }
+  
+  return response.json();
+};
+
+export const deleteFileAttachment = async (fileId: number) => {
+  const response = await fetch(`/api/file-attachments/${fileId}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${getToken()}`
+    }
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to delete file');
+  }
+  
+  return true;
+}; 

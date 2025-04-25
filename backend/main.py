@@ -3,13 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from database import get_db
 import requests
 from typing import Optional
+from starlette.staticfiles import StaticFiles
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -37,6 +38,10 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# Mount static files
+# Serving uploads directory for file downloads
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 # Include routers
 app.include_router(auth.router)
 app.include_router(users.router)
@@ -44,6 +49,7 @@ app.include_router(roles.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(analytics.router)
+app.include_router(file_attachments.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

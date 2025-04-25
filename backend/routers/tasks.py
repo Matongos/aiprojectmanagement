@@ -1,13 +1,16 @@
 from typing import Any, List, Optional, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, date
 from models.tasks import Task
 from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskStatus, TaskPriority
+from schemas.file_attachment import FileAttachment as FileAttachmentSchema, FileAttachmentCreate
 from crud import task as task_crud
+from crud import file_attachment as file_attachment_crud
 from database import get_db
 from routers.auth import get_current_user
 from schemas.user import User
+from services.file_service import FileService
 
 router = APIRouter(
     prefix="/tasks",
@@ -15,6 +18,9 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
+
+# File attachment endpoints
+file_service = FileService()
 
 @router.post("/", response_model=TaskSchema)
 async def create_task(
@@ -242,4 +248,56 @@ async def read_over_budget_tasks(
     if not current_user["is_superuser"]:
         tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
     
-    return tasks 
+    return tasks
+
+@router.post("/{task_id}/attachments", response_model=FileAttachmentSchema, status_code=status.HTTP_201_CREATED)
+async def upload_task_attachment(
+    task_id: int,
+    description: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_user)
+):
+    """Upload a file attachment to a task."""
+    # Verify task exists and user has permission
+    db_task = task_crud.get(db=db, id=task_id)
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Save the file to disk
+    unique_filename, file_path, file_size = await file_service.save_file(file, task_id)
+    
+    # Create file attachment record in database
+    file_data = FileAttachmentCreate(
+        filename=unique_filename,
+        original_filename=file.filename,
+        file_size=file_size,
+        content_type=file.content_type or "application/octet-stream",
+        description=description,
+        task_id=task_id
+    )
+    
+    db_file = file_attachment_crud.create_file_attachment(
+        db=db, 
+        file_data=file_data, 
+        user_id=current_user["id"],
+        file_path=file_path
+    )
+    
+    return db_file
+
+@router.get("/{task_id}/attachments", response_model=List[FileAttachmentSchema])
+async def get_task_attachments(
+    task_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_user)
+):
+    """Get all file attachments for a task."""
+    # Verify task exists
+    db_task = task_crud.get(db=db, id=task_id)
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return file_attachment_crud.get_task_attachments(db=db, task_id=task_id, skip=skip, limit=limit) 
