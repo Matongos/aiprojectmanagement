@@ -10,7 +10,7 @@ from schemas.file_attachment import FileAttachmentCreate, FileAttachmentUpdate
 from crud import file_attachment as crud
 from services.file_service import FileService
 from database import get_db
-from dependencies.auth import get_current_active_user
+from routers.auth import get_current_user
 from models.user import User
 
 router = APIRouter(
@@ -27,7 +27,7 @@ async def create_file_attachment(
     description: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Upload a file attachment for a task
@@ -45,14 +45,14 @@ async def create_file_attachment(
         task_id=task_id
     )
     
-    return crud.create_file_attachment(db, file_data, current_user.id, file_path)
+    return crud.create_file_attachment(db, file_data, current_user["id"], file_path)
 
 @router.get("/", response_model=List[FileAttachmentSchema])
 def read_file_attachments(
     skip: int = 0, 
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Retrieve all file attachments
@@ -65,7 +65,7 @@ def read_task_attachments(
     skip: int = 0, 
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Retrieve all file attachments for a specific task
@@ -76,7 +76,7 @@ def read_task_attachments(
 def read_file_attachment(
     file_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Retrieve a specific file attachment
@@ -90,7 +90,7 @@ def read_file_attachment(
 def download_file(
     file_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Download a file attachment
@@ -114,7 +114,7 @@ def update_file_attachment(
     file_id: int,
     file_data: FileAttachmentUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Update a file attachment
@@ -124,7 +124,7 @@ def update_file_attachment(
         raise HTTPException(status_code=404, detail="File attachment not found")
     
     # Check if user is authorized to update this file (owner or admin)
-    if db_file.uploaded_by != current_user.id and not current_user.is_superuser:
+    if db_file.uploaded_by != current_user["id"] and not current_user["is_superuser"]:
         raise HTTPException(status_code=403, detail="Not authorized to update this file")
     
     updated_file = crud.update_file_attachment(db, file_id, file_data)
@@ -134,7 +134,7 @@ def update_file_attachment(
 def delete_file_attachment(
     file_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Delete a file attachment
@@ -144,7 +144,7 @@ def delete_file_attachment(
         raise HTTPException(status_code=404, detail="File attachment not found")
     
     # Check if user is authorized to delete this file (owner or admin)
-    if db_file.uploaded_by != current_user.id and not current_user.is_superuser:
+    if db_file.uploaded_by != current_user["id"] and not current_user["is_superuser"]:
         raise HTTPException(status_code=403, detail="Not authorized to delete this file")
     
     # Delete from filesystem
