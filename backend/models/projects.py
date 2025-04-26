@@ -38,6 +38,7 @@ class Project(Base):
     milestones = relationship("Milestone", back_populates="project")
     stages = relationship("ProjectStage", back_populates="project")
     tags = relationship("Tag", secondary=project_tag, back_populates="projects")
+    activities = relationship("Activity", back_populates="project")
 
 class ProjectMember(Base):
     __tablename__ = "project_members"

@@ -56,6 +56,7 @@ class Task(Base):
     time_entries = relationship("TimeEntry", back_populates="task")
     comments = relationship("Comment", back_populates="task")
     attachments = relationship("FileAttachment", back_populates="task")
+    activities = relationship("Activity", back_populates="task")
     
     # Many-to-many relationships
     dependencies = relationship(

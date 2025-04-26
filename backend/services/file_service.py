@@ -1,21 +1,25 @@
 import os
 import uuid
 from fastapi import UploadFile
-from typing import Tuple
+from typing import Tuple, Union
 
 
 class FileService:
     def __init__(self, upload_dir: str = "uploads/tasks"):
         self.upload_dir = upload_dir
         os.makedirs(upload_dir, exist_ok=True)
+        
+        # Create a general folder for files not associated with tasks
+        general_dir = os.path.join(self.upload_dir, "general")
+        os.makedirs(general_dir, exist_ok=True)
 
-    async def save_file(self, file: UploadFile, task_id: int) -> Tuple[str, str, int]:
+    async def save_file(self, file: UploadFile, task_id: Union[int, str]) -> Tuple[str, str, int]:
         """
         Save an uploaded file to disk
         
         Args:
             file: The uploaded file
-            task_id: The ID of the task the file is attached to
+            task_id: The ID of the task the file is attached to, or 'general' for standalone files
             
         Returns:
             Tuple containing (unique_filename, file_path, file_size)
@@ -24,8 +28,9 @@ class FileService:
         file_ext = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         
-        # Create task directory if it doesn't exist
-        task_dir = os.path.join(self.upload_dir, f"task_{task_id}")
+        # Create appropriate directory if it doesn't exist
+        folder_name = f"task_{task_id}" if isinstance(task_id, int) else str(task_id)
+        task_dir = os.path.join(self.upload_dir, folder_name)
         os.makedirs(task_dir, exist_ok=True)
         
         # Define the file path

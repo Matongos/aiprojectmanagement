@@ -4,4 +4,5 @@ from .user import User
 from .role import Role, Permission
 from .projects import Project, ProjectMember, ProjectStage, Tag, Milestone
 from .tasks import Task, TaskAssignment, TimeEntry, Comment, Notification
-from .file_attachment import FileAttachment 
+from .file_attachment import FileAttachment
+from .activity import Activity 

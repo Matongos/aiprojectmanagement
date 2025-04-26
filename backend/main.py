@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from database import get_db
 import requests
 from typing import Optional
 from starlette.staticfiles import StaticFiles
+from services.task_scheduler import TaskScheduler
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -50,6 +51,9 @@ app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(analytics.router)
 app.include_router(file_attachments.router)
+app.include_router(activities.router)
+app.include_router(comments.router)
+app.include_router(notifications.router)
 
 # Add a simplified token endpoint
 @app.post("/token")
@@ -171,5 +175,8 @@ async def root():
     return {"message": "Welcome to AI Project Management API"}
 
 if __name__ == "__main__":
+    # Start the task scheduler
+    TaskScheduler.start_scheduler()
+    
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8003)

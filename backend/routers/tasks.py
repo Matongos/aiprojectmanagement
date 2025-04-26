@@ -11,6 +11,7 @@ from database import get_db
 from routers.auth import get_current_user
 from schemas.user import User
 from services.file_service import FileService
+from services.notification_service import NotificationService
 
 router = APIRouter(
     prefix="/tasks",
@@ -88,7 +89,42 @@ async def update_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    return task_crud.update(db=db, db_obj=db_task, obj_in=task)
+    
+    # Check if assignee has changed
+    original_assignee_id = db_task.assignee_id
+    
+    # Update the task
+    updated_task = task_crud.update(db=db, db_obj=db_task, obj_in=task)
+    
+    # Send notification if assignee has changed
+    if task.assignee_id is not None and task.assignee_id != original_assignee_id:
+        NotificationService.notify_task_assignment(
+            db=db,
+            task_id=task_id,
+            task_title=updated_task.title,
+            user_id=task.assignee_id,
+            assigned_by_id=current_user["id"]
+        )
+    
+    # Send notifications if status has changed
+    if task.status is not None and task.status != db_task.status:
+        # Notify creator and assignee (if different from current user and creator)
+        users_to_notify = set()
+        if db_task.created_by and db_task.created_by != current_user["id"]:
+            users_to_notify.add(db_task.created_by)
+        if db_task.assignee_id and db_task.assignee_id != current_user["id"] and db_task.assignee_id != db_task.created_by:
+            users_to_notify.add(db_task.assignee_id)
+            
+        if users_to_notify:
+            NotificationService.notify_task_status_change(
+                db=db,
+                task_id=task_id,
+                task_title=updated_task.title,
+                new_status=task.status,
+                user_ids=list(users_to_notify)
+            )
+    
+    return updated_task
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
