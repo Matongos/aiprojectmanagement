@@ -1,6 +1,7 @@
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
+from .role import Role
 
 
 class UserBase(BaseModel):
@@ -34,6 +35,8 @@ class User(UserBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    roles: Optional[List[Role]] = []
+    email_notifications_enabled: Optional[bool] = True
 
     class Config:
         from_attributes = True

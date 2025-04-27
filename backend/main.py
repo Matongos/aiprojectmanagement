@@ -12,6 +12,7 @@ import requests
 from typing import Optional
 from starlette.staticfiles import StaticFiles
 from services.task_scheduler import TaskScheduler
+from config import settings
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -32,7 +33,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=settings.BACKEND_CORS_ORIGINS,  # Use origins from settings
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers

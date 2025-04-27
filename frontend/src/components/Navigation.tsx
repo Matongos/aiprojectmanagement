@@ -12,10 +12,17 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, ReactNode } from 'react';
+import Image from 'next/image';
 
 // Custom Link component that renders consistently between server and client
-const LinkComponent = ({ href, className, children }) => {
+interface LinkComponentProps {
+  href: string;
+  className: string;
+  children: ReactNode;
+}
+
+const LinkComponent = ({ href, className, children }: LinkComponentProps) => {
   return (
     <Link href={href} className={className}>
       {children}
@@ -44,12 +51,22 @@ export default function Navigation() {
   // If not mounted yet, render a skeleton version that matches server output
   if (!mounted) {
     return (
-      <nav className="bg-gray-900 text-white shadow-lg">
+      <nav className="bg-black text-white shadow-lg">
         <div className="max-w-full mx-auto px-4">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <Link href="/" className="text-xl font-semibold text-blue-400 hover:text-blue-300">
-                AI PROJECT MANAGEMENT
+              <div className="relative h-8 w-8 mr-2">
+                <Image 
+                  src="/logo.png" 
+                  alt="ZINGSA Logo" 
+                  width={32} 
+                  height={32} 
+                  className="w-full h-full object-contain" 
+                  priority 
+                />
+              </div>
+              <Link href="/" className="text-xl font-semibold text-white hover:text-gray-200">
+                ZINGSA PROJECT MANAGEMENT
               </Link>
             </div>
             <div className="hidden md:flex items-center space-x-6">
@@ -65,13 +82,23 @@ export default function Navigation() {
   }
 
   return (
-    <nav className="bg-gray-900 text-white shadow-lg">
+    <nav className="bg-black text-white shadow-lg">
       <div className="max-w-full mx-auto px-4">
         <div className="flex justify-between h-16">
           {/* Left side - Logo/Brand */}
           <div className="flex items-center">
-            <Link href="/" className="text-xl font-semibold text-blue-400 hover:text-blue-300">
-              AI PROJECT MANAGEMENT
+            <div className="relative h-8 w-8 mr-2">
+              <Image 
+                src="/logo.png" 
+                alt="ZINGSA Logo" 
+                width={32} 
+                height={32} 
+                className="w-full h-full object-contain" 
+                priority 
+              />
+            </div>
+            <Link href="/" className="text-xl font-semibold text-white hover:text-gray-200">
+              ZINGSA PROJECT MANAGEMENT
             </Link>
           </div>
           
@@ -82,8 +109,8 @@ export default function Navigation() {
                 href="/dashboard"
                 className={`px-3 py-2 text-sm font-medium ${
                   pathname === '/dashboard' 
-                    ? 'border-b-2 border-blue-400 text-blue-400' 
-                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                    ? 'border-b-2 border-white text-white' 
+                    : 'text-gray-300 hover:text-white hover:border-b-2 hover:border-white'
                 }`}
               >
                 Dashboard
@@ -92,9 +119,9 @@ export default function Navigation() {
               <LinkComponent
                 href="/dashboard/projects"
                 className={`px-3 py-2 text-sm font-medium ${
-                  pathname.startsWith('/dashboard/projects') 
-                    ? 'border-b-2 border-blue-400 text-blue-400' 
-                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                  pathname?.startsWith('/dashboard/projects') 
+                    ? 'border-b-2 border-white text-white' 
+                    : 'text-gray-300 hover:text-white hover:border-b-2 hover:border-white'
                 }`}
               >
                 Projects
@@ -103,9 +130,9 @@ export default function Navigation() {
               <LinkComponent
                 href="/dashboard/tasks"
                 className={`px-3 py-2 text-sm font-medium ${
-                  pathname.startsWith('/dashboard/tasks') 
-                    ? 'border-b-2 border-blue-400 text-blue-400' 
-                    : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                  pathname?.startsWith('/dashboard/tasks') 
+                    ? 'border-b-2 border-white text-white' 
+                    : 'text-gray-300 hover:text-white hover:border-b-2 hover:border-white'
                 }`}
               >
                 Tasks
@@ -124,9 +151,9 @@ export default function Navigation() {
                 <LinkComponent
                   href="/admin/users"
                   className={`px-3 py-2 text-sm font-medium ${
-                    pathname.startsWith('/admin') 
-                      ? 'border-b-2 border-blue-400 text-blue-400' 
-                      : 'text-gray-300 hover:text-blue-300 hover:border-b-2 hover:border-blue-300'
+                    pathname?.startsWith('/admin') 
+                      ? 'border-b-2 border-white text-white' 
+                      : 'text-gray-300 hover:text-white hover:border-b-2 hover:border-white'
                   }`}
                 >
                   Admin
@@ -140,20 +167,20 @@ export default function Navigation() {
             {isAuthenticated ? (
               <>
                 {/* Notification Icon */}
-                <button className="text-gray-300 hover:text-blue-300">
+                <button className="text-gray-300 hover:text-white">
                   <Bell className="h-5 w-5" />
                 </button>
                 
                 {/* Messages Icon */}
-                <button className="text-gray-300 hover:text-blue-300">
+                <button className="text-gray-300 hover:text-white">
                   <MessageSquare className="h-5 w-5" />
                 </button>
                 
                 {/* User Profile Dropdown */}
                 <DropdownMenu>
                   <DropdownMenuTrigger className="focus:outline-none">
-                    <div className="flex items-center hover:text-blue-300">
-                      <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center mr-2">
+                    <div className="flex items-center hover:text-white">
+                      <div className="h-8 w-8 rounded-full bg-gray-700 flex items-center justify-center mr-2">
                         {user?.full_name ? user.full_name[0].toUpperCase() : "U"}
                       </div>
                       <div className="text-sm">
@@ -164,11 +191,11 @@ export default function Navigation() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="mt-2 bg-gray-800 text-gray-100 border border-gray-700">
                     <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer hover:bg-gray-700">
-                      <User className="h-4 w-4 mr-2 text-blue-400" />
+                      <User className="h-4 w-4 mr-2 text-gray-300" />
                       <span>Profile</span>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator className="bg-gray-700" />
-                    <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-red-400">
+                    <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-gray-300">
                       <LogOut className="h-4 w-4 mr-2" />
                       <span>Logout</span>
                     </DropdownMenuItem>
@@ -179,15 +206,9 @@ export default function Navigation() {
               <div className="flex items-center space-x-2">
                 <Link
                   href="/auth/login"
-                  className="text-gray-300 hover:text-blue-300 px-3 py-2 rounded-md text-sm font-medium"
+                  className="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
                 >
                   Login
-                </Link>
-                <Link
-                  href="/auth/register"
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-500"
-                >
-                  Register
                 </Link>
               </div>
             )}
@@ -198,13 +219,13 @@ export default function Navigation() {
             {isAuthenticated ? (
               <DropdownMenu>
                 <DropdownMenuTrigger className="focus:outline-none">
-                  <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center">
+                  <div className="h-8 w-8 rounded-full bg-gray-700 flex items-center justify-center">
                     {user?.full_name ? user.full_name[0].toUpperCase() : "U"}
                   </div>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="mt-2 bg-gray-800 text-gray-100 border border-gray-700">
                   <DropdownMenuItem onClick={() => router.push('/profile')} className="cursor-pointer hover:bg-gray-700">
-                    <User className="h-4 w-4 mr-2 text-blue-400" />
+                    <User className="h-4 w-4 mr-2 text-gray-300" />
                     <span>Profile</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => router.push('/dashboard')} className="cursor-pointer hover:bg-gray-700">
@@ -222,7 +243,7 @@ export default function Navigation() {
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator className="bg-gray-700" />
-                  <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-red-400">
+                  <DropdownMenuItem onClick={handleLogout} className="cursor-pointer hover:bg-gray-700 text-gray-300">
                     <LogOut className="h-4 w-4 mr-2" />
                     <span>Logout</span>
                   </DropdownMenuItem>
@@ -231,7 +252,7 @@ export default function Navigation() {
             ) : (
               <Link
                 href="/auth/login"
-                className="text-gray-300 hover:text-blue-300 px-3 py-2 rounded-md text-sm font-medium"
+                className="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
               >
                 Login
               </Link>

@@ -12,6 +12,7 @@ from routers.auth import get_current_user
 from schemas.user import User
 from services.file_service import FileService
 from services.notification_service import NotificationService
+from services import task_service, user_service
 
 router = APIRouter(
     prefix="/tasks",
@@ -23,14 +24,46 @@ router = APIRouter(
 # File attachment endpoints
 file_service = FileService()
 
-@router.post("/", response_model=TaskSchema)
-async def create_task(
+notification_service = NotificationService()
+
+@router.post("/", response_model=TaskSchema, status_code=status.HTTP_201_CREATED)
+def create_task(
     task: TaskCreate,
     db: Session = Depends(get_db),
-    current_user: Dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
-    """Create a new task with the current user as creator."""
-    return task_crud.create_with_creator(db=db, obj_in=task, creator_id=current_user["id"])
+    created_task, error = task_service.create_task(db, task.dict(), current_user.id)
+    
+    if error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+    
+    # Process mentions in task description and notify mentioned users
+    if task.description:
+        user_service.process_user_mentions(
+            db, 
+            task.description, 
+            current_user.id, 
+            "task", 
+            created_task["id"],
+            notification_service
+        )
+    
+    # Send notification to assigned user if different from creator
+    if task.assigned_to and task.assigned_to != current_user.id:
+        assigned_user = user_service.get_user_by_id(db, task.assigned_to)
+        if assigned_user:
+            notification_data = {
+                "user_id": task.assigned_to,
+                "title": "New Task Assignment",
+                "content": f"You have been assigned to the task: {task.title}",
+                "type": "task_assignment",
+                "reference_type": "task",
+                "reference_id": created_task["id"],
+                "is_read": False
+            }
+            notification_service.create_notification(db, notification_data)
+    
+    return created_task
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(
@@ -96,15 +129,30 @@ async def update_task(
     # Update the task
     updated_task = task_crud.update(db=db, db_obj=db_task, obj_in=task)
     
-    # Send notification if assignee has changed
-    if task.assignee_id is not None and task.assignee_id != original_assignee_id:
-        NotificationService.notify_task_assignment(
-            db=db,
-            task_id=task_id,
-            task_title=updated_task.title,
-            user_id=task.assignee_id,
-            assigned_by_id=current_user["id"]
+    # Process mentions in updated description 
+    if task.description:
+        user_service.process_user_mentions(
+            db, 
+            task.description, 
+            current_user["id"], 
+            "task", 
+            task_id,
+            notification_service
         )
+    
+    # Send notifications for assignment changes
+    if task.assignee_id is not None and task.assignee_id != original_assignee_id:
+        # Notify new assignee
+        notification_data = {
+            "user_id": task.assignee_id,
+            "title": "Task Assignment",
+            "content": f"You have been assigned to the task: {updated_task.title}",
+            "type": "task_assignment",
+            "reference_type": "task",
+            "reference_id": task_id,
+            "is_read": False
+        }
+        notification_service.create_notification(db, notification_data)
     
     # Send notifications if status has changed
     if task.status is not None and task.status != db_task.status:
@@ -116,13 +164,18 @@ async def update_task(
             users_to_notify.add(db_task.assignee_id)
             
         if users_to_notify:
-            NotificationService.notify_task_status_change(
-                db=db,
-                task_id=task_id,
-                task_title=updated_task.title,
-                new_status=task.status,
-                user_ids=list(users_to_notify)
-            )
+            # Notify all users in users_to_notify
+            for user_id in users_to_notify:
+                notification_data = {
+                    "user_id": user_id,
+                    "title": "Task Status Changed",
+                    "content": f"Task '{updated_task.title}' status changed to {task.status}",
+                    "type": "task_status",
+                    "reference_type": "task",
+                    "reference_id": task_id,
+                    "is_read": False
+                }
+                notification_service.create_notification(db, notification_data)
     
     return updated_task
 

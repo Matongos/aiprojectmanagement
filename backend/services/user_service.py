@@ -374,4 +374,90 @@ def update_user_profile(db: Session, user_id: int, update_data: dict):
 
     except Exception as e:
         db.rollback()
-        return None, f"Error updating profile: {str(e)}" 
+        return None, f"Error updating profile: {str(e)}"
+
+def find_mentioned_users(db: Session, content: str):
+    """Find users mentioned in content using @username format.
+    
+    Args:
+        db: Database session
+        content: Content to parse for username mentions (@username)
+        
+    Returns:
+        List of user dictionaries that were mentioned
+    """
+    try:
+        # Simple regex pattern to find @username mentions
+        import re
+        mentions = re.findall(r'@(\w+)', content)
+        
+        if not mentions:
+            return []
+        
+        # Get unique usernames
+        unique_mentions = list(set(mentions))
+        
+        # Find users that match these usernames
+        mentioned_users = []
+        for username in unique_mentions:
+            user = get_user_by_username(db, username)
+            if user:
+                mentioned_users.append(user)
+                
+        return mentioned_users
+        
+    except Exception as e:
+        print(f"Error finding mentioned users: {str(e)}")
+        return []
+
+def process_user_mentions(
+    db: Session, 
+    content: str, 
+    sender_id: int, 
+    reference_type: str, 
+    reference_id: int,
+    notification_service
+):
+    """
+    Process user mentions in content (tasks, comments, etc.)
+    
+    Args:
+        db: Database session
+        content: Text content to check for mentions
+        sender_id: User ID of the person creating the content
+        reference_type: Type of content (e.g., "task", "comment")
+        reference_id: ID of the referenced content
+        notification_service: Notification service to send notifications
+        
+    Returns:
+        List of user IDs mentioned
+    """
+    # Extract mentions using regex (@username format)
+    import re
+    mentioned_usernames = re.findall(r'@(\w+)', content)
+    
+    if not mentioned_usernames:
+        return []
+        
+    # Find user IDs for the mentioned usernames
+    mentioned_user_ids = []
+    for username in mentioned_usernames:
+        user = get_user_by_username(db, username)
+        if user and user["id"] != sender_id:  # Don't notify the sender about their own mentions
+            mentioned_user_ids.append(user["id"])
+            
+            # Create notification for the mentioned user
+            title = f"You were mentioned in a {reference_type}"
+            content_preview = content[:100] + "..." if len(content) > 100 else content
+            notification_data = {
+                "user_id": user["id"],
+                "title": title,
+                "content": f"@{get_user_by_id(db, sender_id)['username']} mentioned you: {content_preview}",
+                "type": "mention",
+                "reference_type": reference_type,
+                "reference_id": reference_id,
+                "is_read": False
+            }
+            notification_service.create_notification(db, notification_data)
+    
+    return mentioned_user_ids 

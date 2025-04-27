@@ -1,0 +1,233 @@
+import os
+import smtplib
+import logging
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from typing import List, Dict, Any, Optional
+import requests
+from pathlib import Path
+import jinja2
+from config import settings
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Template directories
+TEMPLATE_DIR = Path(__file__).parent.parent / "templates" / "emails"
+# Create template directory if it doesn't exist
+TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Set up jinja2 environment
+template_loader = jinja2.FileSystemLoader(searchpath=str(TEMPLATE_DIR))
+template_env = jinja2.Environment(loader=template_loader)
+
+
+class EmailService:
+    """Service for sending emails."""
+    
+    @classmethod
+    def send_email(
+        cls,
+        email_to: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """
+        Send an email using the configured email service.
+        
+        Args:
+            email_to: Email recipient(s), can be a string of comma-separated emails
+            subject: Email subject
+            html_content: HTML content of the email
+            text_content: Plain text content (fallback for HTML)
+            cc: List of CC recipients
+            attachments: List of attachment dictionaries with keys:
+                        - content: The file content
+                        - filename: The filename
+                        - content_type: The content type (e.g., "application/pdf")
+        
+        Returns:
+            bool: True if the email was sent successfully, False otherwise
+        """
+        if not settings.EMAILS_ENABLED:
+            logger.info("Email sending is disabled")
+            return False
+            
+        # Choose email service based on configuration
+        if settings.EMAIL_SERVICE.lower() == "resend":
+            return cls._send_with_resend(email_to, subject, html_content, text_content, cc, attachments)
+        else:
+            return cls._send_with_smtp(email_to, subject, html_content, text_content, cc, attachments)
+    
+    @classmethod
+    def _send_with_smtp(
+        cls,
+        email_to: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """Send an email using SMTP."""
+        try:
+            message = MIMEMultipart("alternative")
+            message["Subject"] = subject
+            message["From"] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+            message["To"] = email_to
+            
+            if cc:
+                message["Cc"] = ", ".join(cc)
+                
+            # Add plain text version
+            if text_content:
+                part1 = MIMEText(text_content, "plain")
+                message.attach(part1)
+                
+            # Add HTML version
+            part2 = MIMEText(html_content, "html")
+            message.attach(part2)
+            
+            # Connect to server and send
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+                if settings.SMTP_TLS:
+                    server.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                    
+                recipients = [email_to]
+                if cc:
+                    recipients.extend(cc)
+                
+                server.sendmail(
+                    settings.EMAILS_FROM_EMAIL,
+                    recipients,
+                    message.as_string()
+                )
+                
+            logger.info(f"Email sent successfully to {email_to}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to send email: {str(e)}")
+            return False
+    
+    @classmethod
+    def _send_with_resend(
+        cls,
+        email_to: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """Send an email using the Resend API."""
+        if not settings.RESEND_API_KEY:
+            logger.error("Resend API key not configured")
+            return False
+            
+        try:
+            headers = {
+                "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "from": f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>",
+                "to": [email_to] if isinstance(email_to, str) else email_to,
+                "subject": subject,
+                "html": html_content,
+            }
+            
+            if text_content:
+                payload["text"] = text_content
+                
+            if cc:
+                payload["cc"] = cc
+                
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Email sent successfully to {email_to} via Resend")
+                return True
+            else:
+                logger.error(f"Failed to send email via Resend: {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send email via Resend: {str(e)}")
+            return False
+    
+    @classmethod
+    def send_template_email(
+        cls,
+        email_to: str,
+        subject: str,
+        template_name: str,
+        template_vars: Dict[str, Any],
+        cc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """
+        Send an email using a template.
+        
+        Args:
+            email_to: Email recipient(s)
+            subject: Email subject
+            template_name: Name of the template file (without extension)
+            template_vars: Variables to pass to the template
+            cc: List of CC recipients
+            attachments: List of attachment dictionaries
+            
+        Returns:
+            bool: True if the email was sent successfully, False otherwise
+        """
+        try:
+            # Load the template
+            template = template_env.get_template(f"{template_name}.html")
+            html_content = template.render(**template_vars)
+            
+            # Generate plain text version
+            text_content = cls._html_to_text(html_content)
+            
+            # Send the email
+            return cls.send_email(
+                email_to=email_to,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+                cc=cc,
+                attachments=attachments
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to render template and send email: {str(e)}")
+            return False
+    
+    @staticmethod
+    def _html_to_text(html: str) -> str:
+        """
+        Convert HTML to plain text.
+        This is a very simple implementation that just removes HTML tags.
+        For a more sophisticated conversion, use a library like beautifulsoup4.
+        """
+        import re
+        
+        # Remove HTML tags
+        text = re.sub(r'<.*?>', ' ', html)
+        
+        # Replace multiple spaces with single space
+        text = re.sub(r' +', ' ', text)
+        
+        # Replace multiple newlines with double newline
+        text = re.sub(r'\n+', '\n\n', text)
+        
+        return text.strip() 

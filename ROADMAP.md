@@ -83,7 +83,7 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 | 3 | File attachment system | Backend |✅ Task API | File upload/download API |
 | 3 | Comments and activity log | Backend |✅ User & Task API | Activity tracking |
 | 4 | Notification system | Backend |✅ User system | Notification engine |
-| 4 | Email integration for notifications | Backend | Notification system | Email delivery for events |
+| 4 | Email integration for notifications |✅ Backend | Notification system | Email delivery for events |
 
 **Deliverables:**
 - Project management core functionality

@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict
+import logging
 
 from database import get_db
 from routers.auth import get_current_user
 from services import user_service
+from schemas.user import User
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/users",
@@ -444,4 +449,37 @@ async def update_my_profile(
         "updated_user": updated_user
     })
     
-    return updated_user 
+    return updated_user
+
+@router.put("/me/email-preferences", response_model=UserResponse)
+def update_email_preferences(
+    enable_email: bool = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Update email notification preferences for the current user.
+    
+    Args:
+        enable_email: Whether to enable email notifications
+        
+    Returns:
+        Updated user object
+    """
+    user = user_service.get_user_by_id(db, current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # If the email_notifications_enabled field doesn't exist yet, add it
+    try:
+        update_data = {"email_notifications_enabled": enable_email}
+        updated_user, error = user_service.update_user(db, current_user["id"], update_data)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        return updated_user
+    except Exception as e:
+        logger.error(f"Error updating email preferences: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Error updating email preferences. The feature may not be available yet."
+        ) 

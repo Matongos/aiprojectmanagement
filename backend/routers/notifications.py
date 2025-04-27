@@ -1,11 +1,14 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from crud import notification as crud
 from schemas.notification import Notification as NotificationSchema, NotificationCreate, NotificationUpdate
 from database import get_db
 from routers.auth import get_current_user
+from services.email_service import EmailService
+from config import settings
 
 router = APIRouter(
     prefix="/notifications",
@@ -136,4 +139,48 @@ async def delete_notification(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete notification")
     
-    return Response(status_code=status.HTTP_204_NO_CONTENT) 
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/test-email", response_model=dict)
+async def test_email_notification(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Send a test email notification to the current user.
+    For testing purposes only, should be disabled in production.
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(status_code=403, detail="Only administrators can send test emails")
+    
+    if not settings.EMAILS_ENABLED:
+        return {"message": "Email notifications are disabled in settings"}
+    
+    user_email = current_user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="No email address found for your account")
+    
+    success = EmailService.send_template_email(
+        email_to=user_email,
+        subject="Test Email Notification",
+        template_name="general_notification",
+        template_vars={
+            "user_name": current_user.get("full_name", current_user.get("username", "User")),
+            "title": "Test Email Notification",
+            "content": "This is a test email notification from AI Project Management system.",
+            "action_url": f"{settings.BACKEND_CORS_ORIGINS[0]}/notifications" if isinstance(settings.BACKEND_CORS_ORIGINS, list) and settings.BACKEND_CORS_ORIGINS else "#",
+            "action_text": "View Notifications",
+            "details": {
+                "Test Item": "This is a test detail",
+                "Time Sent": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "System": "AI Project Management"
+            },
+            "unsubscribe_url": "#"
+        }
+    )
+    
+    if success:
+        return {"message": "Test email sent successfully", "email": user_email}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send test email") 
