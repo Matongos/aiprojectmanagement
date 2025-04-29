@@ -34,11 +34,15 @@ interface User {
   full_name: string;
 }
 
-export default function CreateTaskPage() {
+export default function CreateTaskPage({
+  searchParams,
+}: {
+  searchParams: { projectId?: string };
+}) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(searchParams.projectId || "");
   const [assigneeId, setAssigneeId] = useState("");
   const [dueDate, setDueDate] = useState<Date>();
   const [loading, setLoading] = useState(false);
@@ -167,6 +171,7 @@ export default function CreateTaskPage() {
               <Select
                 value={projectId}
                 onValueChange={(value) => setProjectId(value)}
+                disabled={!!searchParams.projectId}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select project" />

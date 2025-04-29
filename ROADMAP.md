@@ -258,7 +258,7 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 | 2 | Real-time updates | Frontend | Socket.io | Live UI updates |
 | 2 | Push notification system | Backend | Notification system | Mobile push notifications |
 | 3 | Offline capability | Frontend | Core features | Service workers |
-| 3 | Data synchronization | Backend & Frontend | Offline system | Conflict resolution |
+| 3 | Data synchronization | Backend & Frontend | Offline system | Confli ct resolution |
 | 4 | Collaborative editing | Backend & Frontend | Socket.io | Real-time collaboration |
 | 4 | Mobile testing | QA | Mobile UI | Cross-device validation |
 

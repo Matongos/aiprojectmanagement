@@ -2,8 +2,15 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from models.projects import Project
-from schemas.project import ProjectCreate, ProjectUpdate, Project as ProjectSchema
+from schemas.project import (
+    ProjectCreate, 
+    ProjectUpdate, 
+    Project as ProjectSchema,
+    ProjectStage as ProjectStageSchema,
+    ProjectStageCreate
+)
 from crud import project as project_crud
+from crud.project import project_stage
 from database import get_db
 from routers.auth import get_current_user
 from schemas.user import User
@@ -110,4 +117,38 @@ def read_recent_projects(
     Retrieve recent projects for the current user.
     """
     projects = project_crud.get_recent_projects(db=db, user_id=current_user["id"], limit=limit)
-    return projects 
+    return projects
+
+@router.post("/{project_id}/stages", response_model=ProjectStageSchema)
+async def create_project_stage(
+    project_id: int,
+    stage: ProjectStageCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a new stage for a project"""
+    # Check if project exists and user has access
+    db_project = project_crud.get(db=db, id=project_id)
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if db_project.created_by != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    # Create the stage
+    return project_stage.create_stage(db=db, obj_in=stage)
+
+@router.get("/{project_id}/stages", response_model=List[ProjectStageSchema])
+async def get_project_stages(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all stages for a project"""
+    # Check if project exists and user has access
+    db_project = project_crud.get(db=db, id=project_id)
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if db_project.created_by != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    return project_stage.get_project_stages(db=db, project_id=project_id) 

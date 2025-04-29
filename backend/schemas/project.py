@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 
@@ -44,4 +44,25 @@ class Project(ProjectInDBBase):
     pass
 
 class ProjectInDB(ProjectInDBBase):
-    pass 
+    pass
+
+class ProjectStageBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    sequence_order: int
+
+class ProjectStageCreate(ProjectStageBase):
+    project_id: int
+
+class ProjectStageUpdate(ProjectStageBase):
+    pass
+
+class ProjectStage(ProjectStageBase):
+    id: int
+    project_id: int
+    progress: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True 

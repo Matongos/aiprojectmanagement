@@ -4,13 +4,19 @@ from pydantic import BaseModel, Field
 from .file_attachment import FileAttachment
 
 # Define task status and priority as literals
-TaskStatus = Literal["todo", "in_progress", "review", "done", "cancelled"]
+TaskStatus = Literal[
+    "in_progress",
+    "changes_requested",
+    "approved",
+    "cancelled",
+    "done"
+]
 TaskPriority = Literal["low", "medium", "high", "urgent"]
 
 class TaskBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    status: TaskStatus = "todo"
+    status: TaskStatus = "in_progress"
     priority: TaskPriority = "medium"
     due_date: Optional[datetime] = None
     estimated_hours: Optional[int] = None
@@ -18,6 +24,7 @@ class TaskBase(BaseModel):
 
 class TaskCreate(TaskBase):
     project_id: int
+    stage_id: int  # Required field
     assignee_id: Optional[int] = None
 
 class TaskUpdate(TaskBase):
@@ -25,10 +32,12 @@ class TaskUpdate(TaskBase):
     status: Optional[TaskStatus] = None
     priority: Optional[TaskPriority] = None
     assignee_id: Optional[int] = None
+    stage_id: Optional[int] = None  # Can be updated
 
 class TaskInDB(TaskBase):
     id: int
     project_id: int
+    stage_id: int  # Always included
     created_by: int
     assignee_id: Optional[int]
     created_at: datetime

@@ -2,46 +2,113 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
-import { BarChart, Calendar, CheckCircle2, Clock, TrendingUp, Users } from 'lucide-react';
-import Link from 'next/link';
+import { Calendar as CalendarIcon, Search } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
-import { getRecentProjects, getUpcomingTasks } from '@/lib/api';
+import { getRecentProjects } from '@/lib/api';
+import { Calendar } from '@/components/ui/calendar';
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Input } from "@/components/ui/input";
 
 interface Project {
-  id: string;
+  id: number;
   name: string;
-  description: string;
-  progress: number;
-  team_size: number;
-  deadline: string;
+  description: string | null;
+  key: string;
+  status: string;
+  privacy_level: string;
+  start_date: string | null;
+  end_date: string | null;
+  created_by: number;
+  color: string;
+  is_template: boolean;
+  meta_data: Record<string, string | number | boolean | null> | null;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+  members: {
+    id: number;
+    user_id: number;
+    role: string;
+    user: {
+      id: number;
+      name: string;
+      profile_image_url: string | null;
+    };
+  }[];
 }
 
 interface Task {
   id: string;
   title: string;
-  description: string;
-  status: string;
   due_date: string;
-  project_id: string;
-  project_name: string;
+}
+
+interface Comment {
+  id: string;
+  user: TeamMember;
+  project: string;
+  message: string;
+  timestamp: string;
+}
+
+interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+  avatar: string;
 }
 
 export default function Dashboard() {
   const { user } = useAuthStore();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [urgentTasks, setUrgentTasks] = useState<Task[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [date, setDate] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchData() {
       try {
         const projectsData = await getRecentProjects();
-        const tasksData = await getUpcomingTasks();
-        setProjects(projectsData);
-        setTasks(tasksData);
+        setProjects(projectsData || []);
+        
+        // Mock data for now
+        setUrgentTasks([
+          { id: '1', title: 'Finish monthly reporting', due_date: new Date().toISOString() },
+          { id: '2', title: 'Report signing', due_date: new Date().toISOString() },
+          { id: '3', title: 'Market overview keynote', due_date: new Date().toISOString() },
+        ]);
+
+        setComments([
+          {
+            id: '1',
+            user: { id: '1', name: 'Elsa S.', role: 'Designer', avatar: '/default-avatar.png' },
+            project: 'Market research 2024',
+            message: 'Find my keynote attached in the...',
+            timestamp: new Date().toISOString()
+          },
+          {
+            id: '2',
+            user: { id: '2', name: 'Dana R.', role: 'Developer', avatar: '/default-avatar.png' },
+            project: 'Market research 2024',
+            message: "I've added some new data. Let's...",
+            timestamp: new Date().toISOString()
+          }
+        ]);
+
+        setTeamMembers([
+          { id: '1', name: 'Dana R.', role: 'Project Manager', avatar: '/default-avatar.png' },
+          { id: '2', name: 'Peter McCloud', role: 'Team Lead', avatar: '/default-avatar.png' },
+          { id: '3', name: 'Nancy K.', role: 'Account Manager', avatar: '/default-avatar.png' },
+          { id: '4', name: 'James M.', role: 'Digital Manager', avatar: '/default-avatar.png' },
+        ]);
+
       } catch (error) {
         console.error('Failed to fetch dashboard data', error);
+        setError('Failed to load dashboard data. Please try again later.');
+        setProjects([]); // Set empty projects array on error
       } finally {
         setLoading(false);
       }
@@ -52,184 +119,162 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  // These would be calculated from real data
-  const stats = {
-    totalProjects: projects.length || 0,
-    completedTasks: 14,
-    upcomingDeadlines: 3,
-    teamMembers: 8,
-  };
-
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
+      <div className="flex items-center justify-center h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
       </div>
     );
   }
 
-  return (
-    <div className="p-6 bg-gray-900 min-h-screen text-gray-100">
-      <h1 className="text-2xl font-bold mb-6 text-blue-400">Dashboard</h1>
-      
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <Card className="bg-gray-800 border border-gray-700">
-          <CardContent className="p-6 flex items-center space-x-4">
-            <div className="bg-blue-900/30 p-2 rounded-full">
-              <TrendingUp className="h-6 w-6 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-400">Active Projects</p>
-              <h3 className="text-2xl font-bold text-white">{stats.totalProjects}</h3>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-gray-800 border border-gray-700">
-          <CardContent className="p-6 flex items-center space-x-4">
-            <div className="bg-green-900/30 p-2 rounded-full">
-              <CheckCircle2 className="h-6 w-6 text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-400">Completed Tasks</p>
-              <h3 className="text-2xl font-bold text-white">{stats.completedTasks}</h3>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-gray-800 border border-gray-700">
-          <CardContent className="p-6 flex items-center space-x-4">
-            <div className="bg-amber-900/30 p-2 rounded-full">
-              <Clock className="h-6 w-6 text-amber-400" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-400">Upcoming Deadlines</p>
-              <h3 className="text-2xl font-bold text-white">{stats.upcomingDeadlines}</h3>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-gray-800 border border-gray-700">
-          <CardContent className="p-6 flex items-center space-x-4">
-            <div className="bg-blue-900/30 p-2 rounded-full">
-              <Users className="h-6 w-6 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-400">Team Members</p>
-              <h3 className="text-2xl font-bold text-white">{stats.teamMembers}</h3>
-            </div>
-          </CardContent>
-        </Card>
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-red-500">{error}</div>
       </div>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Recent Projects */}
-        <div className="lg:col-span-2">
-          <Card className="bg-gray-800 border border-gray-700">
-            <CardHeader className="pb-2">
-              <div className="flex justify-between items-center">
-                <CardTitle className="text-xl text-blue-400">Recent Projects</CardTitle>
-                <Link 
-                  href="/dashboard/projects" 
-                  className="text-sm text-blue-400 hover:text-blue-300"
-                >
-                  View all
-                </Link>
-              </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto p-6">
+      {/* Header with Search */}
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-2xl font-semibold mb-1">Welcome, {user?.full_name || 'User'}!</h1>
+          <p className="text-gray-600">Here is your agenda for today</p>
+        </div>
+        <div className="relative w-64">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+          <Input
+            placeholder="Search..."
+            className="pl-10 w-full"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-12 gap-6">
+        {/* Left Column */}
+        <div className="col-span-12 lg:col-span-4">
+          {/* Calendar */}
+          <Card className="mb-6">
+            <CardContent className="p-4">
+              <Calendar
+                mode="single"
+                selected={date}
+                onSelect={(newDate) => newDate && setDate(newDate)}
+                className="rounded-md"
+              />
+            </CardContent>
+          </Card>
+
+          {/* Project Directory */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-lg">Project directory</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {projects.length > 0 ? (
+                {projects.length === 0 ? (
+                  <p className="text-sm text-gray-500">No projects available</p>
+                ) : (
                   projects.map((project) => (
-                    <div key={project.id} className="bg-gray-700 p-4 rounded-lg border border-gray-600">
-                      <div className="flex justify-between items-start mb-2">
+                    <div key={project.id} className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gray-100 rounded-md flex items-center justify-center">
+                          <CalendarIcon className="h-4 w-4 text-gray-600" />
+                        </div>
                         <div>
-                          <h3 className="font-medium text-white">{project.name}</h3>
-                          <p className="text-sm text-gray-300 truncate">{project.description}</p>
+                          <p className="text-sm font-medium">{project.name}</p>
+                          <p className="text-xs text-gray-500">{project.members?.length || 0} members</p>
                         </div>
-                        <span className="bg-blue-900/50 text-blue-300 text-xs px-2.5 py-0.5 rounded">
-                          {new Date(project.deadline).toLocaleDateString()}
-                        </span>
                       </div>
-                      <div className="flex justify-between items-center">
-                        <div className="w-full max-w-xs">
-                          <div className="flex justify-between text-xs mb-1 text-gray-300">
-                            <span>Progress</span>
-                            <span>{project.progress}%</span>
-                          </div>
-                          <Progress value={project.progress} className="h-2" />
-                        </div>
-                        <div className="flex items-center space-x-1 ml-4">
-                          <Users className="h-4 w-4 text-gray-400" />
-                          <span className="text-xs text-gray-400">{project.team_size}</span>
-                        </div>
+                      <div className="flex -space-x-2">
+                        {project.members?.slice(0, 3).map((member) => (
+                          <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
+                            <AvatarImage 
+                              src={member.user.profile_image_url || '/default-avatar.png'} 
+                              alt={member.user.name}
+                              className="object-cover"
+                            />
+                            <AvatarFallback>{member.user.name[0]}</AvatarFallback>
+                          </Avatar>
+                        ))}
                       </div>
                     </div>
                   ))
-                ) : (
-                  <div className="text-center py-8 bg-gray-700 rounded-lg border border-gray-600">
-                    <p className="text-gray-300">No projects found</p>
-                    <Link 
-                      href="/dashboard/projects/new" 
-                      className="mt-2 inline-block text-sm text-blue-400 hover:text-blue-300"
-                    >
-                      Create your first project
-                    </Link>
-                  </div>
                 )}
               </div>
             </CardContent>
           </Card>
         </div>
-        
-        {/* Upcoming Tasks */}
-        <div>
-          <Card className="bg-gray-800 border border-gray-700">
-            <CardHeader className="pb-2">
-              <div className="flex justify-between items-center">
-                <CardTitle className="text-xl text-blue-400">Upcoming Tasks</CardTitle>
-                <Link 
-                  href="/dashboard/tasks" 
-                  className="text-sm text-blue-400 hover:text-blue-300"
-                >
-                  View all
-                </Link>
-              </div>
+
+        {/* Middle Column */}
+        <div className="col-span-12 lg:col-span-4">
+          {/* Urgent Tasks */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-lg">Urgent tasks</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {tasks.length > 0 ? (
-                  tasks.map((task) => (
-                    <div 
-                      key={task.id} 
-                      className="p-3 bg-gray-700 rounded-lg border border-gray-600 flex items-start"
-                    >
-                      <div className="mr-3 mt-1">
-                        <Calendar className="h-5 w-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-white">{task.title}</h4>
-                        <p className="text-xs text-gray-300 mb-1">Due: {new Date(task.due_date).toLocaleDateString()}</p>
-                        <div className="flex items-center">
-                          <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded">
-                            {task.project_name}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 bg-gray-700 rounded-lg border border-gray-600">
-                    <p className="text-gray-300">No upcoming tasks</p>
-                    <Link 
-                      href="/dashboard/tasks/new" 
-                      className="mt-2 inline-block text-sm text-blue-400 hover:text-blue-300"
-                    >
-                      Create a task
-                    </Link>
+              <div className="space-y-4">
+                {urgentTasks.map((task) => (
+                  <div key={task.id} className="flex items-center justify-between">
+                    <p className="text-sm">{task.title}</p>
+                    <span className="text-xs text-red-500">Today</span>
                   </div>
-                )}
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* New Comments */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">New comments</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {comments.map((comment) => (
+                  <div key={comment.id} className="flex items-start space-x-3">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={comment.user.avatar} alt={comment.user.name} />
+                      <AvatarFallback>{comment.user.name[0]}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <p className="text-sm font-medium">{comment.user.name}</p>
+                        <p className="text-xs text-gray-500">in {comment.project}</p>
+                      </div>
+                      <p className="text-sm text-gray-600">{comment.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column */}
+        <div className="col-span-12 lg:col-span-4">
+          {/* Team Directory */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Team directory</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {teamMembers.map((member) => (
+                  <div key={member.id} className="flex items-center space-x-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={member.avatar} alt={member.name} />
+                      <AvatarFallback>{member.name[0]}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">{member.name}</p>
+                      <p className="text-xs text-gray-500">{member.role}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>

@@ -16,25 +16,41 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Grid, List, Plus } from "lucide-react";
+import { MoreHorizontal, Grid, List, Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AuthWrapper from "@/components/AuthWrapper";
 import { API_BASE_URL } from "@/lib/constants";
+import { fetchApi } from "@/lib/api-helper";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 
 interface Project {
   id: number;
   name: string;
   description: string;
-  status: string;
+  status: 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
   created_at: string;
-  updated_at: string;
-  creator_id: number;
+  start_date: string | null;
+  end_date: string | null;
+  task_count: number;
+  tags: string[];
+  members: { id: number; user: { profile_image_url?: string; name: string } }[];
 }
+
+const statusConfig = {
+  on_track: { label: 'On Track', color: 'bg-green-500' },
+  at_risk: { label: 'At Risk', color: 'bg-yellow-500' },
+  off_track: { label: 'Off Track', color: 'bg-red-500' },
+  on_hold: { label: 'On Hold', color: 'bg-gray-500' },
+  done: { label: 'Done', color: 'bg-blue-500' },
+  default: { label: 'Unknown', color: 'bg-gray-300' }
+};
 
 export default function ProjectsPage() {
   return (
@@ -64,14 +80,12 @@ function ProjectsContent() {
       setLoading(true);
       setError(null);
 
-      // Use token from auth store first, if not available try localStorage
       const authToken = token || localStorage.getItem('token');
       
       if (!authToken) {
         throw new Error("No authentication token found");
       }
 
-      // Build the API URL based on whether we're searching or not
       const apiUrl = search 
         ? `${API_BASE_URL}/projects/search/?query=${encodeURIComponent(search)}`
         : `${API_BASE_URL}/projects/`;
@@ -85,7 +99,6 @@ function ProjectsContent() {
       });
 
       if (response.status === 401) {
-        // Handle unauthorized error - redirect to login
         toast.error("Your session has expired. Please log in again.");
         router.push('/auth/login');
         return;
@@ -96,8 +109,14 @@ function ProjectsContent() {
       }
 
       const data = await response.json();
-      console.log("Projects data:", data);
-      setProjects(data);
+      console.log("Projects data with status:", data.map(p => ({ id: p.id, name: p.name, status: p.status })));
+      
+      const validatedData = data.map(project => ({
+        ...project,
+        status: statusConfig[project.status] ? project.status : 'default'
+      }));
+      
+      setProjects(validatedData);
     } catch (error) {
       console.error("Error fetching projects:", error);
       setError(error instanceof Error ? error.message : "Failed to load projects");
@@ -184,6 +203,19 @@ function ProjectsContent() {
     return isAdmin || project.creator_id === Number(user.id);
   };
 
+  const filteredProjects = projects.filter(project =>
+    project.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric'
+    });
+  };
+
   if (loading) {
     return <div className="p-4">Loading projects...</div>;
   }
@@ -217,171 +249,133 @@ function ProjectsContent() {
   }
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Projects</h1>
+    <div className="container mx-auto py-6 px-4">
+      {/* Header Section */}
+      <div className="flex justify-between items-center mb-8">
         <div className="flex items-center gap-4">
-          <Input
-            placeholder="Search projects..."
-            value={searchQuery}
-            onChange={handleSearchChange}
-            className="w-64"
-          />
-          <div className="flex gap-2">
-            <Button
-              variant={viewMode === "grid" ? "default" : "outline"}
-              onClick={() => setViewMode("grid")}
-            >
-              <Grid className="h-4 w-4 mr-2" />
-              Grid
-            </Button>
-            <Button
-              variant={viewMode === "list" ? "default" : "outline"}
-              onClick={() => setViewMode("list")}
-            >
-              <List className="h-4 w-4 mr-2" />
-              List
-            </Button>
+          <h1 className="text-2xl font-bold">Projects</h1>
+          <Button variant="outline" size="sm">
+            <Star className="w-4 h-4 mr-2" />
+            New
+          </Button>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <Input
+              type="text"
+              placeholder="Search projects..."
+              value={searchQuery}
+              onChange={handleSearchChange}
+              className="pl-10 w-[300px]"
+            />
           </div>
-          {canCreateProjects && (
-            <Button onClick={() => router.push("/dashboard/projects/create")}>
-              <Plus className="h-4 w-4 mr-2" />
-              New Project
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">1-{filteredProjects.length} / {projects.length}</span>
+          </div>
         </div>
       </div>
 
-      {viewMode === "grid" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Card key={project.id} className="p-6">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-lg font-semibold">{project.name}</h3>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" className="h-8 w-8 p-0">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() =>
-                        router.push(`/dashboard/projects/${project.id}`)
-                      }
-                    >
-                      View Details
+      {/* Projects Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        {filteredProjects.map((project) => (
+          <Card
+            key={project.id}
+            className="p-4 cursor-pointer hover:shadow-lg transition-shadow"
+            onClick={() => router.push(`/dashboard/projects/${project.id}`)}
+          >
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-start gap-2">
+                <Star className="w-5 h-5 text-yellow-400 mt-1" />
+                <div>
+                  <h3 className="font-semibold text-lg">{project.name}</h3>
+                  <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
+                    <Calendar className="w-4 h-4" />
+                    <span>{formatDate(project.start_date)} — {formatDate(project.end_date)}</span>
+                  </div>
+                </div>
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                  <button className="text-gray-400 hover:text-gray-600">
+                    <MoreVertical className="w-5 h-5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem>
+                      <ListTodo className="mr-2 h-4 w-4" />
+                      <span>Tasks</span>
                     </DropdownMenuItem>
-                    {canModifyProject(project) && (
-                      <>
-                        <DropdownMenuItem
-                          onClick={() =>
-                            router.push(`/dashboard/projects/${project.id}/edit`)
-                          }
-                        >
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteProject(project.id)}
-                          className="text-red-600"
-                        >
-                          Delete
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    <DropdownMenuItem>
+                      <Milestone className="mr-2 h-4 w-4" />
+                      <span>Milestones</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem>
+                      <FileText className="mr-2 h-4 w-4" />
+                      <span>Project Updates</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem>
+                      <LineChart className="mr-2 h-4 w-4" />
+                      <span>Tasks Analysis</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem>
+                      <BarChart3 className="mr-2 h-4 w-4" />
+                      <span>Burndown Chart</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem>
+                    <Share2 className="mr-2 h-4 w-4" />
+                    <span>Share</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Settings className="mr-2 h-4 w-4" />
+                    <span>Settings</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            <div className="flex items-center justify-between mt-4">
+              <div className="flex gap-2">
+                {project.tags?.map((tag, index) => (
+                  <span
+                    key={index}
+                    className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600"
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
-              <p className="text-gray-600 mb-4">{project.description}</p>
-              <div className="flex justify-between items-center">
-                <span
-                  className={`px-2 py-1 rounded-full text-xs ${
-                    project.status === "active"
-                      ? "bg-green-100 text-green-800"
-                      : "bg-gray-100 text-gray-800"
-                  }`}
-                >
-                  {project.status}
-                </span>
-                <span className="text-sm text-gray-500">
-                  Updated: {new Date(project.updated_at).toLocaleDateString()}
-                </span>
+              <div className="flex items-center gap-4">
+                <div className="flex -space-x-2">
+                  {project.members?.slice(0, 3).map((member) => (
+                    <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
+                      <AvatarImage 
+                        src={member.user.profile_image_url || '/default-avatar.png'} 
+                        alt={member.user.name}
+                        className="object-cover"
+                      />
+                      <AvatarFallback>{member.user.name[0]}</AvatarFallback>
+                    </Avatar>
+                  ))}
+                  {project.members && project.members.length > 3 && (
+                    <div className="h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center">
+                      <span className="text-xs text-gray-600">+{project.members.length - 3}</span>
+                    </div>
+                  )}
+                </div>
+                <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                <span className="text-sm font-medium">{project.task_count || 0} Tasks</span>
               </div>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last Updated</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projects.map((project) => (
-                <TableRow key={project.id}>
-                  <TableCell className="font-medium">{project.name}</TableCell>
-                  <TableCell>{project.description}</TableCell>
-                  <TableCell>
-                    <span
-                      className={`px-2 py-1 rounded-full text-xs ${
-                        project.status === "active"
-                          ? "bg-green-100 text-green-800"
-                          : "bg-gray-100 text-gray-800"
-                      }`}
-                    >
-                      {project.status}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    {new Date(project.updated_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" className="h-8 w-8 p-0">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() =>
-                            router.push(`/dashboard/projects/${project.id}`)
-                          }
-                        >
-                          View Details
-                        </DropdownMenuItem>
-                        {canModifyProject(project) && (
-                          <>
-                            <DropdownMenuItem
-                              onClick={() =>
-                                router.push(`/dashboard/projects/${project.id}/edit`)
-                              }
-                            >
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteProject(project.id)}
-                              className="text-red-600"
-                            >
-                              Delete
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+            </div>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 } 

@@ -20,8 +20,10 @@ class Task(Base):
     # Foreign keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    stage_id = Column(Integer, ForeignKey("task_stages.id"), nullable=False)
     
     # Relationships
     project = relationship("Project", back_populates="tasks")
     user = relationship("User", back_populates="tasks")
-    activities = relationship("Activity", back_populates="task") 
+    activities = relationship("Activity", back_populates="task")
+    stage = relationship("TaskStage", back_populates="tasks") 

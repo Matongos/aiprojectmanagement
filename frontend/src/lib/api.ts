@@ -2,41 +2,45 @@
 import { API_BASE_URL } from './constants';
 import { fetchApi } from './api-helper';
 
-// Dashboard API calls
-export async function getRecentProjects(): Promise<any[]> {
-  try {
-    return await fetchApi<any[]>('/projects/recent');
-  } catch (error) {
-    console.error('Error fetching recent projects:', error);
-    // Return mock data for now
-    return [
-      {
-        id: '1',
-        name: 'Website Redesign',
-        description: 'Redesign the company website with modern UI/UX principles',
-        progress: 65,
-        team_size: 4,
-        deadline: '2023-12-15',
-      },
-      {
-        id: '2',
-        name: 'Mobile App Development',
-        description: 'Develop a cross-platform mobile app for customer engagement',
-        progress: 32,
-        team_size: 6,
-        deadline: '2024-02-28',
-      },
-      {
-        id: '3',
-        name: 'Marketing Campaign',
-        description: 'Q4 marketing campaign for new product launch',
-        progress: 78,
-        team_size: 3,
-        deadline: '2023-11-30',
-      },
-    ];
-  }
+export interface Project {
+  id: number;
+  name: string;
+  description: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  members?: {
+    id: number;
+    user_id: number;
+    role: string;
+    user: {
+      id: number;
+      name: string;
+      profile_image_url: string | null;
+    };
+  }[];
 }
+
+// Dashboard API calls
+export const getRecentProjects = async (): Promise<Project[]> => {
+  try {
+    // First try to get recent projects
+    const data = await fetchApi<Project[]>('/projects/recent');
+    return data;
+  } catch (error) {
+    // If the recent projects endpoint fails, fall back to getting all projects
+    try {
+      const data = await fetchApi<Project[]>('/projects');
+      // Sort by created_at to get most recent
+      return data.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ).slice(0, 5); // Return only the 5 most recent
+    } catch (fallbackError) {
+      console.error('Error fetching projects:', fallbackError);
+      return []; // Return empty array if both attempts fail
+    }
+  }
+};
 
 export async function getUpcomingTasks(): Promise<any[]> {
   try {
@@ -137,4 +141,14 @@ export const deleteFileAttachment = async (fileId: number) => {
   }
   
   return true;
+};
+
+export const getProjectById = async (projectId: number): Promise<Project> => {
+  try {
+    const data = await fetchApi<Project>(`/projects/${projectId}`);
+    return data;
+  } catch (error) {
+    console.error('Error fetching project details:', error);
+    throw error;
+  }
 }; 

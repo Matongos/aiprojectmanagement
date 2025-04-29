@@ -12,46 +12,45 @@ project_tag = Table(
     Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True)
 )
 
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    role = Column(String, default='member')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    project = relationship("Project", back_populates="project_members")
+    user = relationship("User", back_populates="project_memberships")
+
 class Project(Base):
     __tablename__ = "projects"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    key = Column(String(10), unique=True, nullable=False)
-    status = Column(String, default="active")
-    privacy_level = Column(String, default="private")
-    start_date = Column(Date, nullable=True)
-    end_date = Column(Date, nullable=True)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    color = Column(String(7), default="#3498db")
-    is_template = Column(Boolean, default=False)
-    meta_data = Column(JSON, default={})
+    key = Column(String, unique=True, index=True)
+    status = Column(String, nullable=False, default="active")
+    privacy_level = Column(String, nullable=False, default="private")
+    start_date = Column(DateTime(timezone=True), nullable=True)
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    color = Column(String, nullable=False, default="#3498db")
+    is_template = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    is_active = Column(Boolean, default=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    # Relationships
-    creator = relationship("User", back_populates="created_projects", foreign_keys=[created_by])
-    members = relationship("ProjectMember", back_populates="project")
-    tasks = relationship("Task", back_populates="project")
+    # Updated relationships
+    creator = relationship("User", foreign_keys=[created_by], back_populates="created_projects")
+    project_members = relationship("ProjectMember", back_populates="project")
+    members = relationship("User", secondary="project_members", back_populates="member_of_projects")
+    tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    stages = relationship("TaskStage", back_populates="project", cascade="all, delete-orphan")
     milestones = relationship("Milestone", back_populates="project")
-    stages = relationship("ProjectStage", back_populates="project")
     tags = relationship("Tag", secondary=project_tag, back_populates="projects")
     activities = relationship("Activity", back_populates="project")
-
-class ProjectMember(Base):
-    __tablename__ = "project_members"
-
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    role = Column(String, default="member")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    project = relationship("Project", back_populates="members")
-    user = relationship("User", back_populates="projects")
 
 class ProjectStage(Base):
     __tablename__ = "project_stages"
@@ -61,12 +60,22 @@ class ProjectStage(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     sequence_order = Column(Integer, nullable=False)
+    progress = Column(Integer, default=0)  # Percentage of completed tasks
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     project = relationship("Project", back_populates="stages")
     tasks = relationship("Task", back_populates="stage")
+
+    def update_progress(self):
+        """Update stage progress based on completed tasks."""
+        if not self.tasks:
+            self.progress = 0
+            return
+        
+        completed_tasks = sum(1 for task in self.tasks if task.status in ['done', 'approved'])
+        self.progress = int((completed_tasks / len(self.tasks)) * 100)
 
 class Tag(Base):
     __tablename__ = "tags"
@@ -94,4 +103,4 @@ class Milestone(Base):
 
     # Relationships
     project = relationship("Project", back_populates="milestones")
-    tasks = relationship("Task", back_populates="milestone") 
+    creator = relationship("User", foreign_keys=[created_by]) 

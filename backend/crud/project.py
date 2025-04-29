@@ -1,7 +1,8 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from models.projects import Project
-from schemas.project import ProjectCreate, ProjectUpdate
+from models.projects import Project, ProjectStage
+from models.task_stage import TaskStage
+from schemas.project import ProjectCreate, ProjectUpdate, ProjectStageCreate, ProjectStageUpdate
 from crud.base import CRUDBase
 import string
 import random
@@ -72,6 +73,23 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
+
+        # Create default stages
+        default_stages = [
+            {"name": "Inbox", "description": "Default stage for unorganized tasks", "sequence_order": 0},
+            {"name": "To Do", "description": "Tasks to be started", "sequence_order": 1},
+            {"name": "In Progress", "description": "Tasks currently being worked on", "sequence_order": 2},
+            {"name": "Done", "description": "Completed tasks", "sequence_order": 3}
+        ]
+
+        for stage_data in default_stages:
+            stage = TaskStage(
+                project_id=db_obj.id,
+                **stage_data
+            )
+            db.add(stage)
+        
+        db.commit()
         return db_obj
 
     def get_recent_projects(
@@ -111,4 +129,29 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
             .all()
         )
 
-project = CRUDProject(Project) 
+class CRUDProjectStage(CRUDBase[ProjectStage, ProjectStageCreate, ProjectStageUpdate]):
+    def create_stage(self, db: Session, *, obj_in: ProjectStageCreate) -> ProjectStage:
+        db_obj = ProjectStage(
+            name=obj_in.name,
+            description=obj_in.description,
+            project_id=obj_in.project_id,
+            sequence_order=obj_in.sequence_order
+        )
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+    def get_project_stages(self, db: Session, *, project_id: int) -> List[ProjectStage]:
+        return db.query(ProjectStage).filter(ProjectStage.project_id == project_id).order_by(ProjectStage.sequence_order).all()
+
+    def update_stage_progress(self, db: Session, *, stage_id: int) -> ProjectStage:
+        stage = db.query(ProjectStage).filter(ProjectStage.id == stage_id).first()
+        if stage:
+            stage.update_progress()
+            db.commit()
+            db.refresh(stage)
+        return stage
+
+project = CRUDProject(Project)
+project_stage = CRUDProjectStage(ProjectStage) 

@@ -1,8 +1,18 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
 from .base import Base
+
+# Association table for project members
+project_members = Table(
+    'project_members',
+    Base.metadata,
+    Column('project_id', Integer, ForeignKey('projects.id'), primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
+    Column('role', String(50), default='member'),  # Optional: track member role in project
+    Column('joined_at', DateTime(timezone=True), server_default=func.now())
+)
 
 class Project(Base):
     __tablename__ = "projects"
@@ -20,6 +30,9 @@ class Project(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     # Use strings for relationship to avoid circular imports
     creator = relationship("User", foreign_keys=[created_by], backref="created_projects")
+    
+    # Add many-to-many relationship with users through project_members table
+    members = relationship("User", secondary=project_members, backref="projects")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

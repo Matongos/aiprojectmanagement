@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, date
 from models.tasks import Task
+from models.task_stage import TaskStage
 from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskStatus, TaskPriority
 from schemas.file_attachment import FileAttachment as FileAttachmentSchema, FileAttachmentCreate
 from crud import task as task_crud
@@ -30,9 +31,47 @@ notification_service = NotificationService()
 def create_task(
     task: TaskCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
-    created_task, error = task_service.create_task(db, task.dict(), current_user.id)
+    """Create a new task."""
+    # If no stage_id is provided and we have a project_id, get the Inbox stage
+    if not task.stage_id and task.project_id:
+        inbox_stage = (
+            db.query(TaskStage)
+            .filter(
+                TaskStage.project_id == task.project_id,
+                TaskStage.name == "Inbox"
+            )
+            .first()
+        )
+        if inbox_stage:
+            task.stage_id = inbox_stage.id
+        else:
+            # If no Inbox stage exists, create one
+            inbox_stage = TaskStage(
+                name="Inbox",
+                description="Default stage for unorganized tasks",
+                sequence_order=0,
+                project_id=task.project_id
+            )
+            db.add(inbox_stage)
+            db.commit()
+            db.refresh(inbox_stage)
+            task.stage_id = inbox_stage.id
+    
+    # Validate that the stage exists and belongs to the project
+    stage = db.query(TaskStage).filter(
+        TaskStage.id == task.stage_id,
+        TaskStage.project_id == task.project_id
+    ).first()
+    
+    if not stage:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid stage_id or stage does not belong to the specified project"
+        )
+    
+    created_task, error = task_service.create_task(db, task.dict(), current_user["id"])
     
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
@@ -42,14 +81,14 @@ def create_task(
         user_service.process_user_mentions(
             db, 
             task.description, 
-            current_user.id, 
+            current_user["id"], 
             "task", 
             created_task["id"],
             notification_service
         )
     
     # Send notification to assigned user if different from creator
-    if task.assigned_to and task.assigned_to != current_user.id:
+    if task.assigned_to and task.assigned_to != current_user["id"]:
         assigned_user = user_service.get_user_by_id(db, task.assigned_to)
         if assigned_user:
             notification_data = {
