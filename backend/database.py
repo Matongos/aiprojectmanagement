@@ -5,6 +5,9 @@ import os
 from dotenv import load_dotenv
 import urllib.parse
 
+# Import all models to ensure they are registered
+from models import *
+
 # Load environment variables
 load_dotenv()
 

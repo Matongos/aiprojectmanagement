@@ -16,7 +16,7 @@ class FileAttachment(Base):
     description = Column(Text, nullable=True)
     
     # Foreign keys
-    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # Timestamps
@@ -24,5 +24,8 @@ class FileAttachment(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    task = relationship("Task", back_populates="attachments")
+    task = relationship("Task", 
+                       foreign_keys=[task_id], 
+                       back_populates="attachments",
+                       primaryjoin="FileAttachment.task_id == Task.id")
     user = relationship("User", back_populates="uploaded_files") 

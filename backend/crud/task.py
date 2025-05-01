@@ -1,8 +1,9 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from models.tasks import Task
-from schemas.task import TaskCreate, TaskUpdate
+from models.task import Task
+from schemas.task import TaskCreate, TaskUpdate, TaskState
 from crud.base import CRUDBase
+from sqlalchemy import or_
 
 class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
     def get_by_project(
@@ -16,12 +17,12 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
             .all()
         )
     
-    def get_by_status(
-        self, db: Session, *, status: str, skip: int = 0, limit: int = 100
+    def get_tasks_by_state(
+        self, db: Session, *, state: TaskState, skip: int = 0, limit: int = 100
     ) -> List[Task]:
         return (
             db.query(self.model)
-            .filter(Task.status == status)
+            .filter(Task.state == state)
             .offset(skip)
             .limit(limit)
             .all()
@@ -32,7 +33,7 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
     ) -> List[Task]:
         return (
             db.query(self.model)
-            .filter(Task.assignee_id == assignee_id)
+            .filter(Task.assigned_to == assignee_id)
             .offset(skip)
             .limit(limit)
             .all()
@@ -44,9 +45,8 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         # Convert Pydantic model to dict
         obj_in_data = obj_in.model_dump()
         
-        # Create new Task object
-        # Don't include assignee_id in the constructor
-        db_obj = self.model(**obj_in_data, created_by=creator_id)
+        # Create new Task object with default state
+        db_obj = self.model(**obj_in_data, created_by=creator_id, state=TaskState.DRAFT)
         
         # Add to session, commit and refresh
         db.add(db_obj)
@@ -70,7 +70,7 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
     ) -> List[Task]:
         return (
             db.query(self.model)
-            .filter(Task.due_date < current_date, Task.status != "done")
+            .filter(Task.deadline < current_date, Task.state != TaskState.DONE)
             .offset(skip)
             .limit(limit)
             .all()
@@ -86,7 +86,7 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         return (
             db.query(self.model)
             .filter(
-                (Task.created_by == user_id) | (Task.assignee_id == user_id)
+                (Task.created_by == user_id) | (Task.assigned_to == user_id)
             )
             .order_by(Task.updated_at.desc())
             .limit(limit)
@@ -97,19 +97,149 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         self, db: Session, *, skip: int = 0, limit: int = 100
     ) -> List[Task]:
         """
-        Get tasks where the actual hours exceed the estimated hours.
-        Only returns tasks that have both estimated_hours and actual_hours set.
+        Get tasks where the planned hours are exceeded.
+        Only returns tasks that have planned_hours set.
         """
         return (
             db.query(self.model)
             .filter(
-                Task.estimated_hours.isnot(None),
-                Task.actual_hours.isnot(None),
-                Task.actual_hours > Task.estimated_hours
+                Task.planned_hours.isnot(None),
+                Task.progress > 100
             )
             .offset(skip)
             .limit(limit)
             .all()
         )
+
+    def update_state(
+        self, db: Session, *, db_obj: Task, state: TaskState
+    ) -> Task:
+        """Update a task's state"""
+        db_obj.state = state
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+def create_task(db: Session, *, obj_in: TaskCreate, created_by: int) -> Task:
+    """Create a new task"""
+    # Convert depends_on_ids to actual task objects
+    depends_on = []
+    if obj_in.depends_on_ids:
+        depends_on = db.query(Task).filter(Task.id.in_(obj_in.depends_on_ids)).all()
+    
+    # Create task object with default state
+    db_obj = Task(
+        **obj_in.model_dump(exclude={'depends_on_ids'}),
+        created_by=created_by,
+        state=TaskState.DRAFT
+    )
+    
+    # Add dependencies
+    if depends_on:
+        db_obj.depends_on.extend(depends_on)
+    
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
+
+def get_task(db: Session, task_id: int) -> Optional[Task]:
+    """Get a task by ID"""
+    return db.query(Task).filter(Task.id == task_id).first()
+
+def get_project_tasks(
+    db: Session, 
+    project_id: int, 
+    skip: int = 0, 
+    limit: int = 100
+) -> List[Task]:
+    """Get all tasks for a project"""
+    return db.query(Task)\
+        .filter(Task.project_id == project_id)\
+        .offset(skip)\
+        .limit(limit)\
+        .all()
+
+def get_user_tasks(
+    db: Session, 
+    user_id: int, 
+    skip: int = 0, 
+    limit: int = 100
+) -> List[Task]:
+    """Get all tasks assigned to or created by a user"""
+    return db.query(Task)\
+        .filter(
+            or_(
+                Task.assigned_to == user_id,
+                Task.created_by == user_id
+            )
+        )\
+        .offset(skip)\
+        .limit(limit)\
+        .all()
+
+def update_task(db: Session, *, db_obj: Task, obj_in: TaskUpdate) -> Task:
+    """Update a task"""
+    update_data = obj_in.model_dump(exclude_unset=True)
+    
+    # Handle dependencies separately
+    depends_on_ids = update_data.pop('depends_on_ids', None)
+    if depends_on_ids is not None:
+        depends_on = db.query(Task).filter(Task.id.in_(depends_on_ids)).all()
+        db_obj.depends_on = depends_on
+    
+    # Update other fields
+    for field, value in update_data.items():
+        setattr(db_obj, field, value)
+    
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
+
+def delete_task(db: Session, *, task_id: int) -> Task:
+    """Delete a task"""
+    obj = db.query(Task).get(task_id)
+    db.delete(obj)
+    db.commit()
+    return obj
+
+def search_tasks(
+    db: Session, 
+    project_id: Optional[int] = None,
+    search_term: str = "",
+    skip: int = 0, 
+    limit: int = 100
+) -> List[Task]:
+    """Search tasks by name or description"""
+    query = db.query(Task)
+    
+    if project_id:
+        query = query.filter(Task.project_id == project_id)
+    
+    if search_term:
+        search = f"%{search_term}%"
+        query = query.filter(
+            or_(
+                Task.name.ilike(search),
+                Task.description.ilike(search)
+            )
+        )
+    
+    return query.offset(skip).limit(limit).all()
+
+def get_tasks_by_stage(
+    db: Session, 
+    stage_id: int,
+    skip: int = 0, 
+    limit: int = 100
+) -> List[Task]:
+    """Get all tasks in a stage"""
+    return db.query(Task)\
+        .filter(Task.stage_id == stage_id)\
+        .offset(skip)\
+        .limit(limit)\
+        .all()
 
 task = CRUDTask(Task) 

@@ -1,9 +1,9 @@
-from sqlalchemy.orm import Session
 from typing import List, Optional
-from sqlalchemy import desc, and_
-
-from models.tasks import Notification
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
+from models.notification import Notification
 from schemas.notification import NotificationCreate, NotificationUpdate
+from crud.base import CRUDBase
 
 
 def get_notification(db: Session, notification_id: int) -> Optional[Notification]:

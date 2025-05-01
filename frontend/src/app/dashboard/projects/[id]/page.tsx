@@ -51,9 +51,13 @@ interface Task {
 interface ProjectStage {
   id: number;
   name: string;
-  tasks: Task[];
-  progress: number;
-  sequence_order: number;
+  description: string | null;
+  sequence: number;
+  is_active: boolean;
+  fold: boolean;
+  project_id: number;
+  created_at: string;
+  updated_at: string | null;
 }
 
 interface Project {
@@ -104,14 +108,18 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     if (!projectId) return;
 
     try {
+      const newStage = {
+        name: 'New Stage',
+        description: '',
+        sequence: project?.stages.length + 1,
+        project_id: parseInt(projectId),
+        is_active: true,
+        fold: false
+      };
+
       await fetchApi(`/projects/${projectId}/stages`, {
         method: 'POST',
-        body: JSON.stringify({
-          name: 'New Stage',
-          description: '',
-          sequence_order: project?.stages.length || 0,
-          project_id: parseInt(projectId)
-        })
+        body: JSON.stringify(newStage)
       });
       
       // Refresh project data

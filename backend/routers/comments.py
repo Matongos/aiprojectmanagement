@@ -92,10 +92,10 @@ async def create_comment(
         }
         notification_service.create_notification(db, notification_data)
     
-    # Send notification to task assignee (if different from commenter and task owner)
-    if task and task.get("assigned_to") and task["assigned_to"] != current_user.id and task["assigned_to"] != task.get("created_by"):
+    # Notify task assignee if different from commenter and creator
+    if task and task.get("assignee_id") and task["assignee_id"] != current_user.id and task["assignee_id"] != task.get("created_by"):
         notification_data = {
-            "user_id": task["assigned_to"],
+            "user_id": task["assignee_id"],
             "title": "New Comment on Task",
             "content": f"New comment on task: {task['title']}",
             "type": "comment",

@@ -16,55 +16,77 @@ def create_task(db: Session, task_data: dict, creator_id: int) -> Tuple[Dict[str
         Tuple containing (task_dict, error_message)
     """
     try:
-        # Validate project exists if specified
-        if "project_id" in task_data and task_data["project_id"]:
-            check_query = text("SELECT id FROM projects WHERE id = :project_id")
-            project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
-            if not project:
-                return None, f"Project with ID {task_data['project_id']} not found"
+        # Validate project exists
+        if not task_data.get("project_id"):
+            return None, "Project ID is required"
+            
+        check_query = text("SELECT id FROM projects WHERE id = :project_id")
+        project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
+        if not project:
+            return None, f"Project with ID {task_data['project_id']} not found"
         
         # Validate assignee exists if specified
-        if "assignee_id" in task_data and task_data["assignee_id"]:
-            check_query = text("SELECT id FROM users WHERE id = :assignee_id")
-            assignee = db.execute(check_query, {"assignee_id": task_data["assignee_id"]}).fetchone()
+        if task_data.get("assigned_to"):
+            check_query = text("SELECT id FROM users WHERE id = :assigned_to")
+            assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
             if not assignee:
-                return None, f"User with ID {task_data['assignee_id']} not found"
+                return None, f"User with ID {task_data['assigned_to']} not found"
         
-        # Set defaults for fields
+        # Validate milestone exists if specified
+        if task_data.get("milestone_id"):
+            check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
+            milestone = db.execute(check_query, {"milestone_id": task_data["milestone_id"]}).fetchone()
+            if not milestone:
+                return None, f"Milestone with ID {task_data['milestone_id']} not found"
+        
+        # Validate parent task exists if specified
+        if task_data.get("parent_id"):
+            check_query = text("SELECT id FROM tasks WHERE id = :parent_id")
+            parent = db.execute(check_query, {"parent_id": task_data["parent_id"]}).fetchone()
+            if not parent:
+                return None, f"Parent task with ID {task_data['parent_id']} not found"
+        
+        # Set defaults
         now = datetime.utcnow()
-        status = task_data.get("status", "to_do")
-        priority = task_data.get("priority", "medium")
+        task_data.setdefault("state", "draft")
+        task_data.setdefault("priority", "normal")
         
         # Insert task
         insert_query = text("""
         INSERT INTO tasks (
-            title, description, status, priority, due_date,
-            estimated_hours, tags, created_by, assignee_id, project_id,
-            created_at, updated_at
+            name, description, state, priority,
+            start_date, deadline, end_date,
+            planned_hours, project_id, stage_id, assigned_to,
+            milestone_id, parent_id,
+            created_by, created_at, updated_at
         ) 
         VALUES (
-            :title, :description, :status, :priority, :due_date,
-            :estimated_hours, :tags, :created_by, :assignee_id, :project_id,
-            :created_at, :updated_at
+            :name, :description, :state, :priority,
+            :start_date, :deadline, :end_date,
+            :planned_hours, :project_id, :stage_id, :assigned_to,
+            :milestone_id, :parent_id,
+            :created_by, :created_at, :updated_at
         )
-        RETURNING id, title, description, status, priority, due_date,
-                 estimated_hours, tags, created_by, assignee_id, project_id,
-                 created_at, updated_at
+        RETURNING *
         """)
         
         result = db.execute(
             insert_query, 
             {
-                "title": task_data.get("title", ""),
+                "name": task_data["name"],  # Only required field
                 "description": task_data.get("description"),
-                "status": status,
-                "priority": priority,
-                "due_date": task_data.get("due_date"),
-                "estimated_hours": task_data.get("estimated_hours"),
-                "tags": task_data.get("tags"),
+                "state": task_data.get("state", "draft"),
+                "priority": task_data.get("priority", "normal"),
+                "start_date": task_data.get("start_date"),
+                "deadline": task_data.get("deadline"),
+                "end_date": task_data.get("end_date"),
+                "planned_hours": task_data.get("planned_hours", 0.0),
+                "project_id": task_data["project_id"],  # Required field
+                "stage_id": task_data.get("stage_id"),
+                "assigned_to": task_data.get("assigned_to"),
+                "milestone_id": task_data.get("milestone_id"),
+                "parent_id": None if not task_data.get("parent_id") or task_data.get("parent_id") == 0 else task_data["parent_id"],
                 "created_by": creator_id,
-                "assignee_id": task_data.get("assignee_id"),
-                "project_id": task_data.get("project_id"),
                 "created_at": now,
                 "updated_at": now
             }
@@ -72,21 +94,8 @@ def create_task(db: Session, task_data: dict, creator_id: int) -> Tuple[Dict[str
         
         db.commit()
         
-        task = {
-            "id": result[0],
-            "title": result[1],
-            "description": result[2],
-            "status": result[3],
-            "priority": result[4],
-            "due_date": result[5],
-            "estimated_hours": result[6],
-            "tags": result[7],
-            "created_by": result[8],
-            "assignee_id": result[9],
-            "project_id": result[10],
-            "created_at": result[11],
-            "updated_at": result[12]
-        }
+        # Convert result to dictionary
+        task = dict(result._mapping)
         
         return task, None
     
@@ -232,44 +241,74 @@ def update_task(db: Session, task_id: int, task_data: dict) -> Tuple[Dict[str, A
             return None, f"Task with ID {task_id} not found"
         
         # Validate project exists if specified
-        if "project_id" in task_data and task_data["project_id"]:
+        if task_data.get("project_id"):
             check_query = text("SELECT id FROM projects WHERE id = :project_id")
             project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
             if not project:
                 return None, f"Project with ID {task_data['project_id']} not found"
         
         # Validate assignee exists if specified
-        if "assignee_id" in task_data and task_data["assignee_id"]:
-            check_query = text("SELECT id FROM users WHERE id = :assignee_id")
-            assignee = db.execute(check_query, {"assignee_id": task_data["assignee_id"]}).fetchone()
+        if task_data.get("assigned_to"):
+            check_query = text("SELECT id FROM users WHERE id = :assigned_to")
+            assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
             if not assignee:
-                return None, f"User with ID {task_data['assignee_id']} not found"
+                return None, f"User with ID {task_data['assigned_to']} not found"
+        
+        # Validate milestone exists if specified
+        if task_data.get("milestone_id"):
+            check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
+            milestone = db.execute(check_query, {"milestone_id": task_data["milestone_id"]}).fetchone()
+            if not milestone:
+                return None, f"Milestone with ID {task_data['milestone_id']} not found"
         
         # Build update query dynamically
         update_fields = []
         params = {"task_id": task_id}
         
-        for field in ["title", "description", "status", "priority", "due_date", 
-                      "estimated_hours", "tags", "assignee_id", "project_id"]:
+        # Map of field names to their column names
+        field_map = {
+            "title": "title",
+            "description": "description",
+            "status": "status",
+            "priority": "priority",
+            "date_start": "date_start",
+            "date_deadline": "date_deadline",
+            "date_end": "date_end",
+            "estimated_hours": "estimated_hours",
+            "project_id": "project_id",
+            "stage_id": "stage_id",
+            "assigned_to": "assigned_to",
+            "milestone_id": "milestone_id",
+            "company_id": "company_id",
+            "parent_id": "parent_id",
+            "is_recurring": "is_recurring",
+            "tags": "tags",
+            "email_cc": "email_cc",
+            "email_from": "email_from",
+            "displayed_image_id": "displayed_image_id"
+        }
+        
+        for field, column in field_map.items():
             if field in task_data and task_data[field] is not None:
-                update_fields.append(f"{field} = :{field}")
+                update_fields.append(f"{column} = :{field}")
                 params[field] = task_data[field]
         
         if not update_fields:
-            # No fields to update, just return the current task
             return get_task_by_id(db, task_id), None
         
         # Add updated_at timestamp
         update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        
+        # If assignee is being updated, update date_assign
+        if "assigned_to" in task_data:
+            update_fields.append("date_assign = CURRENT_TIMESTAMP")
         
         # Build and execute update query
         update_query = text(f"""
             UPDATE tasks 
             SET {', '.join(update_fields)}
             WHERE id = :task_id
-            RETURNING id, title, description, status, priority, due_date,
-                    estimated_hours, tags, created_by, assignee_id, project_id,
-                    created_at, updated_at
+            RETURNING *
         """)
         
         result = db.execute(update_query, params).fetchone()
@@ -278,21 +317,8 @@ def update_task(db: Session, task_id: int, task_data: dict) -> Tuple[Dict[str, A
         if not result:
             return None, "Failed to update task"
         
-        task = {
-            "id": result[0],
-            "title": result[1],
-            "description": result[2],
-            "status": result[3],
-            "priority": result[4],
-            "due_date": result[5],
-            "estimated_hours": result[6],
-            "tags": result[7],
-            "created_by": result[8],
-            "assignee_id": result[9],
-            "project_id": result[10],
-            "created_at": result[11],
-            "updated_at": result[12]
-        }
+        # Convert result to dictionary
+        task = dict(result._mapping)
         
         return task, None
     

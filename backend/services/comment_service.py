@@ -304,5 +304,5 @@ def get_related_task(db: Session, task_id: int) -> Dict[str, Any]:
         "id": result[0],
         "title": result[1],
         "created_by": result[2],
-        "assigned_to": result[3]
+        "assignee_id": result[3]
     } 

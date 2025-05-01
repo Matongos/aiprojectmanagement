@@ -13,30 +13,30 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
         return (
             db.query(self.model)
             .filter(TaskStage.project_id == project_id)
-            .order_by(TaskStage.sequence_order)
+            .order_by(TaskStage.sequence)
             .all()
         )
 
     def create_stage(
         self, db: Session, *, obj_in: TaskStageCreate
     ) -> TaskStage:
-        """Create a new stage and set its sequence order."""
-        # Get the highest sequence order for the project
+        """Create a new stage and set its sequence."""
+        # Get the highest sequence for the project
         last_stage = (
             db.query(self.model)
             .filter(TaskStage.project_id == obj_in.project_id)
-            .order_by(desc(TaskStage.sequence_order))
+            .order_by(desc(TaskStage.sequence))
             .first()
         )
         
-        # Set the sequence order to be one more than the highest
-        sequence_order = (last_stage.sequence_order + 1) if last_stage else 0
+        # Set the sequence to be one more than the highest, or 1 if no stages exist
+        sequence = (last_stage.sequence + 1) if last_stage else 1
         
         db_obj = TaskStage(
             name=obj_in.name,
             description=obj_in.description,
             project_id=obj_in.project_id,
-            sequence_order=sequence_order
+            sequence=sequence
         )
         db.add(db_obj)
         db.commit()
@@ -46,34 +46,67 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
     def update_sequence(
         self, db: Session, *, stage_id: int, new_sequence: int, project_id: int
     ) -> TaskStage:
-        """Update the sequence order of a stage and reorder other stages as needed."""
+        """Update the sequence of a stage and reorder other stages as needed."""
         # Get the stage to update
         stage = db.query(self.model).filter(TaskStage.id == stage_id).first()
         if not stage:
             return None
             
-        old_sequence = stage.sequence_order
+        old_sequence = stage.sequence
         
-        # Update other stages' sequence orders
+        # Update other stages' sequences
         if new_sequence > old_sequence:
             # Moving forward: decrease sequence of stages in between
             db.query(self.model).filter(
                 TaskStage.project_id == project_id,
-                TaskStage.sequence_order > old_sequence,
-                TaskStage.sequence_order <= new_sequence
-            ).update({"sequence_order": TaskStage.sequence_order - 1})
+                TaskStage.sequence > old_sequence,
+                TaskStage.sequence <= new_sequence
+            ).update({"sequence": TaskStage.sequence - 1})
         else:
             # Moving backward: increase sequence of stages in between
             db.query(self.model).filter(
                 TaskStage.project_id == project_id,
-                TaskStage.sequence_order >= new_sequence,
-                TaskStage.sequence_order < old_sequence
-            ).update({"sequence_order": TaskStage.sequence_order + 1})
+                TaskStage.sequence >= new_sequence,
+                TaskStage.sequence < old_sequence
+            ).update({"sequence": TaskStage.sequence + 1})
         
         # Update the stage's sequence
-        stage.sequence_order = new_sequence
+        stage.sequence = new_sequence
         db.commit()
         db.refresh(stage)
         return stage
+
+    def get_stage(self, db: Session, stage_id: int) -> Optional[TaskStage]:
+        """Get a task stage by ID"""
+        return db.query(self.model).filter(self.model.id == stage_id).first()
+
+    def update_stage(self, db: Session, *, db_obj: TaskStage, obj_in: TaskStageUpdate) -> TaskStage:
+        """Update a task stage"""
+        update_data = obj_in.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_obj, field, value)
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+    def delete_stage(self, db: Session, *, stage_id: int) -> TaskStage:
+        """Delete a task stage"""
+        obj = db.query(self.model).get(stage_id)
+        db.delete(obj)
+        db.commit()
+        return obj
+
+    def reorder_stages(self, db: Session, project_id: int, stage_order: List[int]) -> List[TaskStage]:
+        """Reorder stages in a project"""
+        stages = self.get_project_stages(db, project_id)
+        stage_dict = {stage.id: stage for stage in stages}
+        
+        for sequence, stage_id in enumerate(stage_order, 1):
+            if stage_id in stage_dict:
+                stage_dict[stage_id].sequence = sequence
+        
+        db.commit()
+        return self.get_project_stages(db, project_id)
 
 task_stage = CRUDTaskStage(TaskStage) 

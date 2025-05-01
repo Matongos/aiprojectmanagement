@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -20,9 +20,9 @@ class ProjectMember(Base):
     role = Column(String, default='member')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
-    project = relationship("Project", back_populates="project_members")
-    user = relationship("User", back_populates="project_memberships")
+    # Relationships with overlaps parameters
+    project = relationship("Project", back_populates="project_members", overlaps="members")
+    user = relationship("User", back_populates="project_memberships", overlaps="member_of_projects")
 
 class Project(Base):
     __tablename__ = "projects"
@@ -37,45 +37,34 @@ class Project(Base):
     end_date = Column(DateTime(timezone=True), nullable=True)
     color = Column(String, nullable=False, default="#3498db")
     is_template = Column(Boolean, nullable=False, default=False)
+    progress = Column(Float, default=0.0, comment='Project progress percentage')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, nullable=False, default=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    # Updated relationships
+    # Relationships
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_projects")
-    project_members = relationship("ProjectMember", back_populates="project")
-    members = relationship("User", secondary="project_members", back_populates="member_of_projects")
+    project_members = relationship("ProjectMember", back_populates="project", overlaps="members")
+    members = relationship(
+        "User",
+        secondary="project_members",
+        back_populates="member_of_projects",
+        overlaps="project_memberships,project_members"
+    )
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
     stages = relationship("TaskStage", back_populates="project", cascade="all, delete-orphan")
-    milestones = relationship("Milestone", back_populates="project")
+    milestones = relationship("Milestone", back_populates="project", cascade="all, delete-orphan")
     tags = relationship("Tag", secondary=project_tag, back_populates="projects")
-    activities = relationship("Activity", back_populates="project")
+    activities = relationship("Activity", back_populates="project", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
 
-class ProjectStage(Base):
-    __tablename__ = "project_stages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    name = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    sequence_order = Column(Integer, nullable=False)
-    progress = Column(Integer, default=0)  # Percentage of completed tasks
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    project = relationship("Project", back_populates="stages")
-    tasks = relationship("Task", back_populates="stage")
-
-    def update_progress(self):
-        """Update stage progress based on completed tasks."""
-        if not self.tasks:
-            self.progress = 0
-            return
-        
-        completed_tasks = sum(1 for task in self.tasks if task.status in ['done', 'approved'])
-        self.progress = int((completed_tasks / len(self.tasks)) * 100)
+    def calculate_progress(self):
+        """Calculate project progress based on task completion."""
+        tasks = self.tasks
+        if not tasks:
+            return 0.0
+        return sum(task.progress for task in tasks) / len(tasks)
 
 class Tag(Base):
     __tablename__ = "tags"
@@ -103,4 +92,5 @@ class Milestone(Base):
 
     # Relationships
     project = relationship("Project", back_populates="milestones")
-    creator = relationship("User", foreign_keys=[created_by]) 
+    creator = relationship("User", foreign_keys=[created_by])
+    tasks = relationship("Task", back_populates="milestone") 

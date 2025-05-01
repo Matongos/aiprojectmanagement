@@ -1,8 +1,8 @@
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, desc, and_
 from datetime import datetime, timedelta
-from models.tasks import Task
+from models.task import Task
 from crud.task import task
 
 class TaskAnalytics:

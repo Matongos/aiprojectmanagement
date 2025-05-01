@@ -4,7 +4,7 @@ import schedule
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from models.tasks import Task
+from models.task import Task
 from services.notification_service import NotificationService
 from database import SessionLocal
 

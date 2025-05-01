@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -33,11 +33,10 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,  # Use origins from settings
+    allow_origins=["http://192.168.56.1:3000", "http://localhost:3000"],  # Add your frontend URLs
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["*"]
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # Mount static files
@@ -56,6 +55,7 @@ app.include_router(activities.router)
 app.include_router(comments.router)
 app.include_router(notifications.router)
 app.include_router(task_stages.router)
+app.include_router(stages.router)
 
 # Add a simplified token endpoint
 @app.post("/token")
@@ -174,7 +174,11 @@ app.openapi = custom_openapi
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to AI Project Management API"}
+    return {
+        "message": "Welcome to AI Project Management API",
+        "docs": "/docs",
+        "redoc": "/redoc"
+    }
 
 if __name__ == "__main__":
     # Start the task scheduler

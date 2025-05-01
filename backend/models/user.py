@@ -6,6 +6,7 @@ from .base import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
@@ -23,13 +24,15 @@ class User(Base):
 
     # Relationships using string references to avoid circular imports
     roles = relationship("Role", secondary="user_role", back_populates="users", lazy="joined")
-    assigned_tasks = relationship("Task", foreign_keys="Task.assignee_id", back_populates="assignee")
+    assigned_tasks = relationship("Task", foreign_keys="Task.assigned_to", back_populates="assignee")
     created_tasks = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
     created_projects = relationship("Project", foreign_keys="Project.created_by", back_populates="creator")
-    project_memberships = relationship("ProjectMember", back_populates="user")
-    member_of_projects = relationship("Project", secondary="project_members", back_populates="members")
+    created_milestones = relationship("Milestone", foreign_keys="Milestone.created_by", back_populates="creator")
+    created_companies = relationship("Company", foreign_keys="Company.created_by", back_populates="creator", overlaps="creator")
+    project_memberships = relationship("ProjectMember", back_populates="user", overlaps="member_of_projects")
+    member_of_projects = relationship("Project", secondary="project_members", back_populates="members", overlaps="project_memberships")
     time_entries = relationship("TimeEntry", back_populates="user")
-    comments = relationship("Comment", back_populates="user")
+    comments = relationship("Comment", back_populates="author", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user")
     uploaded_files = relationship("FileAttachment", back_populates="user")
     activities = relationship("Activity", back_populates="user")

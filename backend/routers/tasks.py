@@ -2,9 +2,9 @@ from typing import Any, List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, date
-from models.tasks import Task
+from models.task import Task
 from models.task_stage import TaskStage
-from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskStatus, TaskPriority
+from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskState, TaskPriority
 from schemas.file_attachment import FileAttachment as FileAttachmentSchema, FileAttachmentCreate
 from crud import task as task_crud
 from crud import file_attachment as file_attachment_crud
@@ -51,7 +51,7 @@ def create_task(
             inbox_stage = TaskStage(
                 name="Inbox",
                 description="Default stage for unorganized tasks",
-                sequence_order=0,
+                sequence=1,
                 project_id=task.project_id
             )
             db.add(inbox_stage)
@@ -59,17 +59,23 @@ def create_task(
             db.refresh(inbox_stage)
             task.stage_id = inbox_stage.id
     
-    # Validate that the stage exists and belongs to the project
-    stage = db.query(TaskStage).filter(
-        TaskStage.id == task.stage_id,
-        TaskStage.project_id == task.project_id
-    ).first()
+    # Validate that the stage exists and belongs to the project if stage_id is provided
+    if task.stage_id:
+        stage = db.query(TaskStage).filter(
+            TaskStage.id == task.stage_id,
+            TaskStage.project_id == task.project_id
+        ).first()
+        
+        if not stage:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid stage_id or stage does not belong to the specified project"
+            )
     
-    if not stage:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid stage_id or stage does not belong to the specified project"
-        )
+    # Check if user is assigning task to someone else
+    if task.assigned_to and task.assigned_to != current_user["id"]:
+        # TODO: Check if user has permission to assign tasks to others
+        pass
     
     created_task, error = task_service.create_task(db, task.dict(), current_user["id"])
     
@@ -87,52 +93,40 @@ def create_task(
             notification_service
         )
     
-    # Send notification to assigned user if different from creator
-    if task.assigned_to and task.assigned_to != current_user["id"]:
-        assigned_user = user_service.get_user_by_id(db, task.assigned_to)
-        if assigned_user:
-            notification_data = {
-                "user_id": task.assigned_to,
-                "title": "New Task Assignment",
-                "content": f"You have been assigned to the task: {task.title}",
-                "type": "task_assignment",
-                "reference_type": "task",
-                "reference_id": created_task["id"],
-                "is_read": False
-            }
-            notification_service.create_notification(db, notification_data)
-    
     return created_task
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(
-    skip: int = 0,
-    limit: int = 100,
+    project_id: Optional[int] = None,
+    stage_id: Optional[int] = None,
+    search: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     db: Session = Depends(get_db),
     current_user: Dict = Depends(get_current_user)
 ):
-    """Get tasks assigned to the current user."""
-    if not current_user["is_superuser"]:
-        tasks = task_crud.get_by_assignee(
-            db=db, assignee_id=current_user["id"], skip=skip, limit=limit
-        )
+    """Get tasks with optional filtering"""
+    if project_id:
+        tasks = task_crud.get_project_tasks(db, project_id, skip, limit)
+    elif stage_id:
+        tasks = task_crud.get_tasks_by_stage(db, stage_id, skip, limit)
+    elif search:
+        tasks = task_crud.search_tasks(db, search_term=search, skip=skip, limit=limit)
     else:
-        tasks = task_crud.get_multi(db=db, skip=skip, limit=limit)
+        tasks = task_crud.get_user_tasks(db, current_user["id"], skip, limit)
+    if not current_user["is_superuser"]:
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
-@router.get("/project/{project_id}", response_model=List[TaskSchema])
-async def read_project_tasks(
-    project_id: int,
-    skip: int = 0,
-    limit: int = 100,
+@router.get("/my", response_model=List[TaskSchema])
+async def read_my_tasks(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     db: Session = Depends(get_db),
-    current_user: Dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
-    """Get all tasks for a specific project."""
-    tasks = task_crud.get_by_project(
-        db=db, project_id=project_id, skip=skip, limit=limit
-    )
-    return tasks
+    """Get tasks assigned to or created by the current user"""
+    return task_crud.get_user_tasks(db, current_user["id"], skip, limit)
 
 @router.get("/{task_id}", response_model=TaskSchema)
 async def read_task(
@@ -144,7 +138,7 @@ async def read_task(
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not current_user["is_superuser"] and db_task.assignee_id != current_user["id"] and db_task.created_by != current_user["id"]:
+    if not current_user["is_superuser"] and db_task.assigned_to != current_user["id"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return db_task
 
@@ -163,7 +157,7 @@ async def update_task(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     # Check if assignee has changed
-    original_assignee_id = db_task.assignee_id
+    original_assignee_id = db_task.assigned_to
     
     # Update the task
     updated_task = task_crud.update(db=db, db_obj=db_task, obj_in=task)
@@ -180,10 +174,10 @@ async def update_task(
         )
     
     # Send notifications for assignment changes
-    if task.assignee_id is not None and task.assignee_id != original_assignee_id:
+    if task.assigned_to is not None and task.assigned_to != original_assignee_id:
         # Notify new assignee
         notification_data = {
-            "user_id": task.assignee_id,
+            "user_id": task.assigned_to,
             "title": "Task Assignment",
             "content": f"You have been assigned to the task: {updated_task.title}",
             "type": "task_assignment",
@@ -199,8 +193,8 @@ async def update_task(
         users_to_notify = set()
         if db_task.created_by and db_task.created_by != current_user["id"]:
             users_to_notify.add(db_task.created_by)
-        if db_task.assignee_id and db_task.assignee_id != current_user["id"] and db_task.assignee_id != db_task.created_by:
-            users_to_notify.add(db_task.assignee_id)
+        if db_task.assigned_to and db_task.assigned_to != current_user["id"] and db_task.assigned_to != db_task.created_by:
+            users_to_notify.add(db_task.assigned_to)
             
         if users_to_notify:
             # Notify all users in users_to_notify
@@ -233,20 +227,18 @@ async def delete_task(
     task_crud.remove(db=db, id=task_id)
     return None
 
-@router.get("/status/{status}", response_model=List[TaskSchema])
-async def read_tasks_by_status(
-    status: TaskStatus,
+@router.get("/state/{state}", response_model=List[TaskSchema])
+async def read_tasks_by_state(
+    state: TaskState,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: Dict = Depends(get_current_user)
 ):
-    """Get tasks filtered by status."""
-    tasks = task_crud.get_by_status(
-        db=db, status=status, skip=skip, limit=limit
-    )
+    """Get tasks by state."""
+    tasks = task_crud.get_tasks_by_state(db=db, state=state, skip=skip, limit=limit)
     if not current_user["is_superuser"]:
-        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/priority/{priority}", response_model=List[TaskSchema])
@@ -262,7 +254,7 @@ async def read_tasks_by_priority(
         db=db, priority=priority, skip=skip, limit=limit
     )
     if not current_user["is_superuser"]:
-        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/overdue/", response_model=List[TaskSchema])
@@ -278,7 +270,7 @@ async def read_overdue_tasks(
         db=db, current_date=current_date, skip=skip, limit=limit
     )
     if not current_user["is_superuser"]:
-        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     return tasks
 
 @router.get("/upcoming/", response_model=List[TaskSchema])
@@ -305,25 +297,26 @@ async def read_upcoming_tasks(
     )
     
     if not current_user["is_superuser"]:
-        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     
     return tasks
 
-@router.put("/{task_id}/status", response_model=TaskSchema)
-async def update_task_status(
+@router.put("/{task_id}/state", response_model=TaskSchema)
+async def update_task_state(
     task_id: int,
-    status: TaskStatus,
+    state: TaskState,
     db: Session = Depends(get_db),
     current_user: Dict = Depends(get_current_user)
 ):
-    """Update just the status of a task."""
+    """Update a task's state."""
     db_task = task_crud.get(db=db, id=task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    return task_crud.update(db=db, db_obj=db_task, obj_in={"status": status})
+    updated_task = task_crud.update_state(db=db, db_obj=db_task, state=state)
+    return updated_task
 
 @router.get("/created/", response_model=List[TaskSchema])
 async def read_created_tasks(
@@ -374,7 +367,7 @@ async def read_over_budget_tasks(
     
     # Filter tasks for regular users to only see their own or assigned tasks
     if not current_user["is_superuser"]:
-        tasks = [t for t in tasks if t.assignee_id == current_user["id"] or t.created_by == current_user["id"]]
+        tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
     
     return tasks
 

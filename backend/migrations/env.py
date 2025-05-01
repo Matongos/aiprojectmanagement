@@ -2,42 +2,23 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
-from sqlalchemy import create_engine
-from sqlalchemy.engine.url import URL
 
 from alembic import context
 
-import os
-import sys
-from dotenv import load_dotenv
-import urllib.parse
-
-# Add the parent directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Import the SQLAlchemy declarative base and models
-from database import Base
-import models
-
-# Load environment variables
-load_dotenv()
-
-# Get environment variables
-POSTGRES_USER = os.getenv("POSTGRES_USER", "panashe")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "panashe")
-POSTGRES_SERVER = os.getenv("POSTGRES_SERVER", "localhost")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "aiprojectmanagement")
-
-# URL encode the password to handle special characters
-encoded_password = urllib.parse.quote_plus(POSTGRES_PASSWORD)
-
-# Create PostgreSQL database URL
-SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{encoded_password}@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}"
+# Import your models here
+from models.base import Base
+from models.user import User
+from models.projects import Project
+from models.task import Task
+from models.task_stage import TaskStage
+from config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Set the database URL in the alembic.ini file
+config.set_main_option('sqlalchemy.url', settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -86,7 +67,7 @@ def run_migrations_online() -> None:
 
     """
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

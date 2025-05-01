@@ -69,8 +69,8 @@ __all__ = ["get_current_user", "router", "oauth2_scheme"]
 
 # Create models for request bodies
 class LoginRequest(BaseModel):
-    username: str = Field(..., description="Your username", examples=["testuser123"])
-    password: str = Field(..., description="Your password", examples=["testpassword123"])
+    username: str = Field(..., description="Your username", examples=["matongo"])
+    password: str = Field(..., description="Your password", examples=["matongo123"])
 
 class RegisterRequest(BaseModel):
     username: str = Field(..., description="Desired username", examples=["newuser"])

@@ -5,9 +5,11 @@ from models.projects import Project
 from schemas.project import (
     ProjectCreate, 
     ProjectUpdate, 
-    Project as ProjectSchema,
-    ProjectStage as ProjectStageSchema,
-    ProjectStageCreate
+    Project as ProjectSchema
+)
+from schemas.task import (
+    TaskStage as TaskStageSchema,
+    TaskStageCreate
 )
 from crud import project as project_crud
 from crud.project import project_stage
@@ -119,10 +121,10 @@ def read_recent_projects(
     projects = project_crud.get_recent_projects(db=db, user_id=current_user["id"], limit=limit)
     return projects
 
-@router.post("/{project_id}/stages", response_model=ProjectStageSchema)
+@router.post("/{project_id}/stages", response_model=TaskStageSchema)
 async def create_project_stage(
     project_id: int,
-    stage: ProjectStageCreate,
+    stage: TaskStageCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -137,7 +139,7 @@ async def create_project_stage(
     # Create the stage
     return project_stage.create_stage(db=db, obj_in=stage)
 
-@router.get("/{project_id}/stages", response_model=List[ProjectStageSchema])
+@router.get("/{project_id}/stages", response_model=List[TaskStageSchema])
 async def get_project_stages(
     project_id: int,
     db: Session = Depends(get_db),

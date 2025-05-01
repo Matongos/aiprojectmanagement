@@ -2,9 +2,10 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from sqlalchemy import desc
 
-from models.tasks import Comment
+from models.comment import Comment
 from models.user import User
 from schemas.comment import CommentCreate, CommentUpdate
+from crud.base import CRUDBase
 
 
 def get_comment(db: Session, comment_id: int) -> Optional[Comment]:
