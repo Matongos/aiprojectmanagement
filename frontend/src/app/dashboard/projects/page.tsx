@@ -21,7 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Grid, List, Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3 } from "lucide-react";
+import { MoreHorizontal, Grid, List, Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3, Eye } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -303,6 +303,10 @@ function ProjectsContent() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenuGroup>
+                    <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/view`)}>
+                      <Eye className="mr-2 h-4 w-4" />
+                      <span>View</span>
+                    </DropdownMenuItem>
                     <DropdownMenuItem>
                       <ListTodo className="mr-2 h-4 w-4" />
                       <span>Tasks</span>

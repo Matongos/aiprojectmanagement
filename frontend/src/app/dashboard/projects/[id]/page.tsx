@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "react-hot-toast";
 import { fetchApi } from "@/lib/api-helper";
+import { API_BASE_URL } from "@/lib/constants";
 import { 
   Plus, 
   Star, 
@@ -13,10 +14,56 @@ import {
   Clock, 
   Check,
   X,
-  AlertCircle
+  AlertCircle,
+  LayoutGrid,
+  List as ListIcon,
+  Search,
+  Filter,
+  ChevronDown,
+  Settings,
+  Archive,
+  Edit,
+  Trash2,
+  FolderOpen,
+  ChevronRight,
+  ChevronLeft
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { use } from "react";
+import { Input } from "@/components/ui/input";
+import { useAuthStore } from "@/store/authStore";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+} from "@/components/ui/command";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface TaskStatus {
   id: string;
@@ -73,36 +120,126 @@ interface Project {
   end_date: string | null;
 }
 
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  profile_image_url?: string;
+}
+
+const styles = `
+  .writing-mode-vertical {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+`;
+
 export default function ProjectDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const projectId = resolvedParams.id;
   const [project, setProject] = useState<Project | null>(null);
+  const [stages, setStages] = useState<ProjectStage[]>([]);
   const [loading, setLoading] = useState(true);
   const [collapsedStages, setCollapsedStages] = useState<Set<number>>(new Set());
+  const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [newStageName, setNewStageName] = useState('');
+  const [isAddingStage, setIsAddingStage] = useState(false);
   const router = useRouter();
+  const { user, token } = useAuthStore();
+  const [hoveredStageId, setHoveredStageId] = useState<number | null>(null);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [selectedAssignees, setSelectedAssignees] = useState<User[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [currentStageId, setCurrentStageId] = useState<number | null>(null);
+  const [foldedStages, setFoldedStages] = useState<Set<number>>(new Set());
+  const [stageToDelete, setStageToDelete] = useState<number | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
-    const fetchProject = async () => {
-      if (!projectId) return;
+    const fetchProjectAndStages = async () => {
+      if (!projectId || !token) return;
       
       try {
-        const data = await fetchApi<Project>(`/projects/${projectId}`);
-        // Ensure stages is always an array
-        setProject({
-          ...data,
-          stages: data.stages || []
+        setLoading(true);
+        
+        // Fetch project details
+        const projectResponse = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
         });
+
+        if (!projectResponse.ok) {
+          throw new Error(`Failed to fetch project: ${projectResponse.statusText}`);
+        }
+
+        const projectData = await projectResponse.json();
+        setProject(projectData);
+
+        // Fetch stages for the project
+        const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!stagesResponse.ok) {
+          throw new Error(`Failed to fetch stages: ${stagesResponse.statusText}`);
+        }
+
+        const stagesData = await stagesResponse.json();
+        if (Array.isArray(stagesData)) {
+          setStages(stagesData);
+          // Initialize folded stages from backend data
+          const foldedStagesSet = new Set(
+            stagesData
+              .filter(stage => stage.fold)
+              .map(stage => stage.id)
+          );
+          setFoldedStages(foldedStagesSet);
+        } else {
+          console.error("Received invalid stages data:", stagesData);
+          setStages([]);
+        }
+
       } catch (error) {
-        console.error("Error fetching project:", error);
-        toast.error("Failed to load project");
-        router.push("/dashboard/projects");
+        console.error("Error fetching project data:", error);
+        toast.error(error instanceof Error ? error.message : "Failed to load project data");
+        setStages([]);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchProject();
-  }, [projectId, router]);
+    fetchProjectAndStages();
+  }, [projectId, token]);
+
+  // Fetch users for assignee selection
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/users`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) throw new Error('Failed to fetch users');
+        
+        const data = await response.json();
+        setUsers(data);
+      } catch (error) {
+        console.error('Error fetching users:', error);
+      }
+    };
+
+    fetchUsers();
+  }, [token]);
 
   const handleCreateStage = async () => {
     if (!projectId) return;
@@ -135,8 +272,44 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     }
   };
 
-  const handleCreateTask = () => {
-    router.push(`/dashboard/tasks/create?projectId=${projectId}`);
+  const handleCreateTask = async () => {
+    if (!newTaskTitle.trim() || !currentStageId) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/tasks`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          title: newTaskTitle.trim(),
+          stage_id: currentStageId,
+          project_id: Number(projectId),
+          assignees: selectedAssignees.map(user => user.id)
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to create task');
+
+      // Refresh stages to get updated task list
+      const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const updatedStages = await stagesResponse.json();
+      setStages(updatedStages);
+
+      // Reset form
+      setNewTaskTitle('');
+      setSelectedAssignees([]);
+      setIsTaskModalOpen(false);
+      toast.success('Task created successfully');
+    } catch (error) {
+      toast.error('Failed to create task');
+    }
   };
 
   const handleTaskStatusChange = async (taskId: number, newStatus: string) => {
@@ -190,15 +363,387 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     });
   };
 
+  const handleAddStage = async () => {
+    if (!newStageName.trim() || !projectId || !token) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: newStageName.trim(),
+          description: '',
+          sequence: stages.length,
+          project_id: Number(projectId),
+          is_active: true
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create stage');
+      }
+
+      const newStage = await response.json();
+      setStages(prev => [...prev, newStage]);
+      setNewStageName('');
+      setIsAddingStage(false);
+      toast.success('Stage created successfully');
+    } catch (error) {
+      console.error("Error creating stage:", error);
+      toast.error('Failed to create stage');
+    }
+  };
+
+  const handleStageDelete = async (stageId: number) => {
+    try {
+      setIsDeleting(true);
+      
+      // Call the backend endpoint to delete the stage
+      const response = await fetch(`${API_BASE_URL}/task_stages/${stageId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to delete stage: ${response.statusText}`);
+      }
+
+      // Update local state after successful deletion
+      setStages(prevStages => prevStages.filter(stage => stage.id !== stageId));
+      
+      // Remove from folded stages if it was folded
+      setFoldedStages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(stageId);
+        return newSet;
+      });
+
+      // Close the delete confirmation dialog
+      setStageToDelete(null);
+      
+      toast.success('Stage deleted successfully');
+
+      // Refresh the stages list to ensure consistency
+      const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (stagesResponse.ok) {
+        const updatedStages = await stagesResponse.json();
+        if (Array.isArray(updatedStages)) {
+          setStages(updatedStages);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error deleting stage:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete stage');
+      setStageToDelete(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleStageEdit = async (stageId: number, newName: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages/${stageId}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: newName })
+      });
+
+      if (!response.ok) throw new Error('Failed to update stage');
+
+      setStages(prev => prev.map(stage => 
+        stage.id === stageId ? { ...stage, name: newName } : stage
+      ));
+      toast.success('Stage updated successfully');
+    } catch (error) {
+      toast.error('Failed to update stage');
+    }
+  };
+
+  const handleArchiveAll = async (stageId: number) => {
+    try {
+      await fetch(`${API_BASE_URL}/projects/${projectId}/stages/${stageId}/archive-all`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Refresh stages data
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const updatedStages = await response.json();
+      setStages(updatedStages);
+      toast.success('All tasks archived successfully');
+    } catch (error) {
+      toast.error('Failed to archive tasks');
+    }
+  };
+
+  const handleUnarchiveAll = async (stageId: number) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages/${stageId}/unarchive-all`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          toast.error('No archived tasks found in this stage');
+          return;
+        }
+        throw new Error(`Failed to unarchive tasks: ${response.statusText}`);
+      }
+      
+      // Refresh stages data
+      const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!stagesResponse.ok) {
+        throw new Error('Failed to refresh stages data');
+      }
+
+      const updatedStages = await stagesResponse.json();
+      if (Array.isArray(updatedStages)) {
+        setStages(updatedStages);
+        toast.success('All tasks unarchived successfully');
+      } else {
+        console.error("Received invalid stages data:", updatedStages);
+        toast.error('Failed to refresh stages data');
+      }
+    } catch (error) {
+      console.error('Error unarchiving tasks:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to unarchive tasks');
+    }
+  };
+
+  const removeAssignee = (userId: number) => {
+    setSelectedAssignees(prev => prev.filter(user => user.id !== userId));
+  };
+
+  const renderEmptyState = () => (
+    <div className="flex items-center justify-center h-[60vh]">
+      <div className="text-center">
+        <h3 className="text-lg font-medium text-gray-700 mb-2">No stages yet</h3>
+        <p className="text-sm text-gray-500 mb-4">Create your first stage to get started</p>
+        <Button onClick={() => setIsAddingStage(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Add Stage
+        </Button>
+      </div>
+    </div>
+  );
+
+  const handleFoldStage = async (stageId: number) => {
+    try {
+      const isFolded = foldedStages.has(stageId);
+      const currentStage = stages.find(s => s.id === stageId);
+      
+      if (!currentStage) {
+        throw new Error('Stage not found');
+      }
+      
+      // Optimistically update the UI
+      setFoldedStages(prev => {
+        const newSet = new Set(prev);
+        if (isFolded) {
+          newSet.delete(stageId);
+        } else {
+          newSet.add(stageId);
+        }
+        return newSet;
+      });
+
+      // Update the backend with all required fields
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages/${stageId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: currentStage.name,
+          description: currentStage.description,
+          sequence: currentStage.sequence,
+          fold: !isFolded,
+          is_active: currentStage.is_active,
+          project_id: currentStage.project_id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update stage fold state');
+      }
+
+      // Update the stages array with the new fold state
+      setStages(prev => prev.map(stage => 
+        stage.id === stageId 
+          ? { ...stage, fold: !isFolded }
+          : stage
+      ));
+
+      // Show success message
+      toast.success(isFolded ? 'Stage unfolded' : 'Stage folded');
+
+    } catch (error) {
+      // Revert the optimistic update on error
+      setFoldedStages(prev => {
+        const newSet = new Set(prev);
+        if (foldedStages.has(stageId)) {
+          newSet.delete(stageId);
+        } else {
+          newSet.add(stageId);
+        }
+        return newSet;
+      });
+      
+      console.error('Error updating stage fold state:', error);
+      toast.error('Failed to update stage fold state');
+    }
+  };
+
+  const confirmDeleteStage = (stageId: number) => {
+    setStageToDelete(stageId);
+  };
+
+  useEffect(() => {
+    // Add the styles to the document
+    const styleSheet = document.createElement("style");
+    styleSheet.innerText = styles;
+    document.head.appendChild(styleSheet);
+
+    // Cleanup
+    return () => {
+      document.head.removeChild(styleSheet);
+    };
+  }, []);
+
   if (loading) return <div className="p-4">Loading...</div>;
   if (!project) return <div className="p-4">Project not found</div>;
+
+  const isProjectCreator = user?.id === project.creator_id;
+
+  // Task Creation Modal
+  const TaskCreationModal = () => (
+    <Dialog open={isTaskModalOpen} onOpenChange={setIsTaskModalOpen}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Create New Task</DialogTitle>
+          <DialogDescription>
+            Add a new task to your project. Fill in the task details below.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Task Title</label>
+            <Input
+              placeholder="Enter task title..."
+              value={newTaskTitle}
+              onChange={(e) => setNewTaskTitle(e.target.value)}
+              className="w-full"
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Assignees</label>
+            <Command className="rounded-lg border shadow-md">
+              <CommandInput 
+                placeholder="Search users..." 
+                value={searchQuery}
+                onValueChange={setSearchQuery}
+              />
+              <CommandEmpty>No users found.</CommandEmpty>
+              <CommandGroup className="max-h-[200px] overflow-auto">
+                {users?.map((user) => (
+                  <CommandItem
+                    key={user.id}
+                    onSelect={() => {
+                      if (!selectedAssignees.find(a => a.id === user.id)) {
+                        setSelectedAssignees(prev => [...prev, user]);
+                      }
+                      setSearchQuery('');
+                    }}
+                  >
+                    <Avatar className="h-6 w-6 mr-2">
+                      <AvatarImage 
+                        src={user.profile_image_url || '/default-avatar.png'} 
+                        alt={user.name || ''} 
+                      />
+                      <AvatarFallback>{user.name ? user.name[0] : '?'}</AvatarFallback>
+                    </Avatar>
+                    {user.name}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </Command>
+
+            <div className="flex flex-wrap gap-2 mt-2">
+              {selectedAssignees.map((user) => (
+                <Badge 
+                  key={user.id}
+                  variant="secondary"
+                  className="flex items-center gap-1"
+                >
+                  <span>{user.name || 'Unknown User'}</span>
+                  <X
+                    className="h-3 w-3 cursor-pointer"
+                    onClick={() => removeAssignee(user.id)}
+                  />
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsTaskModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTask}>
+              Create Task
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 
   return (
     <div className="container mx-auto p-4">
       {/* Project Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold">{project.name}</h1>
+          <div className="flex items-center gap-2">
+            <Star className="h-5 w-5 text-yellow-400" />
+            <h1 className="text-xl font-semibold">{project.name}</h1>
+          </div>
           <div className={`px-2 py-0.5 rounded text-xs ${
             project.status === 'off_track' ? 'bg-red-100 text-red-800' :
             project.status === 'on_track' ? 'bg-green-100 text-green-800' :
@@ -207,123 +752,391 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
             {project.status.replace('_', ' ').charAt(0).toUpperCase() + project.status.slice(1)}
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={handleCreateTask}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
-            New Task
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleCreateStage}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
-            New Stage
-          </Button>
+
+        <div className="flex items-center gap-4">
+          {/* Search and Filter */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                type="text"
+                placeholder="Search tasks..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-8 w-[200px]"
+              />
+            </div>
+            <Button variant="outline" size="sm" className="h-8">
+              <Filter className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {/* View Toggle */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-md p-0.5">
+            <Button
+              variant={viewMode === 'kanban' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7"
+              onClick={() => setViewMode('kanban')}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === 'list' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7"
+              onClick={() => setViewMode('list')}
+            >
+              <ListIcon className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => {
+              setCurrentStageId(null);
+              setIsTaskModalOpen(true);
+            }}>
+              <Plus className="h-3.5 w-3.5 mr-1.5" />
+              New Task
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsAddingStage(true)}>
+              <Plus className="h-3.5 w-3.5 mr-1.5" />
+              Add Stage
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Kanban Board */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {(project.stages || []).map((stage) => (
-          <div key={stage.id} className="bg-gray-50 rounded-lg p-3">
-            <div className="space-y-2">
-              {/* Stage Header */}
-              <div 
-                className="flex items-center justify-between cursor-pointer"
-                onClick={() => toggleStageCollapse(stage.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center">
-                    <button className="p-1 hover:bg-gray-200 rounded">
-                      {collapsedStages.has(stage.id) ? (
-                        <Plus className="h-3.5 w-3.5" />
-                      ) : (
-                        <span className="h-3.5 w-3.5">-</span>
-                      )}
-                    </button>
-                    <h3 className="text-sm font-medium ml-2">{stage.name}</h3>
-                  </div>
-                  <span className="text-xs text-gray-500 px-2 py-0.5 bg-gray-200 rounded-full">
-                    {stage.tasks?.length || 0}
-                  </span>
-                </div>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              
-              {/* Stage Progress Bar */}
-              <div className="h-0.5 bg-gray-200 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-green-500 transition-all duration-300"
-                  style={{ width: `${stage.progress}%` }}
-                />
-              </div>
+      {/* Task Creation Modal */}
+      <TaskCreationModal />
 
-              {/* Tasks */}
-              {!collapsedStages.has(stage.id) && (
-                <div className="space-y-2 transition-all duration-300">
-                  {!stage.tasks?.length ? (
-                    <div className="text-center py-6 text-gray-500 text-xs">
-                      No tasks in this stage
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto">
-                      {stage.tasks.map((task) => (
-                        <Card 
-                          key={task.id} 
-                          className="p-2.5 cursor-pointer hover:shadow-md transition-shadow"
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('taskId', task.id.toString());
-                            e.dataTransfer.setData('sourceStageId', stage.id.toString());
-                          }}
-                        >
-                          <div className="flex items-start gap-2">
-                            <div onClick={() => handleTaskStatusChange(task.id, task.status)}>
-                              <StatusIcon status={task.status} />
+      {/* Kanban/List View */}
+      {viewMode === 'kanban' ? (
+        <div className="relative">
+          {/* Stage Creation Modal */}
+          {isAddingStage && (
+            <Dialog open={isAddingStage} onOpenChange={setIsAddingStage}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New Stage</DialogTitle>
+                  <DialogDescription>
+                    Add a new stage to organize your tasks.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Stage Name</label>
+                    <Input
+                      placeholder="Enter stage name..."
+                      value={newStageName}
+                      onChange={(e) => setNewStageName(e.target.value)}
+                      className="w-full"
+                      autoFocus
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddStage()}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setIsAddingStage(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={handleAddStage}>
+                      Create Stage
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+
+          {!stages || stages.length === 0 ? (
+            renderEmptyState()
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="inline-flex gap-4 min-w-full pb-4">
+                {Array.isArray(stages) && stages.map((stage) => (
+                  <div 
+                    key={stage.id} 
+                    className={`transition-all duration-300 ease-in-out ${
+                      foldedStages.has(stage.id) 
+                        ? 'w-[50px] min-h-[200px]' 
+                        : 'w-[300px]'
+                    } flex-shrink-0 bg-gray-50 rounded-lg p-3 relative ${
+                      isDeleting && stageToDelete === stage.id ? 'opacity-50 pointer-events-none' : ''
+                    }`}
+                    onMouseEnter={() => setHoveredStageId(stage.id)}
+                    onMouseLeave={() => setHoveredStageId(null)}
+                  >
+                    <div className={`space-y-2 ${foldedStages.has(stage.id) ? 'h-full' : ''}`}>
+                      <div className={`flex items-center ${foldedStages.has(stage.id) ? 'h-full flex-col' : 'justify-between'}`}>
+                        {foldedStages.has(stage.id) ? (
+                          // Folded view
+                          <div className="w-full flex flex-col items-center justify-between h-full py-2 relative group">
+                            <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
+                              <span className="text-purple-600 font-medium text-sm">
+                                {stage.tasks?.length || 0}
+                              </span>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-sm font-medium mb-0.5 truncate">{task.title}</h4>
-                              <p className="text-xs text-gray-600 line-clamp-2">{task.description}</p>
-                              
-                              <div className="mt-2 flex items-center justify-between text-xs">
-                                <div className="flex items-center gap-1.5">
-                                  {task.assignee && (
-                                    <Avatar className="h-5 w-5">
-                                      <AvatarImage 
-                                        src={task.assignee.profile_image_url || '/default-avatar.png'} 
-                                        alt={task.assignee.name} 
-                                      />
-                                      <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
-                                    </Avatar>
-                                  )}
-                                  <div className="flex items-center text-gray-500">
-                                    <Clock className="h-3 w-3 mr-0.5" />
-                                    <span>{getRelativeTime(task.created_at)}</span>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  {task.priority === 'high' && (
-                                    <Star className="h-3 w-3 text-yellow-500 fill-current" />
-                                  )}
-                                  {task.due_date && (
-                                    <div className="flex items-center text-gray-500">
-                                      <Calendar className="h-3 w-3 mr-0.5" />
-                                      <span>{new Date(task.due_date).toLocaleDateString()}</span>
-                                    </div>
-                                  )}
-                                </div>
+                            
+                            {/* Unfold Arrow Button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleFoldStage(stage.id);
+                              }}
+                              className="absolute -right-3 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <div className="bg-white rounded-full p-1 shadow-md hover:shadow-lg transition-shadow">
+                                <ChevronRight className="h-4 w-4 text-gray-600" />
                               </div>
+                            </button>
+
+                            <div className="writing-mode-vertical transform rotate-180 flex-grow flex items-center mt-3">
+                              <span className="text-xs text-gray-600 whitespace-nowrap">
+                                {stage.name}
+                              </span>
                             </div>
                           </div>
-                        </Card>
-                      ))}
+                        ) : (
+                          // Unfolded view
+                          <>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-medium">{stage.name}</h3>
+                              <span className="text-xs text-gray-500 px-2 py-0.5 bg-gray-200 rounded-full">
+                                {stage.tasks?.length || 0}
+                              </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1">
+                              {/* Fold Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleFoldStage(stage.id);
+                                }}
+                                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-100 rounded-full flex items-center justify-center"
+                              >
+                                <ChevronLeft className="h-4 w-4 text-gray-600" />
+                              </button>
+
+                              {/* Add Task Button */}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={() => {
+                                  setCurrentStageId(stage.id);
+                                  setIsTaskModalOpen(true);
+                                }}
+                              >
+                                <Plus className="h-4 w-4" />
+                              </Button>
+
+                              {/* Settings Dropdown */}
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={`h-6 w-6 p-0 opacity-0 ${
+                                      hoveredStageId === stage.id ? 'opacity-100' : ''
+                                    } transition-opacity`}
+                                  >
+                                    <Settings className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={() => handleFoldStage(stage.id)}>
+                                    <FolderOpen className="h-4 w-4 mr-2" />
+                                    {foldedStages.has(stage.id) ? 'Unfold' : 'Fold'}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem 
+                                    onClick={() => {
+                                      const newName = prompt('Enter new stage name:', stage.name);
+                                      if (newName) handleStageEdit(stage.id, newName);
+                                    }}
+                                  >
+                                    <Edit className="h-4 w-4 mr-2" />
+                                    Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem 
+                                    onClick={() => {
+                                      setStageToDelete(stage.id);
+                                    }}
+                                    className="text-red-600"
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => handleArchiveAll(stage.id)}>
+                                    <Archive className="h-4 w-4 mr-2" />
+                                    Archive All
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleUnarchiveAll(stage.id)}>
+                                    <Archive className="h-4 w-4 mr-2" />
+                                    Unarchive All
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Tasks Container - Only show if not folded */}
+                      {!foldedStages.has(stage.id) && (
+                        <div className="space-y-2 min-h-[200px]">
+                          {!stage.tasks?.length ? (
+                            <div className="flex items-center justify-center h-[200px] border-2 border-dashed border-gray-200 rounded-lg">
+                              <p className="text-sm text-gray-500">Drop tasks here</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {stage.tasks.map((task) => (
+                                <Card 
+                                  key={task.id} 
+                                  className="p-2.5 cursor-pointer hover:shadow-md transition-shadow"
+                                  draggable
+                                >
+                                  <div className="flex items-start gap-2">
+                                    <div onClick={() => handleTaskStatusChange(task.id, task.status)}>
+                                      <StatusIcon status={task.status} />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="text-sm font-medium mb-0.5 truncate">{task.title}</h4>
+                                      <p className="text-xs text-gray-600 line-clamp-2">{task.description}</p>
+                                      
+                                      <div className="mt-2 flex items-center justify-between text-xs">
+                                        {task.assignee && (
+                                          <Avatar className="h-5 w-5">
+                                            <AvatarImage 
+                                              src={task.assignee.profile_image_url || '/default-avatar.png'} 
+                                              alt={task.assignee.name} 
+                                            />
+                                            <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
+                                          </Avatar>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </Card>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                ))}
+
+                {/* Add Stage Button at the end of stages */}
+                <button
+                  onClick={() => setIsAddingStage(true)}
+                  className="w-[300px] flex-shrink-0 h-[200px] flex items-center justify-center border-2 border-dashed border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                  disabled={isDeleting}
+                >
+                  <div className="flex flex-col items-center gap-2">
+                    <Plus className="h-6 w-6 text-gray-400" />
+                    <span className="text-sm text-gray-500">Add Stage</span>
+                  </div>
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stage</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Assignee</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Due Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stages?.flatMap(stage => 
+                stage.tasks?.map(task => (
+                  <tr key={task.id} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center">
+                        <StatusIcon status={task.status} />
+                        <span className="ml-2">{task.title}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm">{stage.name}</td>
+                    <td className="px-4 py-3">
+                      {task.assignee && (
+                        <div className="flex items-center">
+                          <Avatar className="h-6 w-6">
+                            <AvatarImage src={task.assignee.profile_image_url || '/default-avatar.png'} />
+                            <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
+                          </Avatar>
+                          <span className="ml-2 text-sm">{task.assignee.name}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {task.due_date && new Date(task.due_date).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs
+                        ${task.status === 'done' ? 'bg-green-100 text-green-800' :
+                          task.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'}`}>
+                        {task.status.replace('_', ' ')}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog 
+        open={stageToDelete !== null} 
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) {
+            setStageToDelete(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this stage and all its tasks. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={async () => {
+                if (stageToDelete !== null) {
+                  await handleStageDelete(stageToDelete);
+                }
+              }}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Deleting...
+                </div>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 } 
