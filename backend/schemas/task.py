@@ -81,4 +81,11 @@ class Task(TaskBase):
     attachments: Optional[List[FileAttachment]] = None
 
     class Config:
+        from_attributes = True
+
+class TaskStageWithTasks(TaskStage):
+    """Task stage schema that includes the tasks in the stage"""
+    tasks: List[Task] = []
+
+    class Config:
         from_attributes = True 

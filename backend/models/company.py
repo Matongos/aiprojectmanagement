@@ -23,7 +23,7 @@ class Company(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    tasks = relationship("Task", back_populates="company")
+    tasks = relationship("Task", back_populates="company", lazy="dynamic")  # Optional tasks relationship
     creator = relationship("User", back_populates="created_companies", overlaps="created_companies")
 
     def __repr__(self):

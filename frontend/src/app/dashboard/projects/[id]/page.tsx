@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "react-hot-toast";
 import { fetchApi } from "@/lib/api-helper";
-import { API_BASE_URL } from "@/lib/constants";
+import { API_BASE_URL, DEFAULT_AVATAR_URL } from "@/lib/constants";
 import { 
   Plus, 
   Star, 
@@ -222,14 +222,27 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
   useEffect(() => {
     const fetchUsers = async () => {
       try {
+        if (!token) {
+          console.log("No token available");
+          return;
+        }
+
         const response = await fetch(`${API_BASE_URL}/users`, {
           headers: {
-            Authorization: `Bearer ${token}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
-          }
+          },
+          credentials: 'include'  // Include credentials in the request
         });
         
-        if (!response.ok) throw new Error('Failed to fetch users');
+        if (!response.ok) {
+          if (response.status === 401) {
+            // Handle unauthorized error - maybe redirect to login
+            router.push('/login');
+            return;
+          }
+          throw new Error('Failed to fetch users');
+        }
         
         const data = await response.json();
         setUsers(data);
@@ -239,7 +252,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     };
 
     fetchUsers();
-  }, [token]);
+  }, [token, router]);
 
   const handleCreateStage = async () => {
     if (!projectId) return;
@@ -402,7 +415,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       setIsDeleting(true);
       
       // Call the backend endpoint to delete the stage
-      const response = await fetch(`${API_BASE_URL}/task_stages/${stageId}`, {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages/${stageId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -549,18 +562,71 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     setSelectedAssignees(prev => prev.filter(user => user.id !== userId));
   };
 
-  const renderEmptyState = () => (
-    <div className="flex items-center justify-center h-[60vh]">
-      <div className="text-center">
-        <h3 className="text-lg font-medium text-gray-700 mb-2">No stages yet</h3>
-        <p className="text-sm text-gray-500 mb-4">Create your first stage to get started</p>
-        <Button onClick={() => setIsAddingStage(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add Stage
-        </Button>
+  const renderEmptyState = () => {
+    const placeholderStages = [
+      { name: "To Do", description: "Tasks to be started" },
+      { name: "In Progress", description: "Tasks currently being worked on" },
+      { name: "Done", description: "Completed tasks" }
+    ];
+
+    return (
+      <div className="overflow-x-auto">
+        <div className="inline-flex gap-4 min-w-full pb-4">
+          {/* Real Inbox Stage */}
+          <div className="w-[300px] flex-shrink-0 bg-gray-50 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-medium">Inbox</h3>
+                <span className="text-xs text-gray-500 px-2 py-0.5 bg-gray-200 rounded-full">0</span>
+              </div>
+            </div>
+            <div className="mt-3 space-y-2 min-h-[200px]">
+              <div className="flex items-center justify-center h-[200px] border-2 border-dashed border-gray-200 rounded-lg">
+                <p className="text-sm text-gray-500">Drop tasks here</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Placeholder Stages */}
+          {placeholderStages.map((stage, index) => (
+            <div key={index} className="w-[300px] flex-shrink-0 bg-gray-50/30 rounded-lg p-3 relative">
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-sm text-gray-400">Example Stage:</p>
+                  <h4 className="text-lg font-medium text-gray-400">{stage.name}</h4>
+                  <p className="text-xs text-gray-400 mt-1">{stage.description}</p>
+                </div>
+              </div>
+              <div className="opacity-30 pointer-events-none">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-medium">{stage.name}</h3>
+                    <span className="text-xs text-gray-500 px-2 py-0.5 bg-gray-200 rounded-full">0</span>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2 min-h-[200px]">
+                  <div className="flex items-center justify-center h-[200px] border-2 border-dashed border-gray-200 rounded-lg">
+                    <p className="text-sm text-gray-500">Drop tasks here</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Add Stage Button */}
+          <button
+            onClick={() => setIsAddingStage(true)}
+            className="w-[300px] flex-shrink-0 h-[200px] flex items-center justify-center border-2 border-dashed border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+          >
+            <div className="flex flex-col items-center gap-2">
+              <Plus className="h-6 w-6 text-gray-400" />
+              <span className="text-sm text-gray-500">Add Stage</span>
+            </div>
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const handleFoldStage = async (stageId: number) => {
     try {
@@ -694,7 +760,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                   >
                     <Avatar className="h-6 w-6 mr-2">
                       <AvatarImage 
-                        src={user.profile_image_url || '/default-avatar.png'} 
+                        src={user.profile_image_url || DEFAULT_AVATAR_URL} 
                         alt={user.name || ''} 
                       />
                       <AvatarFallback>{user.name ? user.name[0] : '?'}</AvatarFallback>
@@ -1011,7 +1077,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                         {task.assignee && (
                                           <Avatar className="h-5 w-5">
                                             <AvatarImage 
-                                              src={task.assignee.profile_image_url || '/default-avatar.png'} 
+                                              src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} 
                                               alt={task.assignee.name} 
                                             />
                                             <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
@@ -1072,7 +1138,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                       {task.assignee && (
                         <div className="flex items-center">
                           <Avatar className="h-6 w-6">
-                            <AvatarImage src={task.assignee.profile_image_url || '/default-avatar.png'} />
+                            <AvatarImage src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} />
                             <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
                           </Avatar>
                           <span className="ml-2 text-sm">{task.assignee.name}</span>

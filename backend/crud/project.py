@@ -77,10 +77,7 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
 
         # Create default stages
         default_stages = [
-            {"name": "Inbox", "description": "Default stage for unorganized tasks", "sequence": 1},
-            {"name": "To Do", "description": "Tasks to be started", "sequence": 2},
-            {"name": "In Progress", "description": "Tasks currently being worked on", "sequence": 3},
-            {"name": "Done", "description": "Completed tasks", "sequence": 4}
+            {"name": "Inbox", "description": "Default stage for unorganized tasks", "sequence": 1}
         ]
 
         for stage_data in default_stages:
@@ -129,6 +126,15 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
             .limit(limit)
             .all()
         )
+
+    def get_all_tags(self, db: Session) -> List[str]:
+        """Get all unique tags from all projects"""
+        projects = db.query(self.model).all()
+        all_tags = set()
+        for project in projects:
+            if project.tags:
+                all_tags.update(project.tags)
+        return sorted(list(all_tags))
 
 class CRUDProjectStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageCreate]):
     def create_stage(self, db: Session, *, obj_in: TaskStageCreate) -> TaskStage:

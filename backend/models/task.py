@@ -32,7 +32,7 @@ class Task(Base):
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)  # Not assignee_id
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     milestone_id = Column(Integer, ForeignKey("milestones.id"), nullable=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)  # Optional company association
     
     # Dates
     start_date = Column(DateTime(timezone=True), nullable=True)  # Not date_start
@@ -45,30 +45,30 @@ class Task(Base):
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     date_last_stage_update = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
     project = relationship("Project", back_populates="tasks")
     stage = relationship("TaskStage", back_populates="tasks")
+    parent = relationship("Task", remote_side=[id], back_populates="subtasks")
     assignee = relationship("User", foreign_keys=[assigned_to], back_populates="assigned_tasks")
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")
     milestone = relationship("Milestone", back_populates="tasks")
+    company = relationship("Company", back_populates="tasks")  # Optional company relationship
     attachments = relationship("FileAttachment", back_populates="task", cascade="all, delete-orphan")
     activities = relationship("Activity", back_populates="task", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     time_entries = relationship("TimeEntry", back_populates="task", cascade="all, delete-orphan")
-    parent = relationship("Task", remote_side=[id], back_populates="subtasks")
     subtasks = relationship("Task", back_populates="parent", remote_side=[parent_id])
-    company = relationship("Company", back_populates="tasks")
-    
-    # Task dependencies
+
+    # Many-to-many relationship for task dependencies
     depends_on = relationship(
-        'Task', 
-        secondary='task_dependencies',
+        "Task",
+        secondary=task_dependencies,
         primaryjoin=id==task_dependencies.c.task_id,
         secondaryjoin=id==task_dependencies.c.depends_on_id,
-        backref='dependent_tasks'
+        backref="dependent_tasks"
     )
 
     def __repr__(self):

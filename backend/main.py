@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -30,10 +30,14 @@ app = FastAPI(
     openapi_version="3.0.2"
 )
 
-# Configure CORS
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://192.168.56.1:3000", "http://localhost:3000"],  # Add your frontend URLs
+    allow_origins=[
+        "http://localhost:3000",  # Local development
+        "http://192.168.56.1:3000",  # Your specific IP
+        "http://192.168.56.1:8003"  # Your backend URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -56,6 +60,7 @@ app.include_router(comments.router)
 app.include_router(notifications.router)
 app.include_router(task_stages.router)
 app.include_router(stages.router)
+app.include_router(permissions.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

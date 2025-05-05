@@ -1,15 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Calendar, Star, Clock } from "lucide-react";
+import { Calendar, Star, Clock, Edit, Save, X } from "lucide-react";
 import { API_BASE_URL } from "@/lib/constants";
 import { toast } from "react-hot-toast";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { use } from "react";
 
 interface Project {
   id: number;
@@ -29,170 +30,261 @@ interface Project {
   };
 }
 
-export default function ProjectView() {
+interface EditedProject {
+  name?: string;
+  description?: string;
+  customer?: string;
+  start_date?: string;
+  end_date?: string;
+  allocated_hours?: string;
+  project_manager_id?: number;
+  tags?: string[];
+}
+
+const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
+  const resolvedParams = use(params);
   const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState(true);
-  const params = useParams();
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedProject, setEditedProject] = useState<EditedProject>({});
+  const [isLoading, setIsLoading] = useState(true);
   const { token } = useAuthStore();
 
   useEffect(() => {
-    const fetchProject = async () => {
+    const fetchProjectData = async () => {
+      if (!token || !resolvedParams?.id) return;
+      
       try {
-        const response = await fetch(`${API_BASE_URL}/projects/${params.id}`, {
+        setIsLoading(true);
+        const response = await fetch(`${API_BASE_URL}/projects/${resolvedParams.id}`, {
           headers: {
-            Authorization: `Bearer ${token}`,
-          },
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
         });
 
         if (!response.ok) {
-          throw new Error("Failed to fetch project");
+          throw new Error('Failed to fetch project');
         }
 
         const data = await response.json();
         setProject(data);
+        setEditedProject({
+          name: data.name || '',
+          description: data.description || '',
+          customer: data.customer || '',
+          start_date: data.start_date || '',
+          end_date: data.end_date || '',
+          allocated_hours: data.allocated_hours || '',
+          project_manager_id: data.project_manager?.id,
+          tags: data.tags || []
+        });
       } catch (error) {
-        toast.error("Failed to load project details");
+        console.error('Error fetching project:', error);
+        toast.error('Failed to load project');
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
-    if (params.id) {
-      fetchProject();
+    fetchProjectData();
+  }, [resolvedParams?.id, token]);
+
+  const handleSaveChanges = async () => {
+    try {
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/projects/${resolvedParams?.id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(editedProject)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update project');
+      }
+
+      const updatedProject = await response.json();
+      setProject(updatedProject);
+      setIsEditing(false);
+      toast.success('Project updated successfully');
+    } catch (error) {
+      toast.error('Failed to update project');
     }
-  }, [params.id, token]);
-
-  if (loading) {
-    return <div className="p-4">Loading project details...</div>;
-  }
-
-  if (!project) {
-    return <div className="p-4">Project not found</div>;
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      month: "2-digit",
-      day: "2-digit",
-      year: "numeric",
-    });
   };
+
+  if (isLoading) return <div className="p-4">Loading project details...</div>;
+  if (!project) return <div className="p-4">Project not found</div>;
 
   return (
     <div className="container mx-auto py-6 px-4">
-      <div className="mb-6">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <Star className="h-6 w-6 text-yellow-400" />
-            <h1 className="text-2xl font-bold">{project.name}</h1>
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Star className="h-5 w-5 text-yellow-400" />
+            <h1 className="text-2xl font-bold">
+              {isEditing ? (
+                <Input
+                  value={editedProject.name || ''}
+                  onChange={(e) => setEditedProject(prev => ({ ...prev, name: e.target.value }))}
+                  className="max-w-md"
+                  placeholder="Project name"
+                />
+              ) : (
+                project.name
+              )}
+            </h1>
           </div>
-          <div className="flex items-center gap-4">
-            <Button variant="outline" size="sm">
-              Add Shortcuts
-            </Button>
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm">To Do</Button>
-              <Button variant="secondary" size="sm">In Progress</Button>
-              <Button variant="secondary" size="sm">Done</Button>
-              <Button variant="secondary" size="sm">Canceled</Button>
-            </div>
+          <div className="flex items-center gap-2">
+            {isEditing ? (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={handleSaveChanges}>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Changes
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+                <Edit className="h-4 w-4 mr-2" />
+                Edit Project
+              </Button>
+            )}
           </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2">
-          <Card className="p-6">
-            <div className="grid grid-cols-2 gap-6 mb-6">
-              <div>
-                <label className="text-sm text-gray-500">Name of the Tasks</label>
-                <div className="font-medium">{project.name}</div>
-              </div>
-              <div>
-                <label className="text-sm text-gray-500">Project Manager</label>
-                <div className="flex items-center gap-2">
-                  <Avatar className="h-6 w-6">
-                    <AvatarImage 
-                      src={project.project_manager?.profile_image_url || '/default-avatar.png'}
-                      alt={project.project_manager?.name}
-                    />
-                    <AvatarFallback>{project.project_manager?.name[0]}</AvatarFallback>
-                  </Avatar>
-                  <span className="font-medium">{project.project_manager?.name}</span>
-                </div>
-              </div>
-              <div>
-                <label className="text-sm text-gray-500">Customer</label>
-                <div className="font-medium">{project.customer}</div>
-              </div>
-              <div>
-                <label className="text-sm text-gray-500">Planned Date</label>
+        <div className="grid grid-cols-2 gap-6">
+          <div>
+            <label className="text-sm text-gray-500">Name of the Tasks</label>
+            {isEditing ? (
+              <Input
+                value={editedProject.name || ''}
+                onChange={(e) => setEditedProject(prev => ({ ...prev, name: e.target.value }))}
+                className="mt-1"
+                placeholder="Enter task name"
+              />
+            ) : (
+              <div className="mt-1 font-medium">{project.name}</div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-500">Project Manager</label>
+            <div className="flex items-center gap-2 mt-1">
+              <Avatar className="h-8 w-8">
+                <AvatarImage src={project.project_manager?.profile_image_url || '/default-avatar.svg'} />
+                <AvatarFallback>{project.project_manager?.name ? project.project_manager.name[0] : '?'}</AvatarFallback>
+              </Avatar>
+              <span className="font-medium">{project.project_manager?.name || 'No manager assigned'}</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-500">Customer</label>
+            {isEditing ? (
+              <Input
+                value={editedProject.customer || ''}
+                onChange={(e) => setEditedProject(prev => ({ ...prev, customer: e.target.value }))}
+                className="mt-1"
+                placeholder="Enter customer name"
+              />
+            ) : (
+              <div className="mt-1 font-medium">{project.customer || 'No customer specified'}</div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-500">Planned Date</label>
+            <div className="grid grid-cols-2 gap-4 mt-1">
+              {isEditing ? (
+                <>
+                  <Input
+                    type="date"
+                    value={editedProject.start_date || ''}
+                    onChange={(e) => setEditedProject(prev => ({ ...prev, start_date: e.target.value }))}
+                  />
+                  <Input
+                    type="date"
+                    value={editedProject.end_date || ''}
+                    onChange={(e) => setEditedProject(prev => ({ ...prev, end_date: e.target.value }))}
+                  />
+                </>
+              ) : (
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4 text-gray-500" />
-                  <span className="font-medium">
-                    {formatDate(project.start_date)} — {formatDate(project.end_date)}
+                  <span>
+                    {new Date(project.start_date).toLocaleDateString()} — {new Date(project.end_date).toLocaleDateString()}
                   </span>
                 </div>
-              </div>
-              <div>
-                <label className="text-sm text-gray-500">Tags</label>
-                <div className="flex gap-2">
-                  {project.tags?.map((tag, index) => (
-                    <span
-                      key={index}
-                      className="px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-600"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="text-sm text-gray-500">Allocated Hours</label>
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-gray-500" />
-                  <span className="font-medium">{project.allocated_hours}</span>
-                </div>
-              </div>
+              )}
             </div>
+          </div>
 
-            <Tabs defaultValue="description" className="w-full">
-              <TabsList className="mb-4">
-                <TabsTrigger value="description">Description</TabsTrigger>
-                <TabsTrigger value="settings">Settings</TabsTrigger>
-                <TabsTrigger value="checklist">Checklist</TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="description">
-                <div className="prose max-w-none">
-                  {project.description || "No description provided."}
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="settings">
-                <div className="text-gray-600">
-                  Project settings will be displayed here.
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="checklist">
-                <div className="text-gray-600">
-                  Project checklist will be displayed here.
-                </div>
-              </TabsContent>
-            </Tabs>
-          </Card>
+          <div>
+            <label className="text-sm text-gray-500">Tags</label>
+            <div className="flex gap-2 mt-1">
+              {(project.tags || []).map((tag, index) => (
+                <span
+                  key={index}
+                  className={`px-2 py-1 text-xs rounded-full ${
+                    tag.toLowerCase() === 'bug' ? 'bg-red-100 text-red-600' :
+                    tag.toLowerCase() === 'experiment' ? 'bg-blue-100 text-blue-600' :
+                    tag.toLowerCase() === 'internal' ? 'bg-orange-100 text-orange-600' :
+                    tag.toLowerCase() === 'usability' ? 'bg-purple-100 text-purple-600' :
+                    'bg-gray-100 text-gray-600'
+                  }`}
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-500">Allocated Hours</label>
+            {isEditing ? (
+              <Input
+                type="text"
+                value={editedProject.allocated_hours || ''}
+                onChange={(e) => setEditedProject(prev => ({ ...prev, allocated_hours: e.target.value }))}
+                className="mt-1"
+                placeholder="Enter allocated hours"
+              />
+            ) : (
+              <div className="flex items-center gap-2 mt-1">
+                <Clock className="h-4 w-4 text-gray-500" />
+                <span>{project.allocated_hours || '00:00'}</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="col-span-1">
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Project Activity</h3>
-            <div className="text-gray-600">
-              Recent activity will be displayed here.
+        <div className="mt-6">
+          <label className="text-sm text-gray-500">Description</label>
+          {isEditing ? (
+            <Textarea
+              value={editedProject.description || ''}
+              onChange={(e) => setEditedProject(prev => ({ ...prev, description: e.target.value }))}
+              className="mt-1"
+              placeholder="Enter project description"
+              rows={4}
+            />
+          ) : (
+            <div className="mt-1 prose max-w-none">
+              {project.description || "No description provided."}
             </div>
-          </Card>
+          )}
         </div>
-      </div>
+      </Card>
     </div>
   );
-} 
+};
+
+export default ProjectView; 

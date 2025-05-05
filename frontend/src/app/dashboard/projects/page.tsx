@@ -6,14 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -21,13 +13,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Grid, List, Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3, Eye } from "lucide-react";
+import { Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3, Eye } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import AuthWrapper from "@/components/AuthWrapper";
 import { API_BASE_URL } from "@/lib/constants";
-import { fetchApi } from "@/lib/api-helper";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 
 interface Project {
@@ -41,15 +31,18 @@ interface Project {
   task_count: number;
   tags: string[];
   members: { id: number; user: { profile_image_url?: string; name: string } }[];
+  creator_id?: number;
 }
 
-const statusConfig = {
-  on_track: { label: 'On Track', color: 'bg-green-500' },
-  at_risk: { label: 'At Risk', color: 'bg-yellow-500' },
-  off_track: { label: 'Off Track', color: 'bg-red-500' },
-  on_hold: { label: 'On Hold', color: 'bg-gray-500' },
-  done: { label: 'Done', color: 'bg-blue-500' },
-  default: { label: 'Unknown', color: 'bg-gray-300' }
+type ProjectStatus = 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
+
+const statusConfig: Record<ProjectStatus | 'default', { label: string; color: string; description: string }> = {
+  on_track: { label: 'On Track', color: 'bg-green-500', description: 'Project is progressing as planned' },
+  at_risk: { label: 'At Risk', color: 'bg-yellow-500', description: 'Project might face some issues' },
+  off_track: { label: 'Off Track', color: 'bg-red-500', description: 'Project is behind schedule' },
+  on_hold: { label: 'On Hold', color: 'bg-gray-500', description: 'Project is temporarily paused' },
+  done: { label: 'Done', color: 'bg-blue-500', description: 'Project is completed' },
+  default: { label: 'Unknown', color: 'bg-gray-300', description: 'Status not set' }
 };
 
 export default function ProjectsPage() {
@@ -64,7 +57,6 @@ function ProjectsContent() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
   const { user, token } = useAuthStore();
@@ -109,11 +101,11 @@ function ProjectsContent() {
       }
 
       const data = await response.json();
-      console.log("Projects data with status:", data.map(p => ({ id: p.id, name: p.name, status: p.status })));
+      console.log("Projects data with status:", data.map((p: Project) => ({ id: p.id, name: p.name, status: p.status })));
       
-      const validatedData = data.map(project => ({
+      const validatedData = data.map((project: Project) => ({
         ...project,
-        status: statusConfig[project.status] ? project.status : 'default'
+        status: project.status in statusConfig ? project.status : 'default'
       }));
       
       setProjects(validatedData);
@@ -203,6 +195,65 @@ function ProjectsContent() {
     return isAdmin || project.creator_id === Number(user.id);
   };
 
+  const handleStatusChange = async (projectId: number, newStatus: ProjectStatus) => {
+    try {
+      const authToken = token || localStorage.getItem('token');
+      
+      if (!authToken) {
+        throw new Error("No authentication token found");
+      }
+
+      // First update optimistically in the UI
+      setProjects(projects.map(project => 
+        project.id === projectId 
+          ? { ...project, status: newStatus }
+          : project
+      ));
+      
+      const response = await fetch(
+        `${API_BASE_URL}/projects/${projectId}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ status: newStatus })
+        }
+      );
+
+      if (response.status === 401) {
+        toast.error("Your session has expired. Please log in again.");
+        router.push('/auth/login');
+        return;
+      }
+
+      if (!response.ok) {
+        // Revert the optimistic update if the API call fails
+        setProjects(projects.map(project => 
+          project.id === projectId 
+            ? { ...project }
+            : project
+        ));
+        throw new Error("Failed to update project status");
+      }
+
+      const updatedProject = await response.json();
+      
+      // Update with the response from the server
+      setProjects(projects.map(project => 
+        project.id === projectId 
+          ? { ...project, ...updatedProject }
+          : project
+      ));
+
+      toast.success(`Project status updated to ${statusConfig[newStatus].label}`);
+    } catch (error) {
+      console.error("Error updating project status:", error);
+      toast.error("Failed to update project status");
+    }
+  };
+
   const filteredProjects = projects.filter(project =>
     project.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -254,10 +305,12 @@ function ProjectsContent() {
       <div className="flex justify-between items-center mb-8">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">Projects</h1>
-          <Button variant="outline" size="sm">
-            <Star className="w-4 h-4 mr-2" />
-            New
-          </Button>
+          {canCreateProjects && (
+            <Button onClick={() => router.push("/dashboard/projects/create")} variant="default">
+              <Plus className="h-4 w-4 mr-2" />
+              Create New Project
+            </Button>
+          )}
         </div>
         <div className="flex items-center gap-4">
           <div className="relative">
@@ -373,7 +426,41 @@ function ProjectsContent() {
                     </div>
                   )}
                 </div>
-                <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button 
+                      className="flex items-center gap-2 hover:bg-gray-100 px-2 py-1 rounded-md transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                      <span className="text-sm text-gray-600">{statusConfig[project.status]?.label || statusConfig.default.label}</span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-56" align="end">
+                    {(Object.keys(statusConfig) as ProjectStatus[])
+                      .filter(key => key !== 'default')
+                      .map((key) => (
+                        <DropdownMenuItem 
+                          key={key}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStatusChange(project.id, key);
+                          }}
+                          className={`${project.status === key ? 'bg-gray-100' : ''}`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${statusConfig[key].color}`} />
+                            <div>
+                              <div className="text-sm font-medium">{statusConfig[key].label}</div>
+                              <div className="text-xs text-gray-500">{statusConfig[key].description}</div>
+                            </div>
+                          </div>
+                        </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <span className="text-sm font-medium">{project.task_count || 0} Tasks</span>
               </div>
             </div>

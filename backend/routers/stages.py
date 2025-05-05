@@ -27,7 +27,7 @@ async def read_project_stages(
     current_user: dict = Depends(get_current_user)
 ):
     """Get all stages for a project"""
-    return stage_crud.get_project_stages(db, project_id)
+    return stage_crud.get_project_stages(db=db, project_id=project_id)
 
 @router.get("/{stage_id}", response_model=TaskStageSchema)
 async def read_stage(

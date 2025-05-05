@@ -1,6 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from models.task_stage import TaskStage
+from models.task import Task
 from schemas.task_stage import TaskStageCreate, TaskStageUpdate
 from crud.base import CRUDBase
 from sqlalchemy import desc
@@ -92,10 +93,41 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
 
     def delete_stage(self, db: Session, *, stage_id: int) -> TaskStage:
         """Delete a task stage"""
-        obj = db.query(self.model).get(stage_id)
-        db.delete(obj)
+        # Get the stage to delete
+        stage = db.query(self.model).get(stage_id)
+        if not stage:
+            return None
+
+        # Get the default "Inbox" stage for this project
+        inbox_stage = (
+            db.query(self.model)
+            .filter(
+                TaskStage.project_id == stage.project_id,
+                TaskStage.name == "Inbox"
+            )
+            .first()
+        )
+
+        if inbox_stage:
+            # Move all tasks in this stage to the Inbox stage
+            db.query(Task).filter(Task.stage_id == stage_id).update(
+                {"stage_id": inbox_stage.id},
+                synchronize_session=False
+            )
+
+        # Update sequences of remaining stages
+        db.query(self.model).filter(
+            TaskStage.project_id == stage.project_id,
+            TaskStage.sequence > stage.sequence
+        ).update(
+            {"sequence": TaskStage.sequence - 1},
+            synchronize_session=False
+        )
+
+        # Delete the stage
+        db.delete(stage)
         db.commit()
-        return obj
+        return stage
 
     def reorder_stages(self, db: Session, project_id: int, stage_order: List[int]) -> List[TaskStage]:
         """Reorder stages in a project"""
