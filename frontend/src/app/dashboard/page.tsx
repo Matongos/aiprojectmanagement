@@ -71,6 +71,9 @@ export default function Dashboard() {
   useEffect(() => {
     async function fetchData() {
       try {
+        setLoading(true);
+        setError(null);
+        
         const projectsData = await getRecentProjects();
         setProjects(projectsData || []);
         
@@ -106,8 +109,8 @@ export default function Dashboard() {
         ]);
 
       } catch (error) {
-        console.error('Failed to fetch dashboard data', error);
-        setError('Failed to load dashboard data. Please try again later.');
+        console.error('Failed to fetch dashboard data:', error);
+        setError(error instanceof Error ? error.message : 'Failed to load dashboard data. Please try again later.');
         setProjects([]); // Set empty projects array on error
       } finally {
         setLoading(false);
@@ -116,21 +119,35 @@ export default function Dashboard() {
 
     if (user) {
       fetchData();
+    } else {
+      setLoading(false);
+      setError('Please log in to view dashboard data.');
     }
   }, [user]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      <div className="container mx-auto p-6">
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          <p className="mt-4 text-gray-600">Loading dashboard data...</p>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-red-500">{error}</div>
+      <div className="container mx-auto p-6">
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="text-red-500 mb-4">{error}</div>
+          <button 
+            onClick={() => window.location.reload()} 
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

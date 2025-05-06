@@ -242,54 +242,49 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
           return;
         }
 
-        const response = await fetch(`${API_BASE_URL}/users`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          credentials: 'include'  // Include credentials in the request
-        });
-        
-        if (!response.ok) {
-          if (response.status === 401) {
-            // Handle unauthorized error - maybe redirect to login
-            router.push('/login');
-            return;
-          }
-          throw new Error('Failed to fetch users');
-        }
-        
-        const data = await response.json();
+        const data = await fetchApi<User[]>('/users');
         setUsers(data);
       } catch (error) {
         console.error('Error fetching users:', error);
+        toast.error('Failed to load users');
       }
     };
 
     fetchUsers();
-  }, [token, router]);
+  }, [token]);
 
+  // Fetch milestones for the project
   useEffect(() => {
     const fetchMilestones = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/milestones/project/${projectId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+        // Try both possible milestone endpoints
+        try {
+          // First try the /milestones/project/{id} endpoint
+          const data = await fetchApi<Milestone[]>(`/milestones/project/${projectId}`);
+          setMilestones(data || []);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('404')) {
+            // If first endpoint fails, try alternative endpoint
+            const data = await fetchApi<Milestone[]>(`/projects/${projectId}/milestones`);
+            setMilestones(data || []);
+          } else {
+            throw error;
           }
-        });
-        
-        if (!response.ok) throw new Error('Failed to fetch milestones');
-        
-        const data = await response.json();
-        setMilestones(data);
+        }
       } catch (error) {
         console.error('Error fetching milestones:', error);
-        toast.error('Failed to load milestones');
+        // Silently set empty milestones array for 404s
+        if (error instanceof Error && error.message.includes('404')) {
+          setMilestones([]);
+        } else {
+          toast.error('Failed to load milestones');
+        }
       }
     };
 
-    fetchMilestones();
+    if (projectId) {
+      fetchMilestones();
+    }
   }, [projectId, token]);
 
   const handleCreateStage = async () => {
@@ -783,24 +778,27 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
             />
           </div>
           
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Milestone</label>
-            <Select
-              value={selectedMilestone}
-              onValueChange={setSelectedMilestone}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select milestone" />
-              </SelectTrigger>
-              <SelectContent>
-                {milestones.map((milestone) => (
-                  <SelectItem key={milestone.id} value={milestone.id}>
-                    {milestone.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {/* Only show milestone selector if milestones exist */}
+          {milestones.length > 0 && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Milestone</label>
+              <Select
+                value={selectedMilestone}
+                onValueChange={setSelectedMilestone}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select milestone" />
+                </SelectTrigger>
+                <SelectContent>
+                  {milestones.map((milestone) => (
+                    <SelectItem key={milestone.id} value={milestone.id}>
+                      {milestone.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Deadline</label>
@@ -1147,6 +1145,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                 <Card 
                                   key={task.id} 
                                   className="p-3 cursor-pointer hover:shadow-md transition-shadow"
+                                  onClick={() => router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`)}
                                 >
                                   {/* Task Header */}
                                   <div className="flex items-start justify-between mb-2">
@@ -1245,7 +1244,11 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
             <tbody>
               {stages?.flatMap(stage => 
                 stage.tasks?.map(task => (
-                  <tr key={task.id} className="border-b hover:bg-gray-50">
+                  <tr 
+                    key={task.id} 
+                    className="border-b hover:bg-gray-50 cursor-pointer"
+                    onClick={() => router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`)}
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center">
                         <StatusIcon status={task.status} />

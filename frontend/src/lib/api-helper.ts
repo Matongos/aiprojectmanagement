@@ -30,26 +30,33 @@ export async function fetchApi<T>(
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
+    'Accept': 'application/json',
+    'Origin': typeof window !== 'undefined' ? window.location.origin : '',
     ...options.headers,
   };
 
   try {
-    // Make the request
+    // Make the request with credentials
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include',
+      mode: 'cors'
     });
+
+    // Handle redirects for authentication
+    if (response.status === 307 || response.status === 401) {
+      if (redirectOnAuthError && typeof window !== 'undefined') {
+        console.warn('Authentication required, redirecting to login');
+        localStorage.removeItem('token');
+        localStorage.setItem('redirectAfterLogin', window.location.pathname);
+        window.location.href = '/auth/login';
+        throw new Error('Authentication required');
+      }
+    }
 
     // Check if the response is ok
     if (!response.ok) {
-      // If authentication error and should redirect
-      if (response.status === 401 && redirectOnAuthError && typeof window !== 'undefined') {
-        console.warn('Authentication token expired or invalid, redirecting to login');
-        localStorage.removeItem('token'); // Clear invalid token
-        localStorage.setItem('redirectAfterLogin', window.location.pathname);
-        window.location.href = '/auth/login';
-      }
-      
       // Try to get error details from response
       let errorMessage = `API Error: ${response.status} ${response.statusText}`;
       try {
@@ -57,8 +64,9 @@ export async function fetchApi<T>(
         if (errorData.detail) {
           errorMessage = errorData.detail;
         }
-      } catch (_) {
+      } catch (error) {
         // If we can't parse error as JSON, just use the status text
+        console.warn('Could not parse error response as JSON:', error);
       }
       
       throw new Error(errorMessage);
@@ -72,12 +80,17 @@ export async function fetchApi<T>(
   }
 }
 
+// Update the helper functions to use proper typing
+interface ApiData {
+  [key: string]: unknown;
+}
+
 /**
  * Helper for POST requests
  */
 export async function postApi<T>(
   endpoint: string,
-  data: any,
+  data: ApiData,
   options: RequestInit = {}
 ): Promise<T> {
   return fetchApi<T>(endpoint, {
@@ -92,7 +105,7 @@ export async function postApi<T>(
  */
 export async function putApi<T>(
   endpoint: string,
-  data: any,
+  data: ApiData,
   options: RequestInit = {}
 ): Promise<T> {
   return fetchApi<T>(endpoint, {
@@ -120,7 +133,7 @@ export async function deleteApi<T>(
  */
 export async function patchApi<T>(
   endpoint: string,
-  data: any,
+  data: ApiData,
   options: RequestInit = {}
 ): Promise<T> {
   return fetchApi<T>(endpoint, {

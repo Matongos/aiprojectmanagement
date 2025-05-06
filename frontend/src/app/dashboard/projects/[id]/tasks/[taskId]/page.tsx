@@ -29,19 +29,25 @@ import {
   Edit,
   Save,
   X,
+  Upload,
+  Download,
+  Trash2
 } from "lucide-react";
 import { API_BASE_URL, DEFAULT_AVATAR_URL } from "@/lib/constants";
 import { useAuthStore } from "@/store/authStore";
 import { toast } from "react-hot-toast";
+import AuthWrapper from "@/components/AuthWrapper";
+import { use } from "react";
 
 interface Task {
   id: number;
   name: string;
   description: string;
-  state: string;
-  priority: string;
+  state: 'draft' | 'in_progress' | 'done' | 'canceled';
+  priority: 'low' | 'normal' | 'high' | 'urgent';
   project_id: number;
   stage_id: number;
+  parent_id: number | null;
   assigned_to: number | null;
   milestone_id: number | null;
   company_id: number | null;
@@ -52,6 +58,7 @@ interface Task {
   progress: number;
   created_at: string;
   updated_at: string | null;
+  created_by: number;
   assignee: {
     id: number;
     name: string;
@@ -70,6 +77,8 @@ interface Task {
 interface Comment {
   id: number;
   content: string;
+  task_id: number;
+  parent_id: number | null;
   created_at: string;
   user: {
     id: number;
@@ -78,26 +87,59 @@ interface Comment {
   };
 }
 
-export default function TaskDetailsPage({ params }: { params: { id: string; taskId: string } }) {
+interface FileAttachment {
+  id: number;
+  filename: string;
+  original_filename: string;
+  file_size: number;
+  content_type: string;
+  description: string | null;
+  task_id: number;
+  uploaded_by: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: string }) {
   const router = useRouter();
   const { token, user } = useAuthStore();
   const [task, setTask] = useState<Task | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editedTask, setEditedTask] = useState<Partial<Task>>({});
   const [loading, setLoading] = useState(true);
+  const [uploadingFile, setUploadingFile] = useState(false);
 
   useEffect(() => {
     const fetchTaskDetails = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/tasks/${params.taskId}`, {
+        const storedToken = token || localStorage.getItem('token');
+        if (!storedToken) {
+          console.error("No token available");
+          router.push('/auth/login');
+          return;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
           headers: {
-            Authorization: `Bearer ${token}`,
+            'Authorization': `Bearer ${storedToken}`,
+            'Content-Type': 'application/json'
           },
+          credentials: 'include',
+          mode: 'cors'
         });
 
-        if (!response.ok) throw new Error("Failed to fetch task details");
+        if (response.status === 401) {
+          console.error("Unauthorized access");
+          router.push('/auth/login');
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch task details");
+        }
 
         const data = await response.json();
         setTask(data);
@@ -112,14 +154,17 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
 
     const fetchComments = async () => {
       try {
-        const response = await fetch(
-          `${API_BASE_URL}/tasks/${params.taskId}/comments`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
+        const storedToken = token || localStorage.getItem('token');
+        if (!storedToken) return;
+
+        const response = await fetch(`${API_BASE_URL}/comments/task/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${storedToken}`,
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include',
+          mode: 'cors'
+        });
 
         if (!response.ok) throw new Error("Failed to fetch comments");
 
@@ -130,20 +175,70 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
       }
     };
 
+    const fetchAttachments = async () => {
+      try {
+        const storedToken = token || localStorage.getItem('token');
+        if (!storedToken) return;
+
+        const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments`, {
+          headers: {
+            'Authorization': `Bearer ${storedToken}`,
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include',
+          mode: 'cors'
+        });
+
+        if (!response.ok) throw new Error("Failed to fetch attachments");
+
+        const data = await response.json();
+        setAttachments(data);
+      } catch (error) {
+        console.error("Error fetching attachments:", error);
+      }
+    };
+
     fetchTaskDetails();
     fetchComments();
-  }, [params.taskId, token]);
+    fetchAttachments();
+  }, [taskId, token, router]);
 
   const handleSave = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/tasks/${params.taskId}`, {
+      const storedToken = token || localStorage.getItem('token');
+      if (!storedToken) {
+        router.push('/auth/login');
+        return;
+      }
+
+      // Only send fields that are allowed to be updated
+      const updateData = {
+        name: editedTask.name,
+        description: editedTask.description,
+        state: editedTask.state,
+        priority: editedTask.priority,
+        assigned_to: editedTask.assigned_to,
+        deadline: editedTask.deadline,
+        planned_hours: editedTask.planned_hours,
+        start_date: editedTask.start_date,
+        end_date: editedTask.end_date
+      };
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+          'Authorization': `Bearer ${storedToken}`,
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify(editedTask),
+        credentials: 'include',
+        mode: 'cors',
+        body: JSON.stringify(updateData)
       });
+
+      if (response.status === 401) {
+        router.push('/auth/login');
+        return;
+      }
 
       if (!response.ok) throw new Error("Failed to update task");
 
@@ -161,17 +256,32 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
     if (!newComment.trim()) return;
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/tasks/${params.taskId}/comments`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ content: newComment }),
-        }
-      );
+      const storedToken = token || localStorage.getItem('token');
+      if (!storedToken) {
+        router.push('/auth/login');
+        return;
+      }
+
+      const commentData = {
+        content: newComment,
+        task_id: parseInt(taskId),
+        parent_id: null,
+        mentions: []
+      };
+
+      const response = await fetch(`${API_BASE_URL}/comments`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${storedToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(commentData)
+      });
+
+      if (response.status === 401) {
+        router.push('/auth/login');
+        return;
+      }
 
       if (!response.ok) throw new Error("Failed to add comment");
 
@@ -182,6 +292,116 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
     } catch (error) {
       console.error("Error adding comment:", error);
       toast.error("Failed to add comment");
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadingFile(true);
+      const storedToken = token || localStorage.getItem('token');
+      if (!storedToken) {
+        router.push('/auth/login');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('description', '');
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${storedToken}`
+        },
+        body: formData
+      });
+
+      if (response.status === 401) {
+        router.push('/auth/login');
+        return;
+      }
+
+      if (!response.ok) throw new Error("Failed to upload file");
+
+      const newAttachment = await response.json();
+      setAttachments(prev => [...prev, newAttachment]);
+      toast.success("File uploaded successfully");
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      toast.error("Failed to upload file");
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  const handleDownloadFile = async (fileId: number, filename: string) => {
+    try {
+      const storedToken = token || localStorage.getItem('token');
+      if (!storedToken) {
+        router.push('/auth/login');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/file-attachments/${fileId}/download`, {
+        headers: {
+          'Authorization': `Bearer ${storedToken}`
+        }
+      });
+
+      if (response.status === 401) {
+        router.push('/auth/login');
+        return;
+      }
+
+      if (!response.ok) throw new Error("Failed to download file");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Error downloading file:", error);
+      toast.error("Failed to download file");
+    }
+  };
+
+  const handleDeleteFile = async (fileId: number) => {
+    if (!window.confirm("Are you sure you want to delete this file?")) return;
+
+    try {
+      const storedToken = token || localStorage.getItem('token');
+      if (!storedToken) {
+        router.push('/auth/login');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/file-attachments/${fileId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${storedToken}`
+        }
+      });
+
+      if (response.status === 401) {
+        router.push('/auth/login');
+        return;
+      }
+
+      if (!response.ok) throw new Error("Failed to delete file");
+
+      setAttachments(prev => prev.filter(a => a.id !== fileId));
+      toast.success("File deleted successfully");
+    } catch (error) {
+      console.error("Error deleting file:", error);
+      toast.error("Failed to delete file");
     }
   };
 
@@ -246,9 +466,9 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
                 <MessageSquare className="h-4 w-4 mr-2" />
                 Comments
               </TabsTrigger>
-              <TabsTrigger value="checklist">
-                <CheckSquare className="h-4 w-4 mr-2" />
-                Checklist
+              <TabsTrigger value="attachments">
+                <Upload className="h-4 w-4 mr-2" />
+                Attachments
               </TabsTrigger>
             </TabsList>
 
@@ -300,10 +520,10 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
                   <Avatar className="h-8 w-8">
                     <AvatarImage
                       src={user?.profile_image_url || DEFAULT_AVATAR_URL}
-                      alt={user?.name || ""}
+                      alt={user?.full_name || ""}
                     />
                     <AvatarFallback>
-                      {user?.name ? user.name[0] : "?"}
+                      {user?.full_name ? user.full_name[0] : "?"}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1">
@@ -322,12 +542,52 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
               </div>
             </TabsContent>
 
-            <TabsContent value="checklist" className="mt-4">
+            <TabsContent value="attachments" className="mt-4">
               <div className="space-y-4">
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Checklist Item
-                </Button>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="file"
+                    id="file-upload"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                  />
+                  <Button
+                    onClick={() => document.getElementById('file-upload')?.click()}
+                    disabled={uploadingFile}
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    {uploadingFile ? "Uploading..." : "Upload File"}
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  {attachments.map((attachment) => (
+                    <Card key={attachment.id} className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4" />
+                          <span>{attachment.original_filename}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadFile(attachment.id, attachment.original_filename)}
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteFile(attachment.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
               </div>
             </TabsContent>
           </Tabs>
@@ -344,7 +604,7 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
                   <Select
                     value={editedTask.state}
                     onValueChange={(value) =>
-                      setEditedTask({ ...editedTask, state: value })
+                      setEditedTask({ ...editedTask, state: value as Task['state'] })
                     }
                   >
                     <SelectTrigger>
@@ -359,6 +619,31 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
                   </Select>
                 ) : (
                   <Badge>{task.state}</Badge>
+                )}
+              </div>
+
+              {/* Priority */}
+              <div>
+                <label className="text-sm font-medium mb-1 block">Priority</label>
+                {isEditing ? (
+                  <Select
+                    value={editedTask.priority}
+                    onValueChange={(value) =>
+                      setEditedTask({ ...editedTask, priority: value as Task['priority'] })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select priority" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="urgent">Urgent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Badge>{task.priority}</Badge>
                 )}
               </div>
 
@@ -426,5 +711,15 @@ export default function TaskDetailsPage({ params }: { params: { id: string; task
         </div>
       </div>
     </div>
+  );
+}
+
+export default function TaskDetailsPage({ params }: { params: Promise<{ id: string; taskId: string }> }) {
+  const resolvedParams = use(params);
+  
+  return (
+    <AuthWrapper>
+      <TaskDetailsContent projectId={resolvedParams.id} taskId={resolvedParams.taskId} />
+    </AuthWrapper>
   );
 }

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -36,12 +36,18 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Local development
         "http://192.168.56.1:3000",  # Your specific IP
-        "http://192.168.56.1:8003",  # Your backend URL
-        "*"  # Allow all origins temporarily for development
     ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+    ],
+    expose_headers=["Content-Length", "Content-Range"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
 
 # Mount static files
@@ -62,6 +68,7 @@ app.include_router(notifications.router)
 app.include_router(task_stages.router)
 app.include_router(stages.router)
 app.include_router(permissions.router)
+app.include_router(milestones.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

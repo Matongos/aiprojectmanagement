@@ -24,21 +24,13 @@ export interface Project {
 // Dashboard API calls
 export const getRecentProjects = async (): Promise<Project[]> => {
   try {
-    // First try to get recent projects
-    const data = await fetchApi<Project[]>('/projects/recent');
+    // First try to get recent projects with query params
+    const data = await fetchApi<Project[]>('/projects?sort=-created_at&limit=5');
     return data;
   } catch (error) {
-    // If the recent projects endpoint fails, fall back to getting all projects
-    try {
-      const data = await fetchApi<Project[]>('/projects');
-      // Sort by created_at to get most recent
-      return data.sort((a, b) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      ).slice(0, 5); // Return only the 5 most recent
-    } catch (fallbackError) {
-      console.error('Error fetching projects:', fallbackError);
-      return []; // Return empty array if both attempts fail
-    }
+    console.error('Error fetching recent projects:', error);
+    // Return empty array to prevent UI errors
+    return [];
   }
 };
 
