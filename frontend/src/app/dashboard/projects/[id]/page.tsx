@@ -64,6 +64,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface TaskStatus {
   id: string;
@@ -127,6 +134,11 @@ interface User {
   profile_image_url?: string;
 }
 
+interface Milestone {
+  id: number;
+  name: string;
+}
+
 const styles = `
   .writing-mode-vertical {
     writing-mode: vertical-rl;
@@ -156,6 +168,9 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
   const [foldedStages, setFoldedStages] = useState<Set<number>>(new Set());
   const [stageToDelete, setStageToDelete] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [selectedMilestone, setSelectedMilestone] = useState<number | null>(null);
+  const [deadline, setDeadline] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchProjectAndStages = async () => {
@@ -254,6 +269,29 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     fetchUsers();
   }, [token, router]);
 
+  useEffect(() => {
+    const fetchMilestones = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/milestones/project/${projectId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) throw new Error('Failed to fetch milestones');
+        
+        const data = await response.json();
+        setMilestones(data);
+      } catch (error) {
+        console.error('Error fetching milestones:', error);
+        toast.error('Failed to load milestones');
+      }
+    };
+
+    fetchMilestones();
+  }, [projectId, token]);
+
   const handleCreateStage = async () => {
     if (!projectId) return;
 
@@ -289,39 +327,60 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     if (!newTaskTitle.trim() || !currentStageId) return;
 
     try {
+      const taskData = {
+        name: newTaskTitle.trim(),
+        description: "",
+        priority: "normal",
+        state: "draft",
+        project_id: Number(projectId),
+        stage_id: currentStageId,
+        assigned_to: selectedAssignees.length > 0 ? selectedAssignees[0].id : null,
+        milestone_id: selectedMilestone,
+        deadline: deadline,
+        planned_hours: 0.0
+      };
+
       const response = await fetch(`${API_BASE_URL}/tasks`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          title: newTaskTitle.trim(),
-          stage_id: currentStageId,
-          project_id: Number(projectId),
-          assignees: selectedAssignees.map(user => user.id)
-        })
+        credentials: 'include',
+        body: JSON.stringify(taskData)
       });
 
-      if (!response.ok) throw new Error('Failed to create task');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to create task');
+      }
 
+      // Reset form and refresh data
+      setNewTaskTitle('');
+      setSelectedAssignees([]);
+      setSelectedMilestone(null);
+      setDeadline(null);
+      setIsTaskModalOpen(false);
+      
       // Refresh stages to get updated task list
       const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
+      
+      if (!stagesResponse.ok) {
+        throw new Error('Failed to refresh stages');
+      }
+      
       const updatedStages = await stagesResponse.json();
       setStages(updatedStages);
-
-      // Reset form
-      setNewTaskTitle('');
-      setSelectedAssignees([]);
-      setIsTaskModalOpen(false);
+      
       toast.success('Task created successfully');
     } catch (error) {
-      toast.error('Failed to create task');
+      console.error('Error creating task:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to create task');
     }
   };
 
@@ -428,7 +487,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
         throw new Error(errorData.detail || `Failed to delete stage: ${response.statusText}`);
       }
 
-      // Update local state after successful deletion
+      // Update local state immediately after successful deletion
       setStages(prevStages => prevStages.filter(stage => stage.id !== stageId));
       
       // Remove from folded stages if it was folded
@@ -442,21 +501,6 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       setStageToDelete(null);
       
       toast.success('Stage deleted successfully');
-
-      // Refresh the stages list to ensure consistency
-      const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (stagesResponse.ok) {
-        const updatedStages = await stagesResponse.json();
-        if (Array.isArray(updatedStages)) {
-          setStages(updatedStages);
-        }
-      }
 
     } catch (error) {
       console.error('Error deleting stage:', error);
@@ -735,17 +779,42 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               className="w-full"
+              autoFocus
             />
           </div>
           
           <div className="space-y-2">
-            <label className="text-sm font-medium">Assignees</label>
+            <label className="text-sm font-medium">Milestone</label>
+            <Select
+              value={selectedMilestone}
+              onValueChange={setSelectedMilestone}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select milestone" />
+              </SelectTrigger>
+              <SelectContent>
+                {milestones.map((milestone) => (
+                  <SelectItem key={milestone.id} value={milestone.id}>
+                    {milestone.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Deadline</label>
+            <Input
+              type="datetime-local"
+              onChange={(e) => setDeadline(e.target.value)}
+              className="w-full"
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Assignees (Optional)</label>
             <Command className="rounded-lg border shadow-md">
-              <CommandInput 
-                placeholder="Search users..." 
-                value={searchQuery}
-                onValueChange={setSearchQuery}
-              />
+              <CommandInput placeholder="Search users..." />
               <CommandEmpty>No users found.</CommandEmpty>
               <CommandGroup className="max-h-[200px] overflow-auto">
                 {users?.map((user) => (
@@ -755,7 +824,6 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                       if (!selectedAssignees.find(a => a.id === user.id)) {
                         setSelectedAssignees(prev => [...prev, user]);
                       }
-                      setSearchQuery('');
                     }}
                   >
                     <Avatar className="h-6 w-6 mr-2">
@@ -789,10 +857,16 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsTaskModalOpen(false)}>
+            <Button variant="outline" onClick={() => {
+              setIsTaskModalOpen(false);
+              setNewTaskTitle('');
+              setSelectedAssignees([]);
+              setSelectedMilestone(null);
+              setDeadline(null);
+            }}>
               Cancel
             </Button>
-            <Button onClick={handleCreateTask}>
+            <Button onClick={handleCreateTask} disabled={!newTaskTitle.trim()}>
               Create Task
             </Button>
           </div>
@@ -988,7 +1062,6 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                               {/* Add Task Button */}
                               <Button
                                 variant="ghost"
-                                size="sm"
                                 className="h-6 w-6 p-0"
                                 onClick={() => {
                                   setCurrentStageId(stage.id);
@@ -1053,6 +1126,17 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                       {/* Tasks Container - Only show if not folded */}
                       {!foldedStages.has(stage.id) && (
                         <div className="space-y-2 min-h-[200px]">
+                          <Button
+                            variant="ghost"
+                            className="w-full flex items-center justify-center py-2 border-2 border-dashed border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                            onClick={() => {
+                              setCurrentStageId(stage.id);
+                              setIsTaskModalOpen(true);
+                            }}
+                          >
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Task
+                          </Button>
                           {!stage.tasks?.length ? (
                             <div className="flex items-center justify-center h-[200px] border-2 border-dashed border-gray-200 rounded-lg">
                               <p className="text-sm text-gray-500">Drop tasks here</p>
@@ -1062,29 +1146,64 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                               {stage.tasks.map((task) => (
                                 <Card 
                                   key={task.id} 
-                                  className="p-2.5 cursor-pointer hover:shadow-md transition-shadow"
-                                  draggable
+                                  className="p-3 cursor-pointer hover:shadow-md transition-shadow"
                                 >
-                                  <div className="flex items-start gap-2">
-                                    <div onClick={() => handleTaskStatusChange(task.id, task.status)}>
-                                      <StatusIcon status={task.status} />
+                                  {/* Task Header */}
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex-1">
+                                      <h4 className="text-sm font-medium mb-1">{task.name}</h4>
+                                      {task.company && (
+                                        <p className="text-xs text-gray-600">{task.company.name}</p>
+                                      )}
                                     </div>
-                                    <div className="flex-1 min-w-0">
-                                      <h4 className="text-sm font-medium mb-0.5 truncate">{task.title}</h4>
-                                      <p className="text-xs text-gray-600 line-clamp-2">{task.description}</p>
-                                      
-                                      <div className="mt-2 flex items-center justify-between text-xs">
-                                        {task.assignee && (
-                                          <Avatar className="h-5 w-5">
-                                            <AvatarImage 
-                                              src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} 
-                                              alt={task.assignee.name} 
-                                            />
-                                            <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
-                                          </Avatar>
-                                        )}
+                                    <div className="flex items-center gap-2">
+                                      {task.milestone && (
+                                        <Badge variant="secondary" className="text-xs">
+                                          {task.milestone}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Task Details */}
+                                  <div className="flex items-center justify-between mt-3">
+                                    <div className="flex items-center gap-2">
+                                      {task.assigned_to ? (
+                                        <Avatar className="h-6 w-6">
+                                          <AvatarImage 
+                                            src={task.assignee?.profile_image_url || DEFAULT_AVATAR_URL} 
+                                            alt={task.assignee?.name || ''} 
+                                          />
+                                          <AvatarFallback>
+                                            {task.assignee?.name ? task.assignee.name[0] : '?'}
+                                          </AvatarFallback>
+                                        </Avatar>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-6 w-6 p-0 rounded-full"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            // TODO: Open assignee selection
+                                          }}
+                                        >
+                                          <Plus className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                    </div>
+
+                                    {task.deadline && (
+                                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                                        <Calendar className="h-3 w-3" />
+                                        <span>
+                                          {Math.max(0, Math.ceil(
+                                            (new Date(task.deadline).getTime() - new Date().getTime()) / 
+                                            (1000 * 60 * 60 * 24)
+                                          ))} days left
+                                        </span>
                                       </div>
-                                    </div>
+                                    )}
                                   </div>
                                 </Card>
                               ))}

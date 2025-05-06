@@ -36,7 +36,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Local development
         "http://192.168.56.1:3000",  # Your specific IP
-        "http://192.168.56.1:8003"  # Your backend URL
+        "http://192.168.56.1:8003",  # Your backend URL
+        "*"  # Allow all origins temporarily for development
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods

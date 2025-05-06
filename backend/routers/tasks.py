@@ -14,6 +14,7 @@ from schemas.user import User
 from services.file_service import FileService
 from services.notification_service import NotificationService
 from services import task_service, user_service
+from models.projects import Project
 
 router = APIRouter(
     prefix="/tasks",
@@ -33,34 +34,24 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new task."""
-    # If no stage_id is provided and we have a project_id, get the Inbox stage
-    if not task.stage_id and task.project_id:
-        inbox_stage = (
-            db.query(TaskStage)
-            .filter(
-                TaskStage.project_id == task.project_id,
-                TaskStage.name == "Inbox"
+    """Create a new task with required fields: name, project_id, and stage_id."""
+    try:
+        # Convert 0 values to None for foreign keys
+        task_data = task.model_dump()
+        if task_data.get('assigned_to', 0) == 0:
+            task_data['assigned_to'] = None
+        if task_data.get('parent_id', 0) == 0:
+            task_data['parent_id'] = None
+
+        # Validate that the project exists
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project with ID {task.project_id} not found"
             )
-            .first()
-        )
-        if inbox_stage:
-            task.stage_id = inbox_stage.id
-        else:
-            # If no Inbox stage exists, create one
-            inbox_stage = TaskStage(
-                name="Inbox",
-                description="Default stage for unorganized tasks",
-                sequence=1,
-                project_id=task.project_id
-            )
-            db.add(inbox_stage)
-            db.commit()
-            db.refresh(inbox_stage)
-            task.stage_id = inbox_stage.id
-    
-    # Validate that the stage exists and belongs to the project if stage_id is provided
-    if task.stage_id:
+
+        # Validate that the stage exists and belongs to the project
         stage = db.query(TaskStage).filter(
             TaskStage.id == task.stage_id,
             TaskStage.project_id == task.project_id
@@ -68,32 +59,25 @@ def create_task(
         
         if not stage:
             raise HTTPException(
-                status_code=400,
-                detail="Invalid stage_id or stage does not belong to the specified project"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Stage with ID {task.stage_id} not found in project {task.project_id}"
             )
-    
-    # Check if user is assigning task to someone else
-    if task.assigned_to and task.assigned_to != current_user["id"]:
-        # TODO: Check if user has permission to assign tasks to others
-        pass
-    
-    created_task, error = task_service.create_task(db, task.dict(), current_user["id"])
-    
-    if error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
-    
-    # Process mentions in task description and notify mentioned users
-    if task.description:
-        user_service.process_user_mentions(
-            db, 
-            task.description, 
-            current_user["id"], 
-            "task", 
-            created_task["id"],
-            notification_service
+
+        # Create the task with modified data
+        created_task, error = task_service.create_task(db, task_data, current_user["id"])
+        
+        if error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+        
+        return created_task
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating task: {str(e)}"
         )
-    
-    return created_task
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(

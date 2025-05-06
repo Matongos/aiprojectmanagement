@@ -39,21 +39,28 @@ class TaskStage(TaskStageBase):
         from_attributes = True
 
 class TaskBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
-    priority: Optional[TaskPriority] = Field(default=TaskPriority.NORMAL)
-    state: Optional[TaskState] = Field(default=TaskState.DRAFT)
-    project_id: int
-    stage_id: Optional[int] = None
-    parent_id: Optional[int] = None
-    assigned_to: Optional[int] = None
+    name: str = Field(..., min_length=1, max_length=255, description="Task name (required)")
+    description: Optional[str] = Field(default="", description="Task description")
+    priority: Optional[TaskPriority] = Field(default=TaskPriority.NORMAL, description="Task priority")
+    state: Optional[TaskState] = Field(default=TaskState.DRAFT, description="Task state")
+    project_id: int = Field(..., description="Project ID (required)")
+    stage_id: int = Field(..., description="Stage ID (required)")
+    parent_id: Optional[int] = Field(default=None, description="Parent task ID")
+    assigned_to: Optional[int] = Field(default=None, description="Assignee user ID")
+    milestone_id: Optional[int] = Field(default=None, description="Milestone ID")
+    company_id: Optional[int] = Field(default=None, description="Company ID")
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     deadline: Optional[datetime] = None
     planned_hours: Optional[float] = Field(default=0.0, ge=0)
 
 class TaskCreate(TaskBase):
-    project_id: int  # Only project_id is required in addition to name
+    """Task creation schema with required fields:
+    - name: Task name
+    - project_id: Project ID
+    - stage_id: Stage ID
+    """
+    pass
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -72,13 +79,16 @@ class TaskUpdate(BaseModel):
 class Task(TaskBase):
     id: int
     created_by: int
-    progress: float = 0.0
+    progress: Optional[float] = Field(default=0.0)
     created_at: datetime
     updated_at: Optional[datetime]
     date_last_stage_update: Optional[datetime] = None
     depends_on_ids: List[int] = []
     subtask_ids: List[int] = []
     attachments: Optional[List[FileAttachment]] = None
+    milestone: Optional[dict] = None  # Will include milestone details if available
+    company: Optional[dict] = None    # Will include company details if available
+    assignee: Optional[dict] = None   # Will include assignee details if available
 
     class Config:
         from_attributes = True

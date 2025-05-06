@@ -10,13 +10,13 @@ class Milestone(Base):
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    due_date = Column(DateTime(timezone=True), nullable=True)
-    is_completed = Column(Boolean, default=False)
+    name = Column(String, nullable=False)  # e.g., "First Phase", "Second Phase", "Final Phase"
+    description = Column(String, nullable=True)
+    sequence = Column(Integer, default=0)  # For ordering phases
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
     
     # Foreign Keys
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # Timestamps

@@ -3,6 +3,7 @@ import * as Progress from '@radix-ui/react-progress';
 import { format } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
+import { useRouter } from 'next/navigation';
 
 // Task priority colors
 const priorityColors = {
@@ -55,10 +56,12 @@ export interface TaskProps {
   estimated_hours?: number;
   actual_hours?: number;
   tags?: string;
+  project_id: number;
   onClick?: () => void;
 }
 
 export const TaskProgressCard: React.FC<TaskProps> = ({
+  id,
   title,
   description,
   status,
@@ -67,15 +70,25 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
   estimated_hours,
   actual_hours,
   tags,
+  project_id,
   onClick,
 }) => {
+  const router = useRouter();
   const progressPercentage = getProgressPercentage(status);
   const progressColor = getProgressColor(status);
+  
+  const handleClick = () => {
+    if (onClick) {
+      onClick();
+    } else {
+      router.push(`/dashboard/projects/${project_id}/tasks/${id}`);
+    }
+  };
   
   return (
     <Card 
       className="w-full hover:shadow-md transition-shadow duration-200 cursor-pointer" 
-      onClick={onClick}
+      onClick={handleClick}
     >
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <h3 className="font-medium text-lg line-clamp-1">{title}</h3>
