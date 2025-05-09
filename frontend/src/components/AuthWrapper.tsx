@@ -12,7 +12,7 @@ interface AuthWrapperProps {
 export default function AuthWrapper({ children }: AuthWrapperProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
-  const { token, isAuthenticated, checkAuth, user } = useAuthStore();
+  const { checkAuth } = useAuthStore();
   const router = useRouter();
 
   // First, handle client-side mounting to prevent hydration errors
@@ -27,36 +27,25 @@ export default function AuthWrapper({ children }: AuthWrapperProps) {
 
     async function verifyAuth() {
       setIsLoading(true);
-      console.log("AuthWrapper: Verifying authentication, token present:", !!token);
-      console.log("AuthWrapper: isAuthenticated:", isAuthenticated);
-      
       try {
-        if (!isAuthenticated) {
-          // Try to check authentication
-          console.log("AuthWrapper: Calling checkAuth()");
-          const authenticated = await checkAuth();
-          
-          if (!authenticated) {
-            console.log("AuthWrapper: Not authenticated, redirecting to login");
-            toast.error("Please log in to access this page");
-            router.push("/auth/login");
-            return;
-          }
+        const authenticated = await checkAuth();
+        if (!authenticated) {
+          console.log("AuthWrapper: Not authenticated, redirecting to login");
+          toast.error("Please log in to access this page");
+          router.push("/auth/login");
+          return;
         }
-        
-        console.log("AuthWrapper: Auth verified, user:", user);
       } catch (error) {
         console.error("AuthWrapper: Auth verification error:", error);
         toast.error("Authentication error. Please log in again.");
         router.push("/auth/login");
-        return;
       } finally {
         setIsLoading(false);
       }
     }
     
     verifyAuth();
-  }, [checkAuth, router, token, isAuthenticated, user, isMounted]);
+  }, [checkAuth, router, isMounted]);
 
   // Return a simpler loading state during SSR to avoid hydration mismatches
   if (!isMounted) {

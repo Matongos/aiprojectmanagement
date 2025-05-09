@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
-from .task import Task
+from .task import TaskResponse
 
 class TaskStageBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -22,6 +22,13 @@ class TaskStage(TaskStageBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
     auto_progress_percentage: float = 0.0
+
+    class Config:
+        from_attributes = True
+
+class TaskStageWithTasks(TaskStage):
+    """Task stage schema that includes the tasks in the stage"""
+    tasks: List[TaskResponse] = []
 
     class Config:
         from_attributes = True 

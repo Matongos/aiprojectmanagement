@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from models.projects import Project
+from models.projects import Project, ProjectMember
 from models.task_stage import TaskStage
 from schemas.project import (
     ProjectCreate, 
@@ -16,8 +16,7 @@ from schemas.task import (
 from crud import project as project_crud
 from crud.project import project_stage
 from database import get_db
-from routers.auth import get_current_user
-from schemas.user import User
+from routers.auth import get_current_user, User
 from models.task import Task
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -218,4 +217,29 @@ async def get_project_tags(
     current_user: dict = Depends(get_current_user)
 ):
     """Get all unique project tags"""
-    return project_crud.get_all_tags(db) 
+    return project_crud.get_all_tags(db)
+
+@router.get("/{project_id}/members")
+async def get_project_members(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all users that can be assigned to tasks"""
+    # Check if project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get all active users
+    users = db.query(User).filter(User.is_active == True).all()
+    
+    # Return user data in the format needed by the frontend
+    return [
+        {
+            "id": user.id,
+            "name": user.full_name or user.username,
+            "profile_image_url": user.profile_image_url
+        }
+        for user in users
+    ] 

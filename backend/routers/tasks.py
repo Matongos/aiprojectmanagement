@@ -13,7 +13,6 @@ from routers.auth import get_current_user
 from schemas.user import User
 from services.file_service import FileService
 from services.notification_service import NotificationService
-from services import task_service, user_service
 from models.projects import Project
 
 router = APIRouter(
@@ -124,6 +123,34 @@ async def read_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if not current_user["is_superuser"] and db_task.assigned_to != current_user["id"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    # Properly serialize the assignee if it exists
+    if db_task.assignee:
+        task_dict = {
+            "id": db_task.id,
+            "name": db_task.name,
+            "description": db_task.description,
+            "priority": db_task.priority,
+            "state": db_task.state,
+            "project_id": db_task.project_id,
+            "stage_id": db_task.stage_id,
+            "assigned_to": db_task.assigned_to,
+            "assignee": {
+                "id": db_task.assignee.id,
+                "username": db_task.assignee.username,
+                "email": db_task.assignee.email,
+                "full_name": db_task.assignee.full_name,
+                "profile_image_url": db_task.assignee.profile_image_url
+            },
+            "milestone_id": db_task.milestone_id,
+            "milestone": db_task.milestone,
+            "deadline": db_task.deadline,
+            "progress": db_task.progress if db_task.progress is not None else 0.0,
+            "created_at": db_task.created_at,
+            "updated_at": db_task.updated_at
+        }
+        return TaskSchema(**task_dict)
+    
     return db_task
 
 @router.put("/{task_id}", response_model=TaskSchema)
@@ -405,4 +432,45 @@ async def get_task_attachments(
     if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    return file_attachment_crud.get_task_attachments(db=db, task_id=task_id, skip=skip, limit=limit) 
+    return file_attachment_crud.get_task_attachments(db=db, task_id=task_id, skip=skip, limit=limit)
+
+@router.put("/{task_id}/move-stage")
+async def move_task_stage(
+    task_id: int,
+    new_stage_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Move a task to a different stage"""
+    
+    # Get the task
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Get the new stage
+    new_stage = db.query(TaskStage).filter(TaskStage.id == new_stage_id).first()
+    if not new_stage:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stage not found"
+        )
+    
+    # Check if the new stage belongs to the same project
+    if new_stage.project_id != task.project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot move task to a stage from a different project"
+        )
+    
+    # Move the task to the new stage
+    stage_changed = task.move_to_stage(new_stage_id, db)
+    
+    if stage_changed:
+        db.commit()
+        return {"message": "Task stage updated successfully"}
+    
+    return {"message": "Task is already in this stage"} 

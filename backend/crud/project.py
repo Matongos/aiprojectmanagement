@@ -1,13 +1,14 @@
 from typing import List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, desc, or_
 from models.projects import Project
+from models.task import Task
 from models.task_stage import TaskStage
 from schemas.project import ProjectCreate, ProjectUpdate
 from schemas.task_stage import TaskStageCreate
 from crud.base import CRUDBase
 import string
 import random
-from sqlalchemy import desc, or_
 from datetime import datetime
 
 class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
@@ -15,7 +16,8 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
         self, db: Session, *, owner_id: int, skip: int = 0, limit: int = 100
     ) -> List[Project]:
         return (
-            db.query(self.model)
+            db.query(Project)
+            .options(joinedload(Project.tasks))
             .filter(Project.created_by == owner_id)
             .offset(skip)
             .limit(limit)
@@ -26,7 +28,8 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
         self, db: Session, *, status: str, skip: int = 0, limit: int = 100
     ) -> List[Project]:
         return (
-            db.query(self.model)
+            db.query(Project)
+            .options(joinedload(Project.tasks))
             .filter(Project.status == status)
             .offset(skip)
             .limit(limit)
@@ -37,7 +40,8 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
         self, db: Session, *, skip: int = 0, limit: int = 100
     ) -> List[Project]:
         return (
-            db.query(self.model)
+            db.query(Project)
+            .options(joinedload(Project.tasks))
             .filter(Project.is_active == True)
             .offset(skip)
             .limit(limit)
@@ -97,7 +101,8 @@ class CRUDProject(CRUDBase[Project, ProjectCreate, ProjectUpdate]):
         Get the most recently updated projects for a specific user.
         """
         return (
-            db.query(self.model)
+            db.query(Project)
+            .options(joinedload(Project.tasks))
             .filter(Project.created_by == user_id)
             .order_by(desc(Project.updated_at))
             .limit(limit)

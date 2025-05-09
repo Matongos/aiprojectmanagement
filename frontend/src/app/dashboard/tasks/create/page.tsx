@@ -191,13 +191,14 @@ export default function CreateTaskPage({
                 Assignee
               </label>
               <Select
-                value={assigneeId}
-                onValueChange={(value) => setAssigneeId(value)}
+                value={assigneeId || "unassigned"}
+                onValueChange={(value) => setAssigneeId(value === "unassigned" ? null : value)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select assignee" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
                   {users.map((user) => (
                     <SelectItem key={user.id} value={user.id.toString()}>
                       {user.full_name}

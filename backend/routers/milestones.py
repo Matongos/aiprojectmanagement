@@ -41,7 +41,7 @@ async def get_project_milestones(
     milestones = db.query(Milestone).filter(
         Milestone.project_id == project_id,
         Milestone.is_active == True
-    ).order_by(Milestone.sequence).all()
+    ).order_by(Milestone.created_at.desc()).all()
     return milestones
 
 @router.put("/{milestone_id}", response_model=MilestoneResponse)

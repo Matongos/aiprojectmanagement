@@ -41,7 +41,7 @@ class Task(Base):
     
     # Time tracking
     planned_hours = Column(Float, default=0.0)  # Not estimated_hours
-    progress = Column(Float, default=0.0)
+    progress = Column(Float, nullable=False, default=0.0)  # Make non-nullable with default
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

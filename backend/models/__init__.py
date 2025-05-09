@@ -2,7 +2,8 @@
 from .base import Base
 from .user import User
 from .role import Role
-from .projects import Project, ProjectMember, Tag, Milestone
+from .projects import Project, ProjectMember, Tag
+from .milestone import Milestone
 from .task import Task
 from .task_stage import TaskStage
 from .file_attachment import FileAttachment

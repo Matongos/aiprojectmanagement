@@ -1,15 +1,17 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float
-from sqlalchemy.orm import relationship
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float, select
+from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
-
 from .base import Base
+from .milestone import Milestone  # Import Milestone from its dedicated module
+from .task import Task  # Import Task model
 
 # Association table for project tags
 project_tag = Table(
     'project_tag',
     Base.metadata,
     Column('project_id', Integer, ForeignKey('projects.id'), primary_key=True),
-    Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True)
+    Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True),
+    extend_existing=True
 )
 
 class ProjectMember(Base):
@@ -23,6 +25,9 @@ class ProjectMember(Base):
     # Relationships with overlaps parameters
     project = relationship("Project", back_populates="project_members", overlaps="members")
     user = relationship("User", back_populates="project_memberships", overlaps="member_of_projects")
+
+    def __repr__(self):
+        return f"<ProjectMember {self.project_id}:{self.user_id}>"
 
 class Project(Base):
     __tablename__ = "projects"
@@ -59,6 +64,14 @@ class Project(Base):
     activities = relationship("Activity", back_populates="project", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
 
+    # Add task_count as a column property
+    task_count = column_property(
+        select(func.count(Task.id))
+        .where(Task.project_id == id)
+        .correlate_except(Task)
+        .scalar_subquery()
+    )
+
     def calculate_progress(self):
         """Calculate project progress based on task completion."""
         tasks = self.tasks
@@ -66,31 +79,19 @@ class Project(Base):
             return 0.0
         return sum(task.progress for task in tasks) / len(tasks)
 
+    def __repr__(self):
+        return f"<Project {self.name}>"
+
 class Tag(Base):
     __tablename__ = "tags"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     color = Column(String(7), default="#3498db")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
     projects = relationship("Project", secondary=project_tag, back_populates="tags")
 
-class Milestone(Base):
-    __tablename__ = "milestones"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    due_date = Column(Date, nullable=True)
-    completed_date = Column(Date, nullable=True)
-    is_completed = Column(Boolean, default=False)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    project = relationship("Project", back_populates="milestones")
-    creator = relationship("User", foreign_keys=[created_by])
-    tasks = relationship("Task", back_populates="milestone") 
+    def __repr__(self):
+        return f"<Tag {self.name}>" 

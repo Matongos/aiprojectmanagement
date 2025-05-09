@@ -11,12 +11,19 @@ import { toast } from "react-hot-toast";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { use } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Project {
   id: number;
   name: string;
   description: string;
-  status: string;
+  status: 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
   created_at: string;
   start_date: string;
   end_date: string;
@@ -33,6 +40,7 @@ interface Project {
 interface EditedProject {
   name?: string;
   description?: string;
+  status?: string;
   customer?: string;
   start_date?: string;
   end_date?: string;
@@ -41,13 +49,44 @@ interface EditedProject {
   tags?: string[];
 }
 
+const statusConfig = {
+  on_track: { label: 'On Track', color: 'bg-green-500', description: 'Project is progressing as planned' },
+  at_risk: { label: 'At Risk', color: 'bg-yellow-500', description: 'Project might face some issues' },
+  off_track: { label: 'Off Track', color: 'bg-red-500', description: 'Project is behind schedule' },
+  on_hold: { label: 'On Hold', color: 'bg-gray-500', description: 'Project is temporarily paused' },
+  done: { label: 'Done', color: 'bg-blue-500', description: 'Project is completed' }
+};
+
 const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
   const resolvedParams = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedProject, setEditedProject] = useState<EditedProject>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [projectManagers, setProjectManagers] = useState<Array<{ id: number; name: string; profile_image_url?: string }>>([]);
   const { token } = useAuthStore();
+
+  // Fetch project managers
+  useEffect(() => {
+    const fetchProjectManagers = async () => {
+      if (!token) return;
+      try {
+        const response = await fetch(`${API_BASE_URL}/users/project-managers`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        if (!response.ok) throw new Error('Failed to fetch project managers');
+        const data = await response.json();
+        setProjectManagers(data);
+      } catch (error) {
+        console.error('Error fetching project managers:', error);
+        toast.error('Failed to load project managers');
+      }
+    };
+    fetchProjectManagers();
+  }, [token]);
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -71,6 +110,7 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
         setEditedProject({
           name: data.name || '',
           description: data.description || '',
+          status: data.status || 'on_track',
           customer: data.customer || '',
           start_date: data.start_date || '',
           end_date: data.end_date || '',
@@ -113,6 +153,7 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
       setIsEditing(false);
       toast.success('Project updated successfully');
     } catch (error) {
+      console.error('Error updating project:', error);
       toast.error('Failed to update project');
     }
   };
@@ -139,24 +180,59 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
               )}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
-            {isEditing ? (
-              <>
-                <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
-                  <X className="h-4 w-4 mr-2" />
-                  Cancel
+          <div className="flex items-center gap-4">
+            {/* Status Selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">Status:</span>
+              {isEditing ? (
+                <Select
+                  value={editedProject.status}
+                  onValueChange={(value) => setEditedProject(prev => ({ ...prev, status: value }))}
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(statusConfig).map(([key, { label, description }]) => (
+                      <SelectItem key={key} value={key}>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${statusConfig[key as keyof typeof statusConfig].color}`} />
+                          <div>
+                            <div className="font-medium">{label}</div>
+                            <div className="text-xs text-gray-500">{description}</div>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color}`} />
+                  <span className="text-sm font-medium">{statusConfig[project.status]?.label}</span>
+                </div>
+              )}
+            </div>
+            {/* Edit/Save Buttons */}
+            <div className="flex items-center gap-2">
+              {isEditing ? (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel
+                  </Button>
+                  <Button size="sm" onClick={handleSaveChanges}>
+                    <Save className="h-4 w-4 mr-2" />
+                    Save Changes
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit Project
                 </Button>
-                <Button size="sm" onClick={handleSaveChanges}>
-                  <Save className="h-4 w-4 mr-2" />
-                  Save Changes
-                </Button>
-              </>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
-                <Edit className="h-4 w-4 mr-2" />
-                Edit Project
-              </Button>
-            )}
+              )}
+            </div>
           </div>
         </div>
 
@@ -177,13 +253,37 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
 
           <div>
             <label className="text-sm text-gray-500">Project Manager</label>
-            <div className="flex items-center gap-2 mt-1">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src={project.project_manager?.profile_image_url || '/default-avatar.svg'} />
-                <AvatarFallback>{project.project_manager?.name ? project.project_manager.name[0] : '?'}</AvatarFallback>
-              </Avatar>
-              <span className="font-medium">{project.project_manager?.name || 'No manager assigned'}</span>
-            </div>
+            {isEditing ? (
+              <Select
+                value={String(editedProject.project_manager_id)}
+                onValueChange={(value) => setEditedProject(prev => ({ ...prev, project_manager_id: Number(value) }))}
+              >
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue placeholder="Select project manager" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projectManagers.map((manager) => (
+                    <SelectItem key={manager.id} value={String(manager.id)}>
+                      <div className="flex items-center gap-2">
+                        <Avatar className="h-6 w-6">
+                          <AvatarImage src={manager.profile_image_url || '/default-avatar.svg'} />
+                          <AvatarFallback>{manager.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <span>{manager.name}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="flex items-center gap-2 mt-1">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={project.project_manager?.profile_image_url || '/default-avatar.svg'} />
+                  <AvatarFallback>{project.project_manager?.name ? project.project_manager.name[0] : '?'}</AvatarFallback>
+                </Avatar>
+                <span className="font-medium">{project.project_manager?.name || 'No manager assigned'}</span>
+              </div>
+            )}
           </div>
 
           <div>

@@ -111,6 +111,11 @@ function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: 
   const [editedTask, setEditedTask] = useState<Partial<Task>>({});
   const [loading, setLoading] = useState(true);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [projectUsers, setProjectUsers] = useState<Array<{
+    id: number;
+    name: string;
+    profile_image_url: string | null;
+  }>>([]);
 
   useEffect(() => {
     const fetchTaskDetails = async () => {
@@ -198,10 +203,33 @@ function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: 
       }
     };
 
+    const fetchProjectUsers = async () => {
+      try {
+        const storedToken = token || localStorage.getItem('token');
+        if (!storedToken) return;
+
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/members`, {
+          headers: {
+            'Authorization': `Bearer ${storedToken}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!response.ok) throw new Error("Failed to fetch project members");
+
+        const data = await response.json();
+        setProjectUsers(data);
+      } catch (error) {
+        console.error("Error fetching project members:", error);
+        toast.error("Failed to load project members");
+      }
+    };
+
     fetchTaskDetails();
     fetchComments();
     fetchAttachments();
-  }, [taskId, token, router]);
+    fetchProjectUsers();
+  }, [taskId, token, router, projectId]);
 
   const handleSave = async () => {
     try {
@@ -650,27 +678,52 @@ function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: 
               {/* Assignee */}
               <div>
                 <label className="text-sm font-medium mb-1 block">Assignee</label>
-                <div className="flex items-center gap-2">
-                  {task.assignee ? (
-                    <>
-                      <Avatar className="h-6 w-6">
-                        <AvatarImage
-                          src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL}
-                          alt={task.assignee.name}
-                        />
-                        <AvatarFallback>
-                          {task.assignee.name[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span>{task.assignee.name}</span>
-                    </>
-                  ) : (
-                    <Button variant="ghost" size="sm">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Assign
-                    </Button>
-                  )}
-                </div>
+                {isEditing ? (
+                  <Select
+                    value={editedTask.assigned_to ? String(editedTask.assigned_to) : "unassigned"}
+                    onValueChange={(value) =>
+                      setEditedTask({ ...editedTask, assigned_to: value === "unassigned" ? null : Number(value) })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select assignee" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="unassigned">Unassigned</SelectItem>
+                      {projectUsers.map((projectUser) => (
+                        <SelectItem key={projectUser.id} value={String(projectUser.id)}>
+                          <div className="flex items-center gap-2">
+                            <Avatar className="h-6 w-6">
+                              <AvatarImage
+                                src={projectUser.profile_image_url || DEFAULT_AVATAR_URL}
+                                alt={projectUser.name}
+                              />
+                              <AvatarFallback>{projectUser.name[0]}</AvatarFallback>
+                            </Avatar>
+                            <span>{projectUser.name}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {task.assignee ? (
+                      <>
+                        <Avatar className="h-6 w-6">
+                          <AvatarImage
+                            src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL}
+                            alt={task.assignee.name}
+                          />
+                          <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <span>{task.assignee.name}</span>
+                      </>
+                    ) : (
+                      <span className="text-gray-500">Unassigned</span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Dates */}

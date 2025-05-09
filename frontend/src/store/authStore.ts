@@ -41,13 +41,11 @@ interface AuthStore {
 
 // Create auth store
 export const useAuthStore = create<AuthStore>((set, get) => {
-  // Initialize token from localStorage if available
-  const storedToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-  
+  // Initialize store with no authentication
   return {
     user: null,
-    token: storedToken,
-    isAuthenticated: !!storedToken,
+    token: null,
+    isAuthenticated: false,
     isLoading: false,
     error: null,
     loadingUserData: true,
@@ -190,53 +188,65 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
     checkAuth: async () => {
       set({ loadingUserData: true });
-      const token = localStorage.getItem('token');
+      const storedToken = localStorage.getItem('token');
       
-      if (token) {
-        try {
-          console.log("Checking authentication with token");
-          const response = await fetch(`${API_BASE_URL}/users/me`, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-            cache: 'no-store'
+      // If no token in storage, clear everything
+      if (!storedToken) {
+        set({ 
+          token: null, 
+          isAuthenticated: false, 
+          user: null, 
+          loadingUserData: false,
+          error: null 
+        });
+        return false;
+      }
+
+      try {
+        console.log("Checking authentication with token");
+        const response = await fetch(`${API_BASE_URL}/users/me`, {
+          headers: {
+            Authorization: `Bearer ${storedToken}`,
+          },
+          cache: 'no-store'
+        });
+
+        console.log("Auth check response status:", response.status);
+
+        if (response.ok) {
+          const userData = await response.json();
+          console.log("Authentication successful, user data:", userData);
+          set({ 
+            token: storedToken, 
+            isAuthenticated: true, 
+            user: userData, 
+            loadingUserData: false, 
+            error: null 
           });
-
-          console.log("Auth check response status:", response.status);
-
-          if (response.ok) {
-            const user = await response.json();
-            console.log("Authentication successful, user data:", user);
-            set({ token, isAuthenticated: true, user, loadingUserData: false, error: null });
-            return true;
-          } else {
-            console.error("Authentication check failed, status:", response.status);
-            // Clear invalid token
-            localStorage.removeItem('token');
-            set({ 
-              token: null, 
-              isAuthenticated: false, 
-              user: null, 
-              loadingUserData: false,
-              error: 'Session expired. Please log in again.'
-            });
-            return false;
-          }
-        } catch (error) {
-          console.error('Error checking auth:', error);
+          return true;
+        } else {
+          console.error("Authentication check failed, status:", response.status);
+          // Clear invalid token
           localStorage.removeItem('token');
           set({ 
             token: null, 
             isAuthenticated: false, 
             user: null, 
             loadingUserData: false,
-            error: 'Authentication error. Please log in again.'
+            error: 'Session expired. Please log in again.'
           });
           return false;
         }
-      } else {
-        console.log("No token found in storage");
-        set({ token: null, isAuthenticated: false, user: null, loadingUserData: false });
+      } catch (error) {
+        console.error('Error checking auth:', error);
+        localStorage.removeItem('token');
+        set({ 
+          token: null, 
+          isAuthenticated: false, 
+          user: null, 
+          loadingUserData: false,
+          error: 'Authentication error. Please log in again.'
+        });
         return false;
       }
     }

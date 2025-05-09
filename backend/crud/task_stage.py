@@ -11,12 +11,31 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
         self, db: Session, *, project_id: int
     ) -> List[TaskStage]:
         """Get all stages for a specific project ordered by sequence."""
-        return (
+        stages = (
             db.query(self.model)
             .filter(TaskStage.project_id == project_id)
             .order_by(TaskStage.sequence)
             .all()
         )
+        
+        # For each stage, serialize its tasks' assignees and ensure progress is valid
+        for stage in stages:
+            if stage.tasks:
+                for task in stage.tasks:
+                    # Handle assignee serialization
+                    if task.assignee:
+                        task.assignee = {
+                            'id': task.assignee.id,
+                            'username': task.assignee.username,
+                            'email': task.assignee.email,
+                            'full_name': task.assignee.full_name,
+                            'profile_image_url': task.assignee.profile_image_url
+                        }
+                    # Ensure progress is a valid float
+                    if task.progress is None:
+                        task.progress = 0.0
+        
+        return stages
 
     def create_stage(
         self, db: Session, *, obj_in: TaskStageCreate

@@ -5,13 +5,13 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.task_stage import TaskStage
 from models.task import Task
-from schemas.task_stage import TaskStageCreate, TaskStageUpdate, TaskStage as TaskStageSchema
+from schemas.task_stage import TaskStageCreate, TaskStageUpdate, TaskStageWithTasks
 from crud import task_stage as stage_crud
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/stages", tags=["stages"])
 
-@router.post("/", response_model=TaskStageSchema)
+@router.post("/", response_model=TaskStageWithTasks)
 async def create_stage(
     stage: TaskStageCreate,
     db: Session = Depends(get_db),
@@ -20,7 +20,7 @@ async def create_stage(
     """Create a new task stage"""
     return stage_crud.create_stage(db=db, obj_in=stage)
 
-@router.get("/project/{project_id}", response_model=List[TaskStageSchema])
+@router.get("/project/{project_id}", response_model=List[TaskStageWithTasks])
 async def read_project_stages(
     project_id: int,
     db: Session = Depends(get_db),
@@ -29,7 +29,7 @@ async def read_project_stages(
     """Get all stages for a project"""
     return stage_crud.get_project_stages(db=db, project_id=project_id)
 
-@router.get("/{stage_id}", response_model=TaskStageSchema)
+@router.get("/{stage_id}", response_model=TaskStageWithTasks)
 async def read_stage(
     stage_id: int,
     db: Session = Depends(get_db),
@@ -41,7 +41,7 @@ async def read_stage(
         raise HTTPException(status_code=404, detail="Stage not found")
     return stage
 
-@router.put("/{stage_id}", response_model=TaskStageSchema)
+@router.put("/{stage_id}", response_model=TaskStageWithTasks)
 async def update_stage(
     stage_id: int,
     stage_update: TaskStageUpdate,

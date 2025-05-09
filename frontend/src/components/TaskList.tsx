@@ -11,8 +11,8 @@ interface TaskListProps {
 
 const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [priorityFilter, setPriorityFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all_status');
+  const [priorityFilter, setPriorityFilter] = useState<string>('all_priority');
 
   // Filter tasks based on search term and filters
   const filteredTasks = tasks.filter((task) => {
@@ -23,10 +23,10 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
       (task.tags && task.tags.toLowerCase().includes(searchTerm.toLowerCase()));
 
     // Status filter
-    const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
+    const matchesStatus = statusFilter === 'all_status' || task.status === statusFilter;
 
     // Priority filter
-    const matchesPriority = priorityFilter === 'all' || task.priority === priorityFilter;
+    const matchesPriority = priorityFilter === 'all_priority' || task.priority === priorityFilter;
 
     return matchesSearch && matchesStatus && matchesPriority;
   });
@@ -67,7 +67,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="all_status">All Status</SelectItem>
               <SelectItem value="todo">To Do</SelectItem>
               <SelectItem value="in_progress">In Progress</SelectItem>
               <SelectItem value="review">Review</SelectItem>
@@ -81,7 +81,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
               <SelectValue placeholder="Priority" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Priority</SelectItem>
+              <SelectItem value="all_priority">All Priority</SelectItem>
               <SelectItem value="urgent">Urgent</SelectItem>
               <SelectItem value="high">High</SelectItem>
               <SelectItem value="medium">Medium</SelectItem>
@@ -89,13 +89,13 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
             </SelectContent>
           </Select>
           
-          {(searchTerm || statusFilter !== 'all' || priorityFilter !== 'all') && (
+          {(searchTerm || statusFilter !== 'all_status' || priorityFilter !== 'all_priority') && (
             <Button 
               variant="outline" 
               onClick={() => {
                 setSearchTerm('');
-                setStatusFilter('all');
-                setPriorityFilter('all');
+                setStatusFilter('all_status');
+                setPriorityFilter('all_priority');
               }}
             >
               Clear

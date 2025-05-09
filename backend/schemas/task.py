@@ -16,6 +16,16 @@ class TaskPriority(str, Enum):
     HIGH = "high"
     URGENT = "urgent"
 
+class UserBase(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    full_name: str
+    profile_image_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 class TaskStageBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
@@ -88,14 +98,59 @@ class Task(TaskBase):
     attachments: Optional[List[FileAttachment]] = None
     milestone: Optional[dict] = None  # Will include milestone details if available
     company: Optional[dict] = None    # Will include company details if available
-    assignee: Optional[dict] = None   # Will include assignee details if available
+    assignee: Optional[dict] = None   # Changed back to dict to be more flexible
 
     class Config:
         from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
+
+class TaskResponse(BaseModel):
+    """Response model for tasks with simplified fields"""
+    id: int
+    name: str
+    description: Optional[str] = ""
+    priority: TaskPriority
+    state: TaskState
+    project_id: int
+    stage_id: int
+    assigned_to: Optional[int] = None
+    assignee: Optional[UserBase] = None  # Changed to use UserBase model
+    milestone_id: Optional[int] = None
+    milestone: Optional[dict] = None
+    deadline: Optional[datetime] = None
+    progress: Optional[float] = 0.0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
+
+    @property
+    def progress_value(self) -> float:
+        """Ensure progress is always a valid float"""
+        return self.progress if self.progress is not None else 0.0
+
+    def dict(self, *args, **kwargs):
+        """Override dict method to properly handle assignee serialization"""
+        d = super().dict(*args, **kwargs)
+        if self.assignee:
+            d['assignee'] = {
+                'id': self.assignee.id,
+                'username': self.assignee.username,
+                'email': self.assignee.email,
+                'full_name': self.assignee.full_name,
+                'profile_image_url': self.assignee.profile_image_url
+            }
+        return d
 
 class TaskStageWithTasks(TaskStage):
     """Task stage schema that includes the tasks in the stage"""
-    tasks: List[Task] = []
+    tasks: List[TaskResponse] = []
 
     class Config:
         from_attributes = True 
