@@ -126,15 +126,15 @@ async def read_task(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     # Create base task dictionary
-    task_dict = {
-        "id": db_task.id,
-        "name": db_task.name,
-        "description": db_task.description,
-        "priority": db_task.priority,
-        "state": db_task.state,
-        "project_id": db_task.project_id,
-        "stage_id": db_task.stage_id,
-        "assigned_to": db_task.assigned_to,
+        task_dict = {
+            "id": db_task.id,
+            "name": db_task.name,
+            "description": db_task.description,
+            "priority": db_task.priority,
+            "state": db_task.state,
+            "project_id": db_task.project_id,
+            "stage_id": db_task.stage_id,
+            "assigned_to": db_task.assigned_to,
         "milestone_id": db_task.milestone_id,
         "milestone": db_task.milestone,
         "deadline": db_task.deadline,
@@ -147,14 +147,14 @@ async def read_task(
     # Add assignee details if present
     if db_task.assignee:
         task_dict["assignee"] = {
-            "id": db_task.assignee.id,
-            "username": db_task.assignee.username,
-            "email": db_task.assignee.email,
-            "full_name": db_task.assignee.full_name,
-            "profile_image_url": db_task.assignee.profile_image_url
+                "id": db_task.assignee.id,
+                "username": db_task.assignee.username,
+                "email": db_task.assignee.email,
+                "full_name": db_task.assignee.full_name,
+                "profile_image_url": db_task.assignee.profile_image_url
         }
     
-    return TaskSchema(**task_dict)
+        return TaskSchema(**task_dict)
 
 @router.put("/{task_id}", response_model=TaskSchema)
 async def update_task(

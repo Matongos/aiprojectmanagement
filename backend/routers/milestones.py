@@ -22,8 +22,11 @@ async def create_milestone(
     db_milestone = Milestone(
         name=milestone.name,
         description=milestone.description,
-        sequence=milestone.sequence,
         project_id=milestone.project_id,
+        due_date=milestone.due_date,
+        completed_date=milestone.completed_date,
+        is_completed=milestone.is_completed,
+        is_active=milestone.is_active,
         created_by=current_user["id"]
     )
     db.add(db_milestone)
