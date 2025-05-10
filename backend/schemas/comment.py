@@ -16,7 +16,7 @@ class CommentUpdate(BaseModel):
 
 class CommentInDB(CommentBase):
     id: int
-    user_id: int
+    created_by: int
     created_at: datetime
     updated_at: Optional[datetime] = None
 

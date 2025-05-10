@@ -94,7 +94,8 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 
 #### Month 3: Time Tracking & Basic Reporting
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
-|------|-------|-------|--------------|------------------|
+|------|----
+---|-------|--------------|------------------|
 | 1 | Time entry model and API | Backend | Task API | Time tracking API |
 | 1 | Timer UI component | Frontend | Time API | Stopwatch functionality |
 | 2 | Task stage workflow | Backend | Task API | Stage transitions |

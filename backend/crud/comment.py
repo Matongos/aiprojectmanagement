@@ -39,8 +39,7 @@ def create_comment(db: Session, comment: CommentCreate, user_id: int) -> Comment
         content=comment.content,
         task_id=comment.task_id,
         parent_id=comment.parent_id,
-        mentions=comment.mentions or [],
-        user_id=user_id
+        created_by=user_id
     )
     db.add(db_comment)
     db.commit()
@@ -76,13 +75,12 @@ def delete_comment(db: Session, comment_id: int) -> bool:
 
 def get_comment_with_user_data(db: Session, comment: Comment) -> Dict[str, Any]:
     """Enrich comment with user data."""
-    user = db.query(User).filter(User.id == comment.user_id).first()
+    user = db.query(User).filter(User.id == comment.created_by).first()
     
     if user:
         user_data = {
             "id": user.id,
-            "username": user.username,
-            "full_name": user.full_name,
+            "name": user.full_name,
             "profile_image_url": user.profile_image_url
         }
     else:
@@ -93,8 +91,7 @@ def get_comment_with_user_data(db: Session, comment: Comment) -> Dict[str, Any]:
         "content": comment.content,
         "task_id": comment.task_id,
         "parent_id": comment.parent_id,
-        "mentions": comment.mentions,
-        "user_id": comment.user_id,
+        "created_by": comment.created_by,
         "created_at": comment.created_at,
         "updated_at": comment.updated_at,
         "user": user_data,

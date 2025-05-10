@@ -32,12 +32,12 @@ def create_comment(db: Session, comment_data: dict, user_id: int) -> Tuple[Dict[
         # Insert comment
         insert_query = text("""
         INSERT INTO comments (
-            content, task_id, parent_id, user_id, created_at, updated_at
+            content, task_id, parent_id, created_by, created_at, updated_at
         ) 
         VALUES (
-            :content, :task_id, :parent_id, :user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            :content, :task_id, :parent_id, :created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
-        RETURNING id, content, task_id, parent_id, user_id, created_at, updated_at
+        RETURNING id, content, task_id, parent_id, created_by, created_at, updated_at
         """)
         
         result = db.execute(
@@ -46,7 +46,7 @@ def create_comment(db: Session, comment_data: dict, user_id: int) -> Tuple[Dict[
                 "content": comment_data.get("content", ""),
                 "task_id": comment_data.get("task_id"),
                 "parent_id": comment_data.get("parent_id"),
-                "user_id": user_id
+                "created_by": user_id
             }
         ).fetchone()
         
@@ -66,7 +66,7 @@ def create_comment(db: Session, comment_data: dict, user_id: int) -> Tuple[Dict[
             "content": result[1],
             "task_id": result[2],
             "parent_id": result[3],
-            "user_id": result[4],
+            "created_by": result[4],
             "created_at": result[5],
             "updated_at": result[6],
             "user": {
@@ -290,7 +290,7 @@ def get_related_task(db: Session, task_id: int) -> Dict[str, Any]:
         Task dictionary with basic information
     """
     query = text("""
-    SELECT id, title, created_by, assignee_id
+    SELECT id, name, created_by, assigned_to
     FROM tasks
     WHERE id = :task_id
     """)
@@ -302,7 +302,7 @@ def get_related_task(db: Session, task_id: int) -> Dict[str, Any]:
     
     return {
         "id": result[0],
-        "title": result[1],
+        "name": result[1],
         "created_by": result[2],
-        "assignee_id": result[3]
-    } 
+        "assigned_to": result[3]
+    }

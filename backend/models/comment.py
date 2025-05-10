@@ -14,11 +14,13 @@ class Comment(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=True)
     
     # Relationships
     task = relationship("Task", back_populates="comments")
     project = relationship("Project", back_populates="comments")
     author = relationship("User", back_populates="comments")
+    replies = relationship("Comment", backref="parent", remote_side=[id])
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

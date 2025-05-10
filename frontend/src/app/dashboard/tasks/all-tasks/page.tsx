@@ -45,6 +45,20 @@ function TaskBoardComponent() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    // Add event listener for dragover on the document
+    const handleDocumentDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      return false;
+    };
+    
+    document.addEventListener('dragover', handleDocumentDragOver, false);
+    
+    return () => {
+      document.removeEventListener('dragover', handleDocumentDragOver, false);
+    };
+  }, []);
+
   const fetchData = async () => {
     try {
       setError(null);
@@ -88,17 +102,19 @@ function TaskBoardComponent() {
 
   // Handle drag start
   const handleDragStart = (e: React.DragEvent, task: Task) => {
+    e.stopPropagation();
     e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/json', JSON.stringify(task));
     e.dataTransfer.setData('text/plain', task.id.toString());
     
     // Set task in state and ref for access during drag operations
     setDraggedTask(task);
     dragTaskRef.current = task;
     
-    // Create a drag image (optional)
+    // Create a drag image
     const dragImage = document.createElement('div');
     dragImage.classList.add('hidden-drag-image');
-    dragImage.innerHTML = `<div class="p-3 bg-white shadow rounded-md">${task.name}</div>`;
+    dragImage.innerHTML = `<div class="p-3 bg-white shadow-lg rounded-md">${task.name}</div>`;
     document.body.appendChild(dragImage);
     
     // Add the drag image
@@ -108,6 +124,10 @@ function TaskBoardComponent() {
     setTimeout(() => {
       document.body.removeChild(dragImage);
     }, 0);
+
+    // Show visual feedback
+    const taskElement = e.currentTarget as HTMLElement;
+    taskElement.classList.add('task-dragging');
   };
 
   // Handle drag over
@@ -118,6 +138,7 @@ function TaskBoardComponent() {
     
     // Highlight the drop target
     setActiveDropTarget(stageId);
+    return false;
   };
 
   // Handle drag leave
@@ -216,6 +237,20 @@ function TaskBoardComponent() {
     setDraggedTask(null);
     setActiveDropTarget(null);
     dragTaskRef.current = null;
+    
+    // Remove any lingering drag classes
+    const taskElements = document.querySelectorAll('.task-card');
+    taskElements.forEach(el => {
+      el.classList.remove('task-dragging');
+    });
+    
+    // Remove any remaining hidden drag images
+    const dragImages = document.querySelectorAll('.hidden-drag-image');
+    dragImages.forEach(el => {
+      if (document.body.contains(el)) {
+        document.body.removeChild(el);
+      }
+    });
   };
 
   // Get task priority color
@@ -312,17 +347,51 @@ function TaskBoardComponent() {
         
         .stage-active {
           background-color: #e0f2fe;
-          transition: background-color 0.2s ease;
+          border: 2px dashed #3b82f6;
+          transition: all 0.2s ease;
         }
         
         .task-card {
           margin-bottom: 0.5rem;
-          cursor: grab;
+          cursor: move !important;
+          cursor: grab !important;
           user-select: none;
+          transition: transform 0.2s, box-shadow 0.2s;
+          -webkit-user-drag: element;
+          touch-action: none;
+        }
+        
+        .task-card:active {
+          cursor: grabbing !important;
+        }
+        
+        .task-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         
         .task-dragging {
           opacity: 0.5;
+          cursor: grabbing !important;
+        }
+        
+        /* Prevent text selection during drag operations */
+        * {
+          -webkit-touch-callout: none;
+          -webkit-user-select: none;
+          -khtml-user-select: none;
+          -moz-user-select: none;
+          -ms-user-select: none;
+          user-select: none;
+        }
+        
+        /* Restore text selection for specific elements */
+        input, textarea, [contenteditable=true] {
+          -webkit-user-select: text;
+          -khtml-user-select: text;
+          -moz-user-select: text;
+          -ms-user-select: text;
+          user-select: text;
         }
       `}</style>
       
@@ -342,12 +411,13 @@ function TaskBoardComponent() {
               onDragOver={(e) => handleDragOver(e, stage.id)}
               onDragLeave={handleDragLeave}
               onDrop={(e) => handleDrop(e, stage.id)}
+              data-stage-id={stage.id}
             >
               {stage.tasks.map((task) => (
                 <Card 
                   key={task.id}
                   className={`task-card p-3 shadow-sm ${draggedTask?.id === task.id ? 'task-dragging' : ''}`}
-                  draggable
+                  draggable={true}
                   onDragStart={(e) => handleDragStart(e, task)}
                   onDragEnd={handleDragEnd}
                 >

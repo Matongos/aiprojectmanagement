@@ -59,10 +59,10 @@ async def read_comment_replies(
 async def create_comment(
     comment: CommentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """Create a new comment."""
-    created_comment, error = comment_service.create_comment(db, comment.dict(), current_user.id)
+    created_comment, error = comment_service.create_comment(db, comment.dict(), current_user["id"])
     
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
@@ -72,7 +72,7 @@ async def create_comment(
         user_service.process_user_mentions(
             db, 
             comment.content, 
-            current_user.id, 
+            current_user["id"], 
             "comment", 
             created_comment["id"],
             notification_service
@@ -80,7 +80,7 @@ async def create_comment(
     
     # Send notification to task owner (if different from commenter)
     task = comment_service.get_related_task(db, comment.task_id)
-    if task and task.get("created_by") != current_user.id:
+    if task and task.get("created_by") != current_user["id"]:
         notification_data = {
             "user_id": task["created_by"],
             "title": "New Comment on Task",
@@ -93,7 +93,7 @@ async def create_comment(
         notification_service.create_notification(db, notification_data)
     
     # Notify task assignee if different from commenter and creator
-    if task and task.get("assignee_id") and task["assignee_id"] != current_user.id and task["assignee_id"] != task.get("created_by"):
+    if task and task.get("assignee_id") and task["assignee_id"] != current_user["id"] and task["assignee_id"] != task.get("created_by"):
         notification_data = {
             "user_id": task["assignee_id"],
             "title": "New Comment on Task",

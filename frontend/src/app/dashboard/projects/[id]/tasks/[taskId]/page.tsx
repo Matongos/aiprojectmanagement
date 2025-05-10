@@ -524,16 +524,16 @@ function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: 
                     <div className="flex items-start gap-3">
                       <Avatar className="h-8 w-8">
                         <AvatarImage
-                          src={comment.user.profile_image_url || DEFAULT_AVATAR_URL}
-                          alt={comment.user.name}
+                          src={comment.user?.profile_image_url || DEFAULT_AVATAR_URL}
+                          alt={comment.user?.name || "User"}
                         />
                         <AvatarFallback>
-                          {comment.user.name[0]}
+                          {comment.user?.name?.[0] || "?"}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
                         <div className="flex items-center justify-between">
-                          <span className="font-medium">{comment.user.name}</span>
+                          <span className="font-medium">{comment.user?.name || "Unknown User"}</span>
                           <span className="text-sm text-gray-500">
                             {new Date(comment.created_at).toLocaleString()}
                           </span>
