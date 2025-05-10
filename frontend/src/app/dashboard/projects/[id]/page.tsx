@@ -89,7 +89,7 @@ const taskStatuses: TaskStatus[] = [
 
 interface Task {
   id: number;
-  title: string;
+  name: string;
   description: string;
   status: string;
   priority: 'low' | 'medium' | 'high';
@@ -1252,7 +1252,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                     <td className="px-4 py-3">
                       <div className="flex items-center">
                         <StatusIcon status={task.status} />
-                        <span className="ml-2">{task.title}</span>
+                        <span className="ml-2">{task.name}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm">{stage.name}</td>

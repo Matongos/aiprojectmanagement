@@ -171,7 +171,8 @@ const TasksPage = () => {
       const query = searchQuery.toLowerCase();
       result = result.filter(task => 
         task.title.toLowerCase().includes(query) || 
-        `${task.projectKey}-${task.id.split('-')[1]}`.toLowerCase().includes(query)
+        `${task.projectKey}-${task.id.split('-')[1]}`.toLowerCase().includes(query) ||
+        task.name.toLowerCase().includes(query)
       );
     }
     
@@ -537,7 +538,7 @@ const TasksPage = () => {
                         </TableCell>
                         <TableCell>
                           <div>
-                            <div className="font-medium">{task.title}</div>
+                            <div className="font-medium">{task.name}</div>
                             <div className="text-sm text-muted-foreground md:hidden flex items-center mt-1">
                               <Badge className={`mr-2 ${getStatusColor(task.status)}`}>
                                 {getStatusLabel(task.status)}

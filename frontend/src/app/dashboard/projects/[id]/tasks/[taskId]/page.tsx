@@ -1,778 +1,426 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Star,
-  Calendar,
-  Clock,
-  MessageSquare,
-  FileText,
-  CheckSquare,
-  Info,
-  Send,
-  Plus,
-  Edit,
-  Save,
-  X,
-  Upload,
-  Download,
-  Trash2
-} from "lucide-react";
-import { API_BASE_URL, DEFAULT_AVATAR_URL } from "@/lib/constants";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import React from "react";
+import { API_BASE_URL } from "@/lib/constants";
 import { useAuthStore } from "@/store/authStore";
 import { toast } from "react-hot-toast";
-import AuthWrapper from "@/components/AuthWrapper";
-import { use } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+interface Stage {
+  id: string;
+  name: string;
+  order: number;
+  duration?: string;
+}
 
 interface Task {
-  id: number;
+  id: string;
   name: string;
   description: string;
-  state: 'draft' | 'in_progress' | 'done' | 'canceled';
-  priority: 'low' | 'normal' | 'high' | 'urgent';
-  project_id: number;
   stage_id: number;
-  parent_id: number | null;
-  assigned_to: number | null;
-  milestone_id: number | null;
-  company_id: number | null;
-  start_date: string | null;
-  end_date: string | null;
-  deadline: string | null;
-  planned_hours: number;
-  progress: number;
-  created_at: string;
-  updated_at: string | null;
-  created_by: number;
-  assignee: {
-    id: number;
-    name: string;
-    profile_image_url: string | null;
-  } | null;
-  milestone: {
-    id: number;
-    name: string;
-  } | null;
-  company: {
-    id: number;
-    name: string;
-  } | null;
+  // ... other task properties
 }
 
-interface Comment {
-  id: number;
-  content: string;
-  task_id: number;
-  parent_id: number | null;
-  created_at: string;
-  user: {
-    id: number;
-    name: string;
-    profile_image_url: string | null;
-  };
+interface TaskDetailsProps {
+  params: Promise<{
+    id: string;
+    taskId: string;
+  }>;
 }
 
-interface FileAttachment {
-  id: number;
-  filename: string;
-  original_filename: string;
-  file_size: number;
-  content_type: string;
-  description: string | null;
-  task_id: number;
-  uploaded_by: number;
-  created_at: string;
-  updated_at: string | null;
-}
+export default function TaskDetails({ params }: TaskDetailsProps) {
+  // Unwrap params using React.use()
+  const { id, taskId } = React.use(params);
+  const [currentStage, setCurrentStage] = useState<string>("");
+  const [description, setDescription] = useState("");
+  const { token } = useAuthStore();
+  const [showAllStages, setShowAllStages] = useState(false);
 
-function TaskDetailsContent({ projectId, taskId }: { projectId: string; taskId: string }) {
-  const router = useRouter();
-  const { token, user } = useAuthStore();
-  const [task, setTask] = useState<Task | null>(null);
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [attachments, setAttachments] = useState<FileAttachment[]>([]);
-  const [newComment, setNewComment] = useState("");
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedTask, setEditedTask] = useState<Partial<Task>>({});
-  const [loading, setLoading] = useState(true);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const [projectUsers, setProjectUsers] = useState<Array<{
-    id: number;
-    name: string;
-    profile_image_url: string | null;
-  }>>([]);
-
-  useEffect(() => {
-    const fetchTaskDetails = async () => {
+  // Fetch task details including current stage
+  const { data: taskDetails, isLoading: isLoadingTask, error: taskError } = useQuery<Task>({
+    queryKey: ["task-details", taskId],
+    queryFn: async () => {
       try {
-        const storedToken = token || localStorage.getItem('token');
-        if (!storedToken) {
-          console.error("No token available");
-          router.push('/auth/login');
-          return;
-        }
-
         const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
           headers: {
-            'Authorization': `Bearer ${storedToken}`,
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
-          credentials: 'include',
-          mode: 'cors'
         });
 
         if (response.status === 401) {
-          console.error("Unauthorized access");
-          router.push('/auth/login');
-          return;
+          toast.error("Please log in to view this content");
+          throw new Error("Unauthorized");
         }
 
         if (!response.ok) {
-          throw new Error("Failed to fetch task details");
+          throw new Error(`Failed to fetch task details: ${response.statusText}`);
         }
 
         const data = await response.json();
-        setTask(data);
-        setEditedTask(data);
+        console.log("Task Details Response:", data); // Debug log
+        return data;
       } catch (error) {
-        console.error("Error fetching task details:", error);
+        console.error("Error fetching task:", error);
         toast.error("Failed to load task details");
-      } finally {
-        setLoading(false);
+        throw error;
       }
-    };
+    },
+    enabled: !!token && !!taskId,
+  });
 
-    const fetchComments = async () => {
+  // Fetch project stages
+  const { data: stages = [], isLoading: isLoadingStages, error: stagesError } = useQuery<Stage[]>({
+    queryKey: ["project-stages", id],
+    queryFn: async () => {
       try {
-        const storedToken = token || localStorage.getItem('token');
-        if (!storedToken) return;
-
-        const response = await fetch(`${API_BASE_URL}/comments/task/${taskId}`, {
+        const response = await fetch(`${API_BASE_URL}/projects/${id}/stages`, {
           headers: {
-            'Authorization': `Bearer ${storedToken}`,
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
-          credentials: 'include',
-          mode: 'cors'
         });
-
-        if (!response.ok) throw new Error("Failed to fetch comments");
-
+        
+        if (response.status === 401) {
+          toast.error("Please log in to view this content");
+          throw new Error("Unauthorized");
+        }
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch project stages: ${response.statusText}`);
+        }
+        
         const data = await response.json();
-        setComments(data);
+        console.log("Stages Response:", data); // Debug log
+        return data;
       } catch (error) {
-        console.error("Error fetching comments:", error);
+        console.error("Error fetching stages:", error);
+        toast.error("Failed to load project stages");
+        throw error;
       }
-    };
+    },
+    enabled: !!token && !!id,
+  });
 
-    const fetchAttachments = async () => {
-      try {
-        const storedToken = token || localStorage.getItem('token');
-        if (!storedToken) return;
+  // Set current stage when task details are loaded
+  useEffect(() => {
+    if (taskDetails?.stage_id) {
+      const stageId = taskDetails.stage_id.toString();
+      console.log("Setting current stage to:", stageId); // Debug log
+      setCurrentStage(stageId);
+    }
+  }, [taskDetails]);
 
-        const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments`, {
-          headers: {
-            'Authorization': `Bearer ${storedToken}`,
-            'Content-Type': 'application/json'
-          },
-          credentials: 'include',
-          mode: 'cors'
-        });
+  const actionButtons = (
+    <div className="flex items-center gap-2 overflow-x-auto pb-2">
+      <Button variant="outline" size="sm" className="whitespace-nowrap">Send message</Button>
+      <Button variant="outline" size="sm" className="whitespace-nowrap">Log note</Button>
+      <Button variant="outline" size="sm" className="whitespace-nowrap">Activities</Button>
+      <Button variant="outline" size="sm" className="flex items-center gap-2 whitespace-nowrap">
+        <MessageSquare className="w-4 h-4" />
+        Comments
+      </Button>
+    </div>
+  );
 
-        if (!response.ok) throw new Error("Failed to fetch attachments");
-
-        const data = await response.json();
-        setAttachments(data);
-      } catch (error) {
-        console.error("Error fetching attachments:", error);
-      }
-    };
-
-    const fetchProjectUsers = async () => {
-      try {
-        const storedToken = token || localStorage.getItem('token');
-        if (!storedToken) return;
-
-        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/members`, {
-          headers: {
-            'Authorization': `Bearer ${storedToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) throw new Error("Failed to fetch project members");
-
-        const data = await response.json();
-        setProjectUsers(data);
-      } catch (error) {
-        console.error("Error fetching project members:", error);
-        toast.error("Failed to load project members");
-      }
-    };
-
-    fetchTaskDetails();
-    fetchComments();
-    fetchAttachments();
-    fetchProjectUsers();
-  }, [taskId, token, router, projectId]);
-
-  const handleSave = async () => {
+  // Handle stage change
+  const handleStageChange = async (stageId: string) => {
     try {
-      const storedToken = token || localStorage.getItem('token');
-      if (!storedToken) {
-        router.push('/auth/login');
-        return;
-      }
-
-      // Only send fields that are allowed to be updated
-      const updateData = {
-        name: editedTask.name,
-        description: editedTask.description,
-        state: editedTask.state,
-        priority: editedTask.priority,
-        assigned_to: editedTask.assigned_to,
-        deadline: editedTask.deadline,
-        planned_hours: editedTask.planned_hours,
-        start_date: editedTask.start_date,
-        end_date: editedTask.end_date
-      };
-
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-        method: "PUT",
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/stage`, {
+        method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${storedToken}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
-        mode: 'cors',
-        body: JSON.stringify(updateData)
+        body: JSON.stringify({ stage_id: stageId }),
       });
 
-      if (response.status === 401) {
-        router.push('/auth/login');
-        return;
+      if (!response.ok) {
+        throw new Error('Failed to update task stage');
       }
 
-      if (!response.ok) throw new Error("Failed to update task");
-
-      const updatedTask = await response.json();
-      setTask(updatedTask);
-      setIsEditing(false);
-      toast.success("Task updated successfully");
+      setCurrentStage(stageId);
+      toast.success('Task stage updated successfully');
     } catch (error) {
-      console.error("Error updating task:", error);
-      toast.error("Failed to update task");
+      console.error('Error updating task stage:', error);
+      toast.error('Failed to update task stage');
     }
   };
 
-  const handleCommentSubmit = async () => {
-    if (!newComment.trim()) return;
+  // Loading states
+  if (isLoadingTask || isLoadingStages) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-pulse text-gray-500">Loading task details...</div>
+      </div>
+    );
+  }
 
-    try {
-      const storedToken = token || localStorage.getItem('token');
-      if (!storedToken) {
-        router.push('/auth/login');
-        return;
-      }
+  // Error states
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <h2 className="text-xl font-semibold text-red-600 mb-2">Authentication Required</h2>
+          <p className="text-gray-600">Please log in to view this content</p>
+        </div>
+      </div>
+    );
+  }
 
-      const commentData = {
-        content: newComment,
-        task_id: parseInt(taskId),
-        parent_id: null,
-        mentions: []
-      };
-
-      const response = await fetch(`${API_BASE_URL}/comments`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${storedToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(commentData)
-      });
-
-      if (response.status === 401) {
-        router.push('/auth/login');
-        return;
-      }
-
-      if (!response.ok) throw new Error("Failed to add comment");
-
-      const comment = await response.json();
-      setComments((prev) => [...prev, comment]);
-      setNewComment("");
-      toast.success("Comment added successfully");
-    } catch (error) {
-      console.error("Error adding comment:", error);
-      toast.error("Failed to add comment");
-    }
-  };
-
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setUploadingFile(true);
-      const storedToken = token || localStorage.getItem('token');
-      if (!storedToken) {
-        router.push('/auth/login');
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('description', '');
-
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/attachments`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${storedToken}`
-        },
-        body: formData
-      });
-
-      if (response.status === 401) {
-        router.push('/auth/login');
-        return;
-      }
-
-      if (!response.ok) throw new Error("Failed to upload file");
-
-      const newAttachment = await response.json();
-      setAttachments(prev => [...prev, newAttachment]);
-      toast.success("File uploaded successfully");
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      toast.error("Failed to upload file");
-    } finally {
-      setUploadingFile(false);
-    }
-  };
-
-  const handleDownloadFile = async (fileId: number, filename: string) => {
-    try {
-      const storedToken = token || localStorage.getItem('token');
-      if (!storedToken) {
-        router.push('/auth/login');
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/file-attachments/${fileId}/download`, {
-        headers: {
-          'Authorization': `Bearer ${storedToken}`
-        }
-      });
-
-      if (response.status === 401) {
-        router.push('/auth/login');
-        return;
-      }
-
-      if (!response.ok) throw new Error("Failed to download file");
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error("Error downloading file:", error);
-      toast.error("Failed to download file");
-    }
-  };
-
-  const handleDeleteFile = async (fileId: number) => {
-    if (!window.confirm("Are you sure you want to delete this file?")) return;
-
-    try {
-      const storedToken = token || localStorage.getItem('token');
-      if (!storedToken) {
-        router.push('/auth/login');
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/file-attachments/${fileId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${storedToken}`
-        }
-      });
-
-      if (response.status === 401) {
-        router.push('/auth/login');
-        return;
-      }
-
-      if (!response.ok) throw new Error("Failed to delete file");
-
-      setAttachments(prev => prev.filter(a => a.id !== fileId));
-      toast.success("File deleted successfully");
-    } catch (error) {
-      console.error("Error deleting file:", error);
-      toast.error("Failed to delete file");
-    }
-  };
-
-  if (loading) return <div className="p-4">Loading...</div>;
-  if (!task) return <div className="p-4">Task not found</div>;
+  if (stagesError || taskError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <h2 className="text-xl font-semibold text-red-600 mb-2">Error</h2>
+          <p className="text-gray-600">
+            {stagesError ? "Failed to load project stages" : "Failed to load task details"}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex items-start gap-6">
-        {/* Main Content */}
-        <div className="flex-1">
-          {/* Header */}
-          <div className="flex items-start justify-between mb-6">
-            <div className="flex-1">
-              {isEditing ? (
-                <Input
-                  value={editedTask.name || ""}
-                  onChange={(e) =>
-                    setEditedTask({ ...editedTask, name: e.target.value })
-                  }
-                  className="text-xl font-semibold mb-2"
-                />
-              ) : (
-                <h1 className="text-xl font-semibold mb-2">{task.name}</h1>
-              )}
-              <div className="flex items-center gap-4 text-sm text-gray-500">
-                <span>Created {new Date(task.created_at).toLocaleDateString()}</span>
-                {task.milestone && (
-                  <Badge variant="secondary">{task.milestone.name}</Badge>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {isEditing ? (
-                <>
-                  <Button variant="ghost" onClick={() => setIsEditing(false)}>
-                    <X className="h-4 w-4 mr-2" />
-                    Cancel
-                  </Button>
-                  <Button onClick={handleSave}>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save Changes
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={() => setIsEditing(true)}>
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
+    <div className="min-h-screen bg-gray-50">
+      {/* Top Navigation with Stages and Actions */}
+      <div className="container mx-auto px-6">
+        <div className="flex justify-between items-center py-4">
+          {/* Stage Navigation */}
+          <div className="flex items-center gap-1.5">
+            {stages.slice(0, showAllStages ? stages.length : 4).map((stage) => {
+              const isCurrentStage = stage.id.toString() === currentStage;
+              console.log(`Stage ${stage.id} comparison:`, { 
+                stageId: stage.id, 
+                currentStage, 
+                isCurrentStage,
+                taskStageId: taskDetails?.stage_id 
+              }); // Debug log
+              
+              return (
+                <Button
+                  key={stage.id}
+                  variant={isCurrentStage ? "default" : "outline"}
+                  className={`transition-all duration-200 ${
+                    isCurrentStage
+                      ? "bg-purple-600 text-white hover:bg-purple-700 ring-2 ring-purple-300" 
+                      : "hover:bg-purple-50"
+                  } h-8 px-3 justify-center relative`}
+                  onClick={() => handleStageChange(stage.id)}
+                >
+                  <div className="flex items-center">
+                    <span className="text-sm">{stage.name}</span>
+                    {isCurrentStage && stage.duration && (
+                      <span className="text-xs opacity-80 ml-1">({stage.duration})</span>
+                    )}
+                    {isCurrentStage && (
+                      <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-purple-600 rotate-45" />
+                    )}
+                  </div>
                 </Button>
-              )}
+              );
+            })}
+            
+            {!showAllStages && stages.length > 4 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-[200px]">
+                  {stages.slice(4).map((stage) => (
+                    <DropdownMenuItem
+                      key={stage.id}
+                      onClick={() => handleStageChange(stage.id)}
+                      className={stage.id.toString() === currentStage ? "bg-purple-50" : ""}
+                    >
+                      {stage.name}
+                      {stage.id.toString() === currentStage && (
+                        <ChevronRight className="ml-auto h-4 w-4" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuItem
+                    onClick={() => setShowAllStages(true)}
+                    className="border-t mt-1 pt-1"
+                  >
+                    View All Stages
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+
+          {/* Action Buttons - Desktop */}
+          <div className="hidden lg:block">
+            {actionButtons}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="container mx-auto px-6">
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* Main Content Area */}
+          <div className="flex-grow order-1 lg:order-1">
+            <div className="bg-white rounded-lg shadow p-6">
+              {/* Task Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <Star className="text-gray-400" />
+                  <h1 className="text-xl font-medium">
+                    {isLoadingTask ? (
+                      <div className="h-7 w-32 bg-gray-100 animate-pulse rounded"></div>
+                    ) : (
+                      taskDetails?.name || "Task Name"
+                    )}
+                  </h1>
+                </div>
+                <span className="text-sm bg-gray-100 px-3 py-1 rounded">In Progress</span>
+              </div>
+
+              {/* Task Details Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+                  <Input placeholder="Select project..." value="comments" readOnly />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Milestone</label>
+                  <Input placeholder="e.g. Product Launch" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Assignees</label>
+                  <Input placeholder="Select assignees..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
+                  <Input placeholder="Add tags..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
+                  <Input placeholder="Select customer..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Allocated Time</label>
+                  <div className="flex items-center gap-2">
+                    <Input type="time" defaultValue="00:00" />
+                    <span className="text-gray-500">(0%)</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                  <Input type="date" />
+                </div>
+              </div>
+
+              {/* Tabs Navigation */}
+              <div className="border-b mb-6 overflow-x-auto">
+                <nav className="flex gap-4 min-w-max">
+                  <Button variant="ghost" className="text-purple-700 border-b-2 border-purple-700 rounded-none px-0">
+                    Description
+                  </Button>
+                  <Button variant="ghost" className="text-gray-500 rounded-none px-0">
+                    Timesheets
+                  </Button>
+                  <Button variant="ghost" className="text-gray-500 rounded-none px-0">
+                    Sub-tasks
+                  </Button>
+                  <Button variant="ghost" className="text-gray-500 rounded-none px-0">
+                    Extra Info
+                  </Button>
+                  <Button variant="ghost" className="text-gray-500 rounded-none px-0">
+                    Checklist
+                  </Button>
+                </nav>
+              </div>
+
+              {/* Description Area */}
+              <Textarea
+                placeholder="Add details about this task..."
+                className="min-h-[200px] w-full"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
             </div>
           </div>
 
-          {/* Tabs */}
-          <Tabs defaultValue="description" className="w-full">
-            <TabsList>
-              <TabsTrigger value="description">
-                <FileText className="h-4 w-4 mr-2" />
-                Description
-              </TabsTrigger>
-              <TabsTrigger value="comments">
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Comments
-              </TabsTrigger>
-              <TabsTrigger value="attachments">
-                <Upload className="h-4 w-4 mr-2" />
-                Attachments
-              </TabsTrigger>
-            </TabsList>
+          {/* Action Buttons and Activity Feed for Mobile */}
+          <div className="lg:w-80 order-2 lg:order-2">
+            {/* Mobile Action Buttons */}
+            <div className="lg:hidden mb-4">
+              {actionButtons}
+            </div>
 
-            <TabsContent value="description" className="mt-4">
-              {isEditing ? (
-                <Textarea
-                  value={editedTask.description || ""}
-                  onChange={(e) =>
-                    setEditedTask({ ...editedTask, description: e.target.value })
-                  }
-                  className="min-h-[200px]"
-                  placeholder="Add a description..."
-                />
-              ) : (
-                <div className="prose max-w-none">
-                  {task.description || "No description provided."}
-                </div>
-              )}
-            </TabsContent>
+            {/* Activity Feed */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium">Today</h3>
+              </div>
 
-            <TabsContent value="comments" className="mt-4">
+              {/* Activity Items */}
               <div className="space-y-4">
-                {comments.map((comment) => (
-                  <Card key={comment.id} className="p-4">
-                    <div className="flex items-start gap-3">
-                      <Avatar className="h-8 w-8">
-                        <AvatarImage
-                          src={comment.user?.profile_image_url || DEFAULT_AVATAR_URL}
-                          alt={comment.user?.name || "User"}
-                        />
-                        <AvatarFallback>
-                          {comment.user?.name?.[0] || "?"}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium">{comment.user?.name || "Unknown User"}</span>
-                          <span className="text-sm text-gray-500">
-                            {new Date(comment.created_at).toLocaleString()}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-gray-700">{comment.content}</p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-
-                <div className="flex items-start gap-3 mt-4">
-                  <Avatar className="h-8 w-8">
-                    <AvatarImage
-                      src={user?.profile_image_url || DEFAULT_AVATAR_URL}
-                      alt={user?.full_name || ""}
-                    />
-                    <AvatarFallback>
-                      {user?.full_name ? user.full_name[0] : "?"}
-                    </AvatarFallback>
+                <div className="flex items-start gap-3">
+                  <Avatar className="w-8 h-8 bg-purple-600">
+                    <span>M</span>
                   </Avatar>
-                  <div className="flex-1">
-                    <Textarea
-                      value={newComment}
-                      onChange={(e) => setNewComment(e.target.value)}
-                      placeholder="Add a comment..."
-                      className="mb-2"
-                    />
-                    <Button onClick={handleCommentSubmit}>
-                      <Send className="h-4 w-4 mr-2" />
-                      Send
-                    </Button>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">Marc Demo</span>
+                      <span className="text-sm text-gray-500">1 hour ago</span>
+                    </div>
+                    <p>hi</p>
                   </div>
                 </div>
-              </div>
-            </TabsContent>
 
-            <TabsContent value="attachments" className="mt-4">
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <input
-                    type="file"
-                    id="file-upload"
-                    className="hidden"
-                    onChange={handleFileUpload}
-                  />
-                  <Button
-                    onClick={() => document.getElementById('file-upload')?.click()}
-                    disabled={uploadingFile}
-                  >
-                    <Upload className="h-4 w-4 mr-2" />
-                    {uploadingFile ? "Uploading..." : "Upload File"}
-                  </Button>
+                <div className="flex items-start gap-3">
+                  <Avatar className="w-8 h-8 bg-purple-600">
+                    <span>M</span>
+                  </Avatar>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">Marc Demo</span>
+                      <span className="text-red-500">@</span>
+                      <span className="text-sm text-gray-500">1 hour ago</span>
+                    </div>
+                    <p>lets do it</p>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  {attachments.map((attachment) => (
-                    <Card key={attachment.id} className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4" />
-                          <span>{attachment.original_filename}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDownloadFile(attachment.id, attachment.original_filename)}
-                          >
-                            <Download className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteFile(attachment.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
-
-        {/* Sidebar */}
-        <div className="w-80">
-          <Card className="p-4">
-            <div className="space-y-4">
-              {/* Status */}
-              <div>
-                <label className="text-sm font-medium mb-1 block">Status</label>
-                {isEditing ? (
-                  <Select
-                    value={editedTask.state}
-                    onValueChange={(value) =>
-                      setEditedTask({ ...editedTask, state: value as Task['state'] })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="in_progress">In Progress</SelectItem>
-                      <SelectItem value="done">Done</SelectItem>
-                      <SelectItem value="canceled">Canceled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Badge>{task.state}</Badge>
-                )}
-              </div>
-
-              {/* Priority */}
-              <div>
-                <label className="text-sm font-medium mb-1 block">Priority</label>
-                {isEditing ? (
-                  <Select
-                    value={editedTask.priority}
-                    onValueChange={(value) =>
-                      setEditedTask({ ...editedTask, priority: value as Task['priority'] })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select priority" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="normal">Normal</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="urgent">Urgent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Badge>{task.priority}</Badge>
-                )}
-              </div>
-
-              {/* Assignee */}
-              <div>
-                <label className="text-sm font-medium mb-1 block">Assignee</label>
-                {isEditing ? (
-                  <Select
-                    value={editedTask.assigned_to ? String(editedTask.assigned_to) : "unassigned"}
-                    onValueChange={(value) =>
-                      setEditedTask({ ...editedTask, assigned_to: value === "unassigned" ? null : Number(value) })
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select assignee" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="unassigned">Unassigned</SelectItem>
-                      {projectUsers.map((projectUser) => (
-                        <SelectItem key={projectUser.id} value={String(projectUser.id)}>
-                          <div className="flex items-center gap-2">
-                            <Avatar className="h-6 w-6">
-                              <AvatarImage
-                                src={projectUser.profile_image_url || DEFAULT_AVATAR_URL}
-                                alt={projectUser.name}
-                              />
-                              <AvatarFallback>{projectUser.name[0]}</AvatarFallback>
-                            </Avatar>
-                            <span>{projectUser.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    {task.assignee ? (
-                      <>
-                        <Avatar className="h-6 w-6">
-                          <AvatarImage
-                            src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL}
-                            alt={task.assignee.name}
-                          />
-                          <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <span>{task.assignee.name}</span>
-                      </>
-                    ) : (
-                      <span className="text-gray-500">Unassigned</span>
-                    )}
+                <div className="flex items-start gap-3">
+                  <Avatar className="w-8 h-8 bg-purple-600">
+                    <span>M</span>
+                  </Avatar>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">Mitchell Admin</span>
+                      <span className="text-sm text-gray-500">9 hours ago</span>
+                    </div>
+                    <p>Task Created</p>
                   </div>
-                )}
-              </div>
-
-              {/* Dates */}
-              <div>
-                <label className="text-sm font-medium mb-1 block">Due Date</label>
-                {isEditing ? (
-                  <Input
-                    type="datetime-local"
-                    value={editedTask.deadline || ""}
-                    onChange={(e) =>
-                      setEditedTask({ ...editedTask, deadline: e.target.value })
-                    }
-                  />
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4" />
-                    <span>
-                      {task.deadline
-                        ? new Date(task.deadline).toLocaleDateString()
-                        : "No due date"}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Time Tracking */}
-              <div>
-                <label className="text-sm font-medium mb-1 block">
-                  Time Tracking
-                </label>
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  <span>{task.planned_hours || 0} hours planned</span>
                 </div>
               </div>
             </div>
-          </Card>
+          </div>
         </div>
       </div>
     </div>
-  );
-}
-
-export default function TaskDetailsPage({ params }: { params: Promise<{ id: string; taskId: string }> }) {
-  const resolvedParams = use(params);
-  
-  return (
-    <AuthWrapper>
-      <TaskDetailsContent projectId={resolvedParams.id} taskId={resolvedParams.taskId} />
-    </AuthWrapper>
   );
 }

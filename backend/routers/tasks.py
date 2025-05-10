@@ -13,6 +13,7 @@ from routers.auth import get_current_user
 from schemas.user import User
 from services.file_service import FileService
 from services.notification_service import NotificationService
+from services.task_service import TaskService
 from models.projects import Project
 
 router = APIRouter(
@@ -24,7 +25,7 @@ router = APIRouter(
 
 # File attachment endpoints
 file_service = FileService()
-
+task_service = TaskService()
 notification_service = NotificationService()
 
 @router.post("/", response_model=TaskSchema, status_code=status.HTTP_201_CREATED)
@@ -124,34 +125,36 @@ async def read_task(
     if not current_user["is_superuser"] and db_task.assigned_to != current_user["id"] and db_task.created_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    # Properly serialize the assignee if it exists
-    if db_task.assignee:
-        task_dict = {
-            "id": db_task.id,
-            "name": db_task.name,
-            "description": db_task.description,
-            "priority": db_task.priority,
-            "state": db_task.state,
-            "project_id": db_task.project_id,
-            "stage_id": db_task.stage_id,
-            "assigned_to": db_task.assigned_to,
-            "assignee": {
-                "id": db_task.assignee.id,
-                "username": db_task.assignee.username,
-                "email": db_task.assignee.email,
-                "full_name": db_task.assignee.full_name,
-                "profile_image_url": db_task.assignee.profile_image_url
-            },
-            "milestone_id": db_task.milestone_id,
-            "milestone": db_task.milestone,
-            "deadline": db_task.deadline,
-            "progress": db_task.progress if db_task.progress is not None else 0.0,
-            "created_at": db_task.created_at,
-            "updated_at": db_task.updated_at
-        }
-        return TaskSchema(**task_dict)
+    # Create base task dictionary
+    task_dict = {
+        "id": db_task.id,
+        "name": db_task.name,
+        "description": db_task.description,
+        "priority": db_task.priority,
+        "state": db_task.state,
+        "project_id": db_task.project_id,
+        "stage_id": db_task.stage_id,
+        "assigned_to": db_task.assigned_to,
+        "milestone_id": db_task.milestone_id,
+        "milestone": db_task.milestone,
+        "deadline": db_task.deadline,
+        "progress": db_task.progress if db_task.progress is not None else 0.0,
+        "created_at": db_task.created_at,
+        "updated_at": db_task.updated_at,
+        "created_by": db_task.created_by  # Always include created_by
+    }
     
-    return db_task
+    # Add assignee details if present
+    if db_task.assignee:
+        task_dict["assignee"] = {
+            "id": db_task.assignee.id,
+            "username": db_task.assignee.username,
+            "email": db_task.assignee.email,
+            "full_name": db_task.assignee.full_name,
+            "profile_image_url": db_task.assignee.profile_image_url
+        }
+    
+    return TaskSchema(**task_dict)
 
 @router.put("/{task_id}", response_model=TaskSchema)
 async def update_task(
@@ -190,7 +193,7 @@ async def update_task(
         notification_data = {
             "user_id": task.assigned_to,
             "title": "Task Assignment",
-            "content": f"You have been assigned to the task: {updated_task.title}",
+            "content": f"You have been assigned to the task: {updated_task.name}",
             "type": "task_assignment",
             "reference_type": "task",
             "reference_id": task_id,
@@ -213,7 +216,7 @@ async def update_task(
                 notification_data = {
                     "user_id": user_id,
                     "title": "Task Status Changed",
-                    "content": f"Task '{updated_task.title}' status changed to {task.status}",
+                    "content": f"Task '{updated_task.name}' status changed to {task.status}",
                     "type": "task_status",
                     "reference_type": "task",
                     "reference_id": task_id,

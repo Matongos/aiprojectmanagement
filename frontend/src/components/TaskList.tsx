@@ -18,7 +18,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
   const filteredTasks = tasks.filter((task) => {
     // Search term filter
     const matchesSearch = 
-      task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      task.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (task.description && task.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (task.tags && task.tags.toLowerCase().includes(searchTerm.toLowerCase()));
 

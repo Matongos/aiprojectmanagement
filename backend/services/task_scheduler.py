@@ -78,7 +78,7 @@ class TaskScheduler:
                     NotificationService.notify_due_date_approaching(
                         db=db,
                         task_id=task.id,
-                        task_title=task.title,
+                        task_title=task.name,
                         days_remaining=1,
                         user_id=task.assignee_id
                     )
@@ -90,7 +90,7 @@ class TaskScheduler:
                     NotificationService.notify_due_date_approaching(
                         db=db,
                         task_id=task.id,
-                        task_title=task.title,
+                        task_title=task.name,
                         days_remaining=days_remaining,
                         user_id=task.assignee_id
                     )

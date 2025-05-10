@@ -372,7 +372,7 @@ class NotificationService:
                     
                     # Add task details
                     template_vars["task_details"] = {
-                        "title": task.title,
+                        "title": task.name,
                         "description": task.description,
                         "status": task.status.replace("_", " ").title() if task.status else "Not Set",
                         "priority": task.priority.replace("_", " ").title() if task.priority else "Not Set",

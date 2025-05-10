@@ -19,7 +19,7 @@ import { getTaskAttachments, uploadTaskAttachment, deleteFileAttachment } from '
 // Task interface
 interface Task {
   id: string;
-  title: string;
+  name: string;
   description: string;
   status: 'todo' | 'in_progress' | 'review' | 'done';
   priority: 'low' | 'medium' | 'high';
@@ -49,7 +49,7 @@ interface Task {
 // Mock task data
 const mockTask: Task = {
   id: '1',
-  title: 'Implement user authentication',
+  name: 'Implement user authentication',
   description: 'Create a secure authentication system with JWT tokens and user roles/permissions.',
   status: 'in_progress',
   priority: 'high',
@@ -131,7 +131,7 @@ const TaskDetailPage = () => {
         setTimeout(() => {
           setTask(mockTask);
           setFormData({
-            title: mockTask.title,
+            title: mockTask.name,
             description: mockTask.description || '',
             status: mockTask.status,
             priority: mockTask.priority,
@@ -545,7 +545,7 @@ const TaskDetailPage = () => {
                 <div className="lg:col-span-2">
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
-                      <CardTitle>{task.title}</CardTitle>
+                      <CardTitle>{task.name}</CardTitle>
                       <div className="flex space-x-2">
                         {!isEditing && (
                           <>

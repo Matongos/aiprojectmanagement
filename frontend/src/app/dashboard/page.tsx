@@ -236,7 +236,7 @@ export default function Dashboard() {
               <div className="space-y-4">
                 {urgentTasks.map((task) => (
                   <div key={task.id} className="flex items-center justify-between">
-                    <p className="text-sm">{task.title}</p>
+                    <p className="text-sm">{task.name}</p>
                     <span className="text-xs text-red-500">Today</span>
                   </div>
                 ))}

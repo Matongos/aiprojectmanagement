@@ -2,106 +2,37 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
+from models.task import Task
 
-def create_task(db: Session, task_data: dict, creator_id: int) -> Tuple[Dict[str, Any], Optional[str]]:
-    """
-    Create a new task.
-    
-    Args:
-        db: Database session
-        task_data: Task data with title, description, status, etc.
-        creator_id: ID of the user creating the task
+class TaskService:
+    def create_task(self, db: Session, task_data: Dict[str, Any], creator_id: int) -> Tuple[Optional[Task], Optional[str]]:
+        """Create a new task with the given data.
         
-    Returns:
-        Tuple containing (task_dict, error_message)
-    """
-    try:
-        # Validate project exists
-        if not task_data.get("project_id"):
-            return None, "Project ID is required"
+        Args:
+            db: Database session
+            task_data: Dictionary containing task data
+            creator_id: ID of the user creating the task
             
-        check_query = text("SELECT id FROM projects WHERE id = :project_id")
-        project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
-        if not project:
-            return None, f"Project with ID {task_data['project_id']} not found"
-        
-        # Validate assignee exists if specified
-        if task_data.get("assigned_to"):
-            check_query = text("SELECT id FROM users WHERE id = :assigned_to")
-            assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
-            if not assignee:
-                return None, f"User with ID {task_data['assigned_to']} not found"
-        
-        # Validate milestone exists if specified
-        if task_data.get("milestone_id"):
-            check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
-            milestone = db.execute(check_query, {"milestone_id": task_data["milestone_id"]}).fetchone()
-            if not milestone:
-                return None, f"Milestone with ID {task_data['milestone_id']} not found"
-        
-        # Validate parent task exists if specified
-        if task_data.get("parent_id"):
-            check_query = text("SELECT id FROM tasks WHERE id = :parent_id")
-            parent = db.execute(check_query, {"parent_id": task_data["parent_id"]}).fetchone()
-            if not parent:
-                return None, f"Parent task with ID {task_data['parent_id']} not found"
-        
-        # Set defaults
-        now = datetime.utcnow()
-        task_data.setdefault("state", "draft")
-        task_data.setdefault("priority", "normal")
-        
-        # Insert task
-        insert_query = text("""
-        INSERT INTO tasks (
-            name, description, state, priority,
-            start_date, deadline, end_date,
-            planned_hours, project_id, stage_id, assigned_to,
-            milestone_id, parent_id,
-            created_by, created_at, updated_at
-        ) 
-        VALUES (
-            :name, :description, :state, :priority,
-            :start_date, :deadline, :end_date,
-            :planned_hours, :project_id, :stage_id, :assigned_to,
-            :milestone_id, :parent_id,
-            :created_by, :created_at, :updated_at
-        )
-        RETURNING *
-        """)
-        
-        result = db.execute(
-            insert_query, 
-            {
-                "name": task_data["name"],  # Only required field
-                "description": task_data.get("description"),
-                "state": task_data.get("state", "draft"),
-                "priority": task_data.get("priority", "normal"),
-                "start_date": task_data.get("start_date"),
-                "deadline": task_data.get("deadline"),
-                "end_date": task_data.get("end_date"),
-                "planned_hours": task_data.get("planned_hours", 0.0),
-                "project_id": task_data["project_id"],  # Required field
-                "stage_id": task_data.get("stage_id"),
-                "assigned_to": task_data.get("assigned_to"),
-                "milestone_id": task_data.get("milestone_id"),
-                "parent_id": None if not task_data.get("parent_id") or task_data.get("parent_id") == 0 else task_data["parent_id"],
-                "created_by": creator_id,
-                "created_at": now,
-                "updated_at": now
-            }
-        ).fetchone()
-        
-        db.commit()
-        
-        # Convert result to dictionary
-        task = dict(result._mapping)
-        
-        return task, None
-    
-    except Exception as e:
-        db.rollback()
-        return None, f"Error creating task: {str(e)}"
+        Returns:
+            Tuple containing:
+                - Created task object if successful, None if failed
+                - Error message if failed, None if successful
+        """
+        try:
+            # Add creator_id to task data
+            task_data["created_by"] = creator_id
+            
+            # Create new task
+            task = Task(**task_data)
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+            
+            return task, None
+            
+        except Exception as e:
+            db.rollback()
+            return None, str(e)
 
 def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     """
