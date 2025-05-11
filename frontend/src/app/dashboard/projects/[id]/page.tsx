@@ -146,6 +146,21 @@ const styles = `
   }
 `;
 
+// Helper function to check if user can access a task
+const canAccessTask = (task, currentUser) => {
+  // If user is a superuser, they can access all tasks
+  if (currentUser?.is_superuser) return true;
+  
+  // User can access if they created the task
+  if (task.created_by === currentUser?.id) return true;
+  
+  // User can access if they are assigned to the task
+  if (task.assigned_to === currentUser?.id) return true;
+  
+  // Otherwise, they can't access the task
+  return false;
+};
+
 export default function ProjectDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const projectId = resolvedParams.id;
@@ -1144,8 +1159,16 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                               {stage.tasks.map((task) => (
                                 <Card 
                                   key={task.id} 
-                                  className="p-3 cursor-pointer hover:shadow-md transition-shadow"
-                                  onClick={() => router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`)}
+                                  className={`p-3 ${canAccessTask(task, user) 
+                                    ? "cursor-pointer hover:shadow-md transition-shadow" 
+                                    : "cursor-not-allowed opacity-60"}`}
+                                  onClick={() => {
+                                    if (canAccessTask(task, user)) {
+                                      router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`);
+                                    } else {
+                                      toast.error("You don't have permission to access this task");
+                                    }
+                                  }}
                                 >
                                   {/* Task Header */}
                                   <div className="flex items-start justify-between mb-2">
@@ -1246,8 +1269,16 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                 stage.tasks?.map(task => (
                   <tr 
                     key={task.id} 
-                    className="border-b hover:bg-gray-50 cursor-pointer"
-                    onClick={() => router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`)}
+                    className={`border-b ${canAccessTask(task, user) 
+                      ? "hover:bg-gray-50 cursor-pointer" 
+                      : "cursor-not-allowed opacity-60"}`}
+                    onClick={() => {
+                      if (canAccessTask(task, user)) {
+                        router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`);
+                      } else {
+                        toast.error("You don't have permission to access this task");
+                      }
+                    }}
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center">

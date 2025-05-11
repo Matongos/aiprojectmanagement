@@ -28,6 +28,7 @@ class Project(ProjectBase):
     updated_at: Optional[datetime]
     progress: float = 0.0
     task_count: Optional[int] = 0
+    member_count: Optional[int] = 0
 
     class Config:
         from_attributes = True 

@@ -29,9 +29,11 @@ interface Project {
   start_date: string | null;
   end_date: string | null;
   task_count: number;
+  member_count: number;
   tags: string[];
   members: { id: number; user: { profile_image_url?: string; name: string } }[];
   creator_id?: number;
+  has_user_tasks?: boolean;
 }
 
 type ProjectStatus = 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
@@ -67,6 +69,20 @@ function ProjectsContent() {
   // Check if user can delete/edit projects (admin or project owner)
   const isAdmin = user?.is_superuser === true;
 
+  // Check if a user has access to a project
+  const hasProjectAccess = (project: Project): boolean => {
+    // Superusers can access all projects
+    if (user?.is_superuser) return true;
+    
+    // Project creators can access their projects
+    if (project.creator_id === Number(user?.id)) return true;
+    
+    // Users with tasks in the project can access it
+    if (project.has_user_tasks) return true;
+    
+    return false;
+  };
+
   const fetchProjects = async (search?: string) => {
     try {
       setLoading(true);
@@ -78,11 +94,12 @@ function ProjectsContent() {
         throw new Error("No authentication token found");
       }
 
-      const apiUrl = search 
-        ? `${API_BASE_URL}/projects/search/?query=${encodeURIComponent(search)}`
-        : `${API_BASE_URL}/projects/`;
-
-      const response = await fetch(apiUrl, {
+      // First, we need to get ALL projects to show in the listing
+      const allProjectsApiUrl = isAdmin
+        ? `${API_BASE_URL}/projects/`  // Admin gets all projects directly 
+        : `${API_BASE_URL}/projects/`; // Regular users get all projects too, but we'll mark access level
+      
+      const allProjectsResponse = await fetch(allProjectsApiUrl, {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json"
@@ -90,25 +107,60 @@ function ProjectsContent() {
         cache: 'no-store'
       });
 
-      if (response.status === 401) {
+      if (allProjectsResponse.status === 401) {
         toast.error("Your session has expired. Please log in again.");
         router.push('/auth/login');
         return;
       }
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch projects: ${response.status}`);
+      if (!allProjectsResponse.ok) {
+        throw new Error(`Failed to fetch projects: ${allProjectsResponse.status}`);
       }
 
-      const data = await response.json();
-      console.log("Projects data with status:", data.map((p: Project) => ({ id: p.id, name: p.name, status: p.status })));
+      const allProjects = await allProjectsResponse.json();
+      console.log("All projects:", allProjects);
       
-      const validatedData = data.map((project: Project) => ({
-        ...project,
-        status: project.status in statusConfig ? project.status : 'default'
-      }));
+      // Now check if user has tasks in each project
+      let userTasks = [];
+      try {
+        const userTasksResponse = await fetch(`${API_BASE_URL}/tasks/`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            "Content-Type": "application/json"
+          }
+        });
+        
+        if (userTasksResponse.ok) {
+          userTasks = await userTasksResponse.json();
+          console.log("User tasks:", userTasks);
+        } else {
+          console.error(`Failed to fetch user tasks: ${userTasksResponse.status}`);
+          // Continue with empty user tasks instead of failing the whole operation
+        }
+      } catch (taskError) {
+        console.error("Error fetching user tasks:", taskError);
+        // Continue with empty user tasks
+      }
       
-      setProjects(validatedData);
+      // Mark projects where user has access (their own projects or has tasks in them)
+      const projectsWithAccessInfo = allProjects.map((project: Project) => {
+        // Check if user has tasks in this project
+        const hasUserTasks = userTasks.length > 0
+          ? userTasks.some((task: any) => task.project_id === project.id)
+          : false;
+        
+        // Check if user created this project
+        const isCreator = project.creator_id === Number(user?.id);
+        
+        return {
+          ...project,
+          has_user_tasks: hasUserTasks,
+          has_access: isAdmin || isCreator || hasUserTasks,
+          status: project.status in statusConfig ? project.status : 'default'
+        };
+      });
+      
+      setProjects(projectsWithAccessInfo);
     } catch (error) {
       console.error("Error fetching projects:", error);
       setError(error instanceof Error ? error.message : "Failed to load projects");
@@ -331,141 +383,172 @@ function ProjectsContent() {
 
       {/* Projects Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {filteredProjects.map((project) => (
-          <Card
-            key={project.id}
-            className="p-4 cursor-pointer hover:shadow-lg transition-shadow"
-            onClick={() => router.push(`/dashboard/projects/${project.id}`)}
-          >
-            <div className="flex justify-between items-start mb-4">
-              <div className="flex items-start gap-2">
-                <Star className="w-5 h-5 text-yellow-400 mt-1" />
-                <div>
-                  <h3 className="font-semibold text-lg">{project.name}</h3>
-                  <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
-                    <Calendar className="w-4 h-4" />
-                    <span>{formatDate(project.start_date)} — {formatDate(project.end_date)}</span>
+        {filteredProjects.map((project) => {
+          const projectAccess = hasProjectAccess(project);
+          
+          return (
+            <Card
+              key={project.id}
+              className={`p-4 transition-all ${projectAccess 
+                ? 'cursor-pointer hover:shadow-lg' 
+                : 'cursor-not-allowed opacity-60'}`}
+              onClick={() => {
+                if (projectAccess) {
+                  router.push(`/dashboard/projects/${project.id}`);
+                } else {
+                  toast.error("You don't have access to this project. You need to be assigned to a task in this project or be the creator.");
+                }
+              }}
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div className="flex items-start gap-2">
+                  <Star className={`w-5 h-5 mt-1 ${projectAccess ? 'text-yellow-400' : 'text-gray-400'}`} />
+                  <div>
+                    <h3 className="font-semibold text-lg">{project.name}</h3>
+                    <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
+                      <Calendar className="w-4 h-4" />
+                      <span>{formatDate(project.start_date)} — {formatDate(project.end_date)}</span>
+                    </div>
+                    {!projectAccess && (
+                      <p className="text-xs text-gray-500 mt-1 italic">
+                        Limited access - get assigned to a task to unlock
+                      </p>
+                    )}
                   </div>
                 </div>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                  <button className="text-gray-400 hover:text-gray-600">
-                    <MoreVertical className="w-5 h-5" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/view`)}>
-                      <Eye className="mr-2 h-4 w-4" />
-                      <span>View</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem>
-                      <ListTodo className="mr-2 h-4 w-4" />
-                      <span>Tasks</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem>
-                      <Milestone className="mr-2 h-4 w-4" />
-                      <span>Milestones</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem>
-                      <FileText className="mr-2 h-4 w-4" />
-                      <span>Project Updates</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem>
-                      <LineChart className="mr-2 h-4 w-4" />
-                      <span>Tasks Analysis</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem>
-                      <BarChart3 className="mr-2 h-4 w-4" />
-                      <span>Burndown Chart</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem>
-                    <Share2 className="mr-2 h-4 w-4" />
-                    <span>Share</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-
-            <div className="flex items-center justify-between mt-4">
-              <div className="flex gap-2">
-                {project.tags?.map((tag, index) => (
-                  <span
-                    key={index}
-                    className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex -space-x-2">
-                  {project.members?.slice(0, 3).map((member) => (
-                    <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
-                      <AvatarImage 
-                        src={member.user.profile_image_url || '/default-avatar.png'} 
-                        alt={member.user.name}
-                        className="object-cover"
-                      />
-                      <AvatarFallback>{member.user.name[0]}</AvatarFallback>
-                    </Avatar>
-                  ))}
-                  {project.members && project.members.length > 3 && (
-                    <div className="h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center">
-                      <span className="text-xs text-gray-600">+{project.members.length - 3}</span>
-                    </div>
-                  )}
-                </div>
+                
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button 
-                      className="flex items-center gap-2 hover:bg-gray-100 px-2 py-1 rounded-md transition-colors"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                      }}
-                    >
-                      <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
-                      <span className="text-sm text-gray-600">{statusConfig[project.status]?.label || statusConfig.default.label}</span>
+                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                    <button className="text-gray-400 hover:text-gray-600">
+                      <MoreVertical className="w-5 h-5" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56" align="end">
-                    {(Object.keys(statusConfig) as ProjectStatus[])
-                      .filter(key => key !== 'default')
-                      .map((key) => (
-                        <DropdownMenuItem 
-                          key={key}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStatusChange(project.id, key);
-                          }}
-                          className={`${project.status === key ? 'bg-gray-100' : ''}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${statusConfig[key].color}`} />
-                            <div>
-                              <div className="text-sm font-medium">{statusConfig[key].label}</div>
-                              <div className="text-xs text-gray-500">{statusConfig[key].description}</div>
-                            </div>
-                          </div>
+                  <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
+                    {projectAccess ? (
+                      <>
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/view`)}>
+                            <Eye className="mr-2 h-4 w-4" />
+                            <span>View</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/tasks`)}>
+                            <ListTodo className="mr-2 h-4 w-4" />
+                            <span>Tasks</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem>
+                            <Milestone className="mr-2 h-4 w-4" />
+                            <span>Milestones</span>
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem>
+                            <FileText className="mr-2 h-4 w-4" />
+                            <span>Project Updates</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem>
+                            <LineChart className="mr-2 h-4 w-4" />
+                            <span>Tasks Analysis</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem>
+                            <BarChart3 className="mr-2 h-4 w-4" />
+                            <span>Burndown Chart</span>
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem>
+                          <Share2 className="mr-2 h-4 w-4" />
+                          <span>Share</span>
                         </DropdownMenuItem>
-                    ))}
+                        <DropdownMenuItem>
+                          <Settings className="mr-2 h-4 w-4" />
+                          <span>Settings</span>
+                        </DropdownMenuItem>
+                      </>
+                    ) : (
+                      <DropdownMenuItem disabled>
+                        <span className="text-gray-400">No available actions</span>
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <span className="text-sm font-medium">{project.task_count || 0} Tasks</span>
               </div>
-            </div>
-          </Card>
-        ))}
+
+              <div className="flex items-center justify-between mt-4">
+                <div className="flex gap-2">
+                  {project.tags?.map((tag, index) => (
+                    <span
+                      key={index}
+                      className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="flex -space-x-2">
+                    {project.members?.slice(0, 3).map((member) => (
+                      <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
+                        <AvatarImage 
+                          src={member.user.profile_image_url || '/default-avatar.png'} 
+                          alt={member.user.name}
+                          className="object-cover"
+                        />
+                        <AvatarFallback>{member.user.name[0]}</AvatarFallback>
+                      </Avatar>
+                    ))}
+                    {project.member_count > 3 && (
+                      <div className="h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center">
+                        <span className="text-xs text-gray-600">+{project.member_count - 3}</span>
+                      </div>
+                    )}
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button 
+                        className="flex items-center gap-2 hover:bg-gray-100 px-2 py-1 rounded-md transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                        }}
+                      >
+                        <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                        <span className="text-sm text-gray-600">{statusConfig[project.status]?.label || statusConfig.default.label}</span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56" align="end">
+                      {(Object.keys(statusConfig) as ProjectStatus[])
+                        .filter(key => key !== 'default')
+                        .map((key) => (
+                          <DropdownMenuItem 
+                            key={key}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (projectAccess) {
+                                handleStatusChange(project.id, key);
+                              } else {
+                                toast.error("You don't have permission to change project status");
+                              }
+                            }}
+                            className={`${project.status === key ? 'bg-gray-100' : ''}`}
+                            disabled={!projectAccess}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div className={`w-2 h-2 rounded-full ${statusConfig[key].color}`} />
+                              <div>
+                                <div className="text-sm font-medium">{statusConfig[key].label}</div>
+                                <div className="text-xs text-gray-500">{statusConfig[key].description}</div>
+                              </div>
+                            </div>
+                          </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <span className="text-sm font-medium">{project.task_count || 0} Tasks</span>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );

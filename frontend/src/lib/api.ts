@@ -1,6 +1,7 @@
 // Import API_BASE_URL from constants
 import { API_BASE_URL } from './constants';
 import { fetchApi } from './api-helper';
+import { useAuthStore } from '@/store/authStore';
 
 export interface Project {
   id: number;
@@ -9,6 +10,9 @@ export interface Project {
   status: string;
   created_at: string;
   updated_at: string;
+  has_user_tasks?: boolean;
+  has_access?: boolean;
+  created_by?: number;
   members?: {
     id: number;
     user_id: number;
@@ -26,7 +30,36 @@ export const getRecentProjects = async (): Promise<Project[]> => {
   try {
     // First try to get recent projects with query params
     const data = await fetchApi<Project[]>('/projects?sort=-created_at&limit=5');
-    return data;
+    
+    // Get user tasks to check which projects the user has tasks in
+    let userTasks: any[] = [];
+    try {
+      userTasks = await fetchApi<any[]>('/tasks/');
+    } catch (taskError) {
+      console.error('Error fetching user tasks:', taskError);
+      // Continue with empty user tasks instead of failing the whole operation
+    }
+    
+    // Get current user info to check if they're the creator
+    const currentUser = useAuthStore.getState().user;
+    const isAdmin = !!currentUser?.is_superuser;
+    
+    // Add a flag to indicate if the user has tasks in each project
+    const projectsWithUserTasksInfo = data.map(project => {
+      const hasUserTasks = userTasks.length > 0
+        ? userTasks.some(task => task.project_id === project.id)
+        : false;
+      
+      const isCreator = project.created_by === Number(currentUser?.id);
+      
+      return {
+        ...project,
+        has_user_tasks: hasUserTasks,
+        has_access: isAdmin || isCreator || hasUserTasks
+      };
+    });
+    
+    return projectsWithUserTasksInfo;
   } catch (error) {
     console.error('Error fetching recent projects:', error);
     // Return empty array to prevent UI errors

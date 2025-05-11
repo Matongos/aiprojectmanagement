@@ -83,7 +83,7 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
         db: Database session
         skip: Number of tasks to skip
         limit: Maximum number of tasks to return
-        filters: Dictionary of filter conditions (e.g., status, assignee_id)
+        filters: Dictionary of filter conditions (e.g., state, assigned_to)
         
     Returns:
         List of task dictionaries
@@ -94,9 +94,9 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
     query_parts = [
         """
         SELECT 
-            id, title, description, status, priority, due_date,
-            estimated_hours, tags, created_by, assignee_id, project_id,
-            created_at, updated_at
+            id, name, description, state, priority, deadline,
+            planned_hours, assigned_to, created_by, project_id,
+            created_at, updated_at, progress, stage_id
         FROM tasks
         WHERE 1=1
         """
@@ -105,9 +105,9 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
     query_params = {}
     
     # Apply filters
-    if "status" in filters:
-        query_parts.append("AND status = :status")
-        query_params["status"] = filters["status"]
+    if "state" in filters:
+        query_parts.append("AND state = :state")
+        query_params["state"] = filters["state"]
         
     if "priority" in filters:
         query_parts.append("AND priority = :priority")
@@ -117,9 +117,9 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
         query_parts.append("AND project_id = :project_id")
         query_params["project_id"] = filters["project_id"]
         
-    if "assignee_id" in filters:
-        query_parts.append("AND assignee_id = :assignee_id")
-        query_params["assignee_id"] = filters["assignee_id"]
+    if "assigned_to" in filters:
+        query_parts.append("AND assigned_to = :assigned_to")
+        query_params["assigned_to"] = filters["assigned_to"]
         
     if "created_by" in filters:
         query_parts.append("AND created_by = :created_by")
@@ -136,18 +136,19 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
     for row in results:
         tasks.append({
             "id": row[0],
-            "title": row[1],
+            "name": row[1],
             "description": row[2],
-            "status": row[3],
+            "state": row[3],
             "priority": row[4],
-            "due_date": row[5],
-            "estimated_hours": row[6],
-            "tags": row[7],
+            "deadline": row[5],
+            "planned_hours": row[6],
+            "assigned_to": row[7],
             "created_by": row[8],
-            "assignee_id": row[9],
-            "project_id": row[10],
-            "created_at": row[11],
-            "updated_at": row[12]
+            "project_id": row[9],
+            "created_at": row[10],
+            "updated_at": row[11],
+            "progress": row[12],
+            "stage_id": row[13]
         })
     
     return tasks

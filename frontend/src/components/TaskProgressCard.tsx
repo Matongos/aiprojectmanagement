@@ -17,7 +17,7 @@ const priorityColors = {
 const statusColors = {
   todo: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-blue-100 text-blue-800',
-  review: 'bg-purple-100 text-purple-800',
+  review: 'bg-blue-100 text-blue-800',
   done: 'bg-green-100 text-green-800',
   cancelled: 'bg-red-100 text-red-800',
 };
@@ -39,7 +39,7 @@ const getProgressColor = (status: string): string => {
   switch (status) {
     case 'todo': return 'bg-gray-500';
     case 'in_progress': return 'bg-blue-500';
-    case 'review': return 'bg-purple-500';
+    case 'review': return 'bg-blue-800';
     case 'done': return 'bg-green-500';
     case 'cancelled': return 'bg-red-500';
     default: return 'bg-gray-500';

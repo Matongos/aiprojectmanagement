@@ -2,6 +2,7 @@ from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr
 from .file_attachment import FileAttachment
+from .milestone import MilestoneResponse
 from enum import Enum
 
 class TaskState(str, Enum):
@@ -96,15 +97,37 @@ class Task(TaskBase):
     depends_on_ids: List[int] = []
     subtask_ids: List[int] = []
     attachments: Optional[List[FileAttachment]] = None
-    milestone: Optional[dict] = None  # Will include milestone details if available
-    company: Optional[dict] = None    # Will include company details if available
-    assignee: Optional[dict] = None   # Changed back to dict to be more flexible
+    milestone: Optional[MilestoneResponse] = None  # Use MilestoneResponse for milestone
+    company: Optional[dict] = None
+    assignee: Optional[dict] = None
 
     class Config:
         from_attributes = True
         json_encoders = {
             datetime: lambda v: v.isoformat() if v else None
         }
+
+    def dict(self, *args, **kwargs):
+        """Override dict method to properly handle serialization"""
+        d = super().dict(*args, **kwargs)
+        if self.milestone:
+            d['milestone'] = {
+                'id': self.milestone.id,
+                'name': self.milestone.name,
+                'description': self.milestone.description,
+                'due_date': self.milestone.due_date.isoformat() if self.milestone.due_date else None,
+                'is_completed': self.milestone.is_completed,
+                'is_active': self.milestone.is_active
+            }
+        if self.assignee:
+            d['assignee'] = {
+                'id': self.assignee.id,
+                'username': self.assignee.username,
+                'email': self.assignee.email,
+                'full_name': self.assignee.full_name,
+                'profile_image_url': self.assignee.profile_image_url
+            }
+        return d
 
 class TaskResponse(BaseModel):
     """Response model for tasks with simplified fields"""

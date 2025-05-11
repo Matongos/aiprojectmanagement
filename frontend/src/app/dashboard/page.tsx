@@ -25,6 +25,9 @@ interface Project {
   created_at: string;
   updated_at: string;
   is_active: boolean;
+  has_user_tasks?: boolean;
+  has_access?: boolean;
+  member_count: number;
   members: {
     id: number;
     user_id: number;
@@ -68,6 +71,23 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Function to check if a user has access to a project
+  const hasProjectAccess = (project: Project): boolean => {
+    // Superusers can access all projects
+    if (user?.is_superuser) return true;
+    
+    // Project creators can access their projects
+    if (project.created_by === Number(user?.id)) return true;
+    
+    // Users with tasks in the project can access it
+    if (project.has_user_tasks) return true;
+    
+    // If the project has_access field is true, the user has access
+    if (project.has_access) return true;
+    
+    return false;
+  };
+
   useEffect(() => {
     async function fetchData() {
       try {
@@ -75,7 +95,13 @@ export default function Dashboard() {
         setError(null);
         
         const projectsData = await getRecentProjects();
-        setProjects(projectsData || []);
+        
+        // For the dashboard, we only want to show projects the user is involved with
+        // Either as creator or assignee, not ALL projects
+        const accessibleProjects = projectsData.filter(project => 
+          project.created_by === Number(user?.id) || project.has_user_tasks === true
+        );
+        setProjects(accessibleProjects);
         
         // Mock data for now
         setUrgentTasks([
@@ -202,7 +228,7 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <p className="text-sm font-medium">{project.name}</p>
-                          <p className="text-xs text-gray-500">{project.members?.length || 0} members</p>
+                          <p className="text-xs text-gray-500">{project.member_count || 0} members</p>
                         </div>
                       </div>
                       <div className="flex -space-x-2">

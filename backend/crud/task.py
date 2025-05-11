@@ -39,6 +39,23 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
             .all()
         )
     
+    def get_user_tasks(
+        self, db: Session, user_id: int, skip: int = 0, limit: int = 100
+    ) -> List[Task]:
+        """Get all tasks assigned to or created by a user"""
+        return (
+            db.query(self.model)
+            .filter(
+                or_(
+                    Task.assigned_to == user_id,
+                    Task.created_by == user_id
+                )
+            )
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+    
     def create_with_creator(
         self, db: Session, *, obj_in: TaskCreate, creator_id: int
     ) -> Task:
@@ -157,24 +174,6 @@ def get_project_tasks(
     """Get all tasks for a project"""
     return db.query(Task)\
         .filter(Task.project_id == project_id)\
-        .offset(skip)\
-        .limit(limit)\
-        .all()
-
-def get_user_tasks(
-    db: Session, 
-    user_id: int, 
-    skip: int = 0, 
-    limit: int = 100
-) -> List[Task]:
-    """Get all tasks assigned to or created by a user"""
-    return db.query(Task)\
-        .filter(
-            or_(
-                Task.assigned_to == user_id,
-                Task.created_by == user_id
-            )
-        )\
         .offset(skip)\
         .limit(limit)\
         .all()

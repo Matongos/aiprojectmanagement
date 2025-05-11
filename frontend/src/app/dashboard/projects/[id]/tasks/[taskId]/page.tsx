@@ -1,11 +1,11 @@
 "use client";
 
-import { Avatar } from "@/components/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { API_BASE_URL } from "@/lib/constants";
@@ -49,6 +49,14 @@ interface Milestone {
   is_active: boolean;
 }
 
+interface User {
+  id: number;
+  username: string;
+  email: string;
+  full_name: string;
+  profile_image_url?: string;
+}
+
 interface Task {
   id: string;
   name: string;
@@ -56,7 +64,23 @@ interface Task {
   stage_id: number;
   milestone_id?: number;
   milestone?: Milestone;
+  assigned_to?: number;
+  assignee?: User;
+  created_by: number;
   // ... other task properties
+}
+
+interface Activity {
+  id: number;
+  activity_type: string;
+  description: string;
+  created_at: string;
+  user: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
 }
 
 interface TaskDetailsProps {
@@ -89,6 +113,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [showCreateMilestone, setShowCreateMilestone] = useState(false);
   const [searchMilestone, setSearchMilestone] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [showAssigneeSelection, setShowAssigneeSelection] = useState(false);
+  const [searchUser, setSearchUser] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const [selectedAssignees, setSelectedAssignees] = useState<User[]>([]);
+  const [isAssigneesChanged, setIsAssigneesChanged] = useState(false);
   const [newMilestone, setNewMilestone] = useState<CreateMilestoneData>({
     name: "",
     description: "",
@@ -200,12 +229,101 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     enabled: !!token && !!id,
   });
 
+  // Fetch users
+  const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
+    queryKey: ["users"],
+    queryFn: async () => {
+      try {
+        console.log("Fetching users..."); // Debug log
+        const response = await fetch(`${API_BASE_URL}/users/`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.status === 401) {
+          toast.error("Please log in to view this content");
+          throw new Error("Unauthorized");
+        }
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch users: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log("Users Response:", data); // Debug log
+        return data;
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        toast.error("Failed to load users");
+        return []; // Return empty array on error
+      }
+    },
+    enabled: !!token,
+  });
+
+  // Fetch task activities
+  const { data: taskActivities, isLoading: isLoadingActivities } = useQuery<Activity[]>({
+    queryKey: ["task-activities", taskId],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/activities/task/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.status === 401) {
+          toast.error("Please log in to view this content");
+          throw new Error("Unauthorized");
+        }
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch task activities: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data;
+      } catch (error) {
+        console.error("Error fetching task activities:", error);
+        toast.error("Failed to load task activities");
+        throw error;
+      }
+    },
+    enabled: !!token && !!taskId,
+  });
+
+  // Group activities by date
+  const groupedActivities = useMemo(() => {
+    if (!taskActivities) return {};
+    
+    return taskActivities.reduce((groups: { [key: string]: Activity[] }, activity: Activity) => {
+      const date = new Date(activity.created_at).toLocaleDateString();
+      if (!groups[date]) {
+        groups[date] = [];
+      }
+      groups[date].push(activity);
+      return groups;
+    }, {});
+  }, [taskActivities]);
+
   // Set current stage when task details are loaded
   useEffect(() => {
     if (taskDetails?.stage_id) {
       const stageId = taskDetails.stage_id.toString();
       console.log("Setting current stage to:", stageId); // Debug log
       setCurrentStage(stageId);
+    }
+  }, [taskDetails]);
+
+  // Set selected assignees when task details are loaded
+  useEffect(() => {
+    if (taskDetails?.assignee) {
+      setSelectedAssignees([taskDetails.assignee]);
+    } else {
+      setSelectedAssignees([]);
     }
   }, [taskDetails]);
 
@@ -357,8 +475,100 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
+  // Filter users based on search
+  const filteredUsers = users.filter(user =>
+    user.full_name?.toLowerCase().includes(searchUser.toLowerCase()) ||
+    user.username?.toLowerCase().includes(searchUser.toLowerCase()) ||
+    user.email?.toLowerCase().includes(searchUser.toLowerCase())
+  );
+
+  // Calculate pagination for users
+  const userItemsPerPage = 5;
+  const userTotalPages = Math.ceil(filteredUsers.length / userItemsPerPage);
+  const userStartIndex = (userPage - 1) * userItemsPerPage;
+  const userEndIndex = userStartIndex + userItemsPerPage;
+  const currentUsers = filteredUsers.slice(userStartIndex, userEndIndex);
+  const userPaginationText = `${userStartIndex + 1}-${Math.min(userEndIndex, filteredUsers.length)}/${filteredUsers.length}`;
+
+  // Handle multiple assignee selection
+  const handleAssigneeSelect = (user: User) => {
+    // Check if the user is already selected
+    const isAlreadySelected = selectedAssignees.some(a => a.id === user.id);
+    
+    if (isAlreadySelected) {
+      // Remove user from selection
+      const updatedAssignees = selectedAssignees.filter(a => a.id !== user.id);
+      setSelectedAssignees(updatedAssignees);
+      setIsAssigneesChanged(true);
+    } else {
+      // Add user to selection
+      setSelectedAssignees([...selectedAssignees, user]);
+      setIsAssigneesChanged(true);
+    }
+  };
+
+  // Handle removing an assignee
+  const handleRemoveAssignee = (userId: number) => {
+    const updatedAssignees = selectedAssignees.filter(a => a.id !== userId);
+    setSelectedAssignees(updatedAssignees);
+    setIsAssigneesChanged(true);
+  };
+
+  // Handle unassign all
+  const handleUnassignAll = () => {
+    setSelectedAssignees([]);
+    setIsAssigneesChanged(true);
+  };
+
+  // Save assignees changes
+  const handleSaveAssignees = async () => {
+    try {
+      // For now, we'll use the first assignee as the assigned_to value
+      // In a real implementation, you'd need a backend API that supports multiple assignees
+      const primaryAssigneeId = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
+      
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assigned_to: primaryAssigneeId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update assignees');
+      }
+
+      setIsAssigneesChanged(false);
+      toast.success('Task assignees updated successfully');
+      refetch(); // Refresh task data
+    } catch (error) {
+      console.error('Error updating assignees:', error);
+      toast.error('Failed to update assignees');
+    }
+  };
+
+  // Check if user can access this task
+  const canAccessTask = (task: Task | null | undefined) => {
+    if (!task) return false;
+    
+    // Superusers can access all tasks
+    if (useAuthStore.getState().user?.is_superuser) return true;
+    
+    const currentUserId = Number(useAuthStore.getState().user?.id);
+    
+    // Users can access tasks they created
+    if (task.created_by === currentUserId) return true;
+    
+    // Users can access tasks assigned to them
+    if (task.assigned_to === currentUserId) return true;
+    
+    return false;
+  };
+
   // Loading states
-  if (isLoadingTask || isLoadingStages || isLoadingMilestones) {
+  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-pulse text-gray-500">Loading task details...</div>
@@ -386,6 +596,27 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           <p className="text-gray-600">
             {stagesError ? "Failed to load project stages" : "Failed to load task details"}
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Check permission to access this task
+  if (taskDetails && !canAccessTask(taskDetails)) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <h2 className="text-xl font-semibold text-red-600 mb-2">Access Denied</h2>
+          <p className="text-gray-600">
+            You don&apos;t have permission to access this task. Only assigned users, the task creator, 
+            or system administrators can view this task.
+          </p>
+          <Button 
+            className="mt-4 bg-blue-800 text-white hover:bg-blue-900"
+            onClick={() => window.history.back()}
+          >
+            Go Back
+          </Button>
         </div>
       </div>
     );
@@ -570,7 +801,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     <TableCell colSpan={5} className="text-center py-8">
                       {searchMilestone ? (
                         <>
-                          <p className="text-gray-500">No milestones found matching "{searchMilestone}"</p>
+                          <p className="text-gray-500">No milestones found matching &quot;{searchMilestone}&quot;</p>
                           <Button
                             variant="link"
                             onClick={() => setSearchMilestone("")}
@@ -613,6 +844,135 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     </Dialog>
   );
 
+  // Assignee Selection Dialog
+  const AssigneeDialog = () => (
+    <Dialog open={showAssigneeSelection} onOpenChange={setShowAssigneeSelection}>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHeader>
+          <div className="flex items-center justify-between">
+            <DialogTitle>Select Assignees</DialogTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowAssigneeSelection(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </DialogHeader>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2 flex-1">
+            <div className="relative flex-1">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
+              <Input
+                placeholder="Search users..."
+                value={searchUser}
+                onChange={(e) => setSearchUser(e.target.value)}
+                className="pl-8"
+              />
+            </div>
+          </div>
+          {filteredUsers.length > 0 && (
+            <div className="flex items-center gap-2 ml-4">
+              <span className="text-sm text-gray-500">{userPaginationText}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setUserPage(p => Math.max(1, p - 1))}
+                disabled={userPage === 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setUserPage(p => Math.min(userTotalPages, p + 1))}
+                disabled={userPage === userTotalPages}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {isLoadingUsers ? (
+          <div className="py-8 text-center">
+            <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent text-blue-600 rounded-full" />
+            <p className="mt-2 text-sm text-gray-500">Loading users...</p>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={handleUnassignAll}
+                disabled={selectedAssignees.length === 0}
+              >
+                <User className="mr-2 h-4 w-4" />
+                <span>Unassign All</span>
+              </Button>
+              
+              {currentUsers.map((user) => (
+                <Button
+                  key={user.id}
+                  variant="outline"
+                  className={`w-full justify-start ${selectedAssignees.some(a => a.id === user.id) ? 'bg-blue-50 border-blue-200' : ''}`}
+                  onClick={() => handleAssigneeSelect(user)}
+                >
+                  <Avatar className="h-6 w-6 mr-2">
+                    <span>{user.full_name?.charAt(0) || user.username?.charAt(0) || 'U'}</span>
+                  </Avatar>
+                  <div className="flex flex-col items-start">
+                    <span>{user.full_name || user.username}</span>
+                    <span className="text-xs text-gray-500">{user.email}</span>
+                  </div>
+                  {selectedAssignees.some(a => a.id === user.id) && (
+                    <div className="ml-auto">
+                      <ChevronRight className="h-4 w-4" />
+                    </div>
+                  )}
+                </Button>
+              ))}
+              
+              {filteredUsers.length === 0 && (
+                <div className="text-center py-4">
+                  <p className="text-gray-500">No users found matching &quot;{searchUser}&quot;</p>
+                  {searchUser && (
+                    <Button
+                      variant="link"
+                      onClick={() => setSearchUser("")}
+                      className="mt-2"
+                    >
+                      Clear search
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between mt-4">
+              <Button
+                variant="default"
+                className="bg-blue-800 text-white hover:bg-blue-900"
+                onClick={() => setShowAssigneeSelection(false)}
+                disabled={selectedAssignees.length === 0}
+              >
+                {`Assign ${selectedAssignees.length} ${selectedAssignees.length === 1 ? 'Person' : 'People'}`}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setShowAssigneeSelection(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation with Stages and Actions */}
@@ -624,10 +984,20 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
               <Button
                 variant="default"
                 size="sm"
-                className="bg-purple-600 text-white hover:bg-purple-700"
+                className="bg-blue-800 text-white hover:bg-blue-900"
                 onClick={handleSaveTaskName}
               >
                 Save Changes
+              </Button>
+            )}
+            {isAssigneesChanged && (
+              <Button
+                variant="default"
+                size="sm"
+                className="bg-blue-800 text-white hover:bg-blue-900"
+                onClick={handleSaveAssignees}
+              >
+                Save Assignees
               </Button>
             )}
             {stages.slice(0, showAllStages ? stages.length : 4).map((stage) => {
@@ -645,8 +1015,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                   variant={isCurrentStage ? "default" : "outline"}
                   className={`transition-all duration-200 ${
                     isCurrentStage
-                      ? "bg-purple-600 text-white hover:bg-purple-700 ring-2 ring-purple-300" 
-                      : "hover:bg-purple-50"
+                      ? "bg-blue-800 text-white hover:bg-blue-900 ring-2 ring-blue-300" 
+                      : "hover:bg-blue-50"
                   } h-8 px-3 justify-center relative`}
                   onClick={() => handleStageChange(stage.id)}
                 >
@@ -656,10 +1026,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                       <span className="text-xs opacity-80 ml-1">({stage.duration})</span>
                     )}
                     {isCurrentStage && (
-                      <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-purple-600 rotate-45" />
-                )}
-              </div>
-                  </Button>
+                      <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-blue-800 rotate-45" />
+                    )}
+                  </div>
+                </Button>
               );
             })}
             
@@ -754,7 +1124,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
                   <Input placeholder="Select project..." value="comments" readOnly />
-                      </div>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Milestone</label>
                   <div className="relative">
@@ -769,8 +1139,38 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Assignees</label>
-                  <Input placeholder="Select assignees..." />
-              </div>
+                  <div className="space-y-2">
+                    <div 
+                      className="flex items-center cursor-pointer border rounded-md p-2 hover:bg-gray-50"
+                      onClick={() => setShowAssigneeSelection(true)}
+                    >
+                      {selectedAssignees.length === 0 ? (
+                        <span className="text-gray-500">Click to assign users</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-2 items-center">
+                          {selectedAssignees.map(user => (
+                            <div 
+                              key={user.id} 
+                              className="flex items-center bg-blue-50 rounded-full py-1 px-2 gap-1"
+                            >
+                              <Avatar className="h-5 w-5">
+                                <span>{user.full_name?.charAt(0) || user.username?.charAt(0) || 'U'}</span>
+                              </Avatar>
+                              <span className="text-sm">{user.full_name || user.username}</span>
+                              <X 
+                                className="h-3 w-3 cursor-pointer" 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveAssignee(user.id);
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
                   <Input placeholder="Add tags..." />
@@ -778,19 +1178,19 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
                   <Input placeholder="Select customer..." />
-                        </div>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Allocated Time</label>
-                        <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <Input type="time" defaultValue="00:00" />
                     <span className="text-gray-500">(0%)</span>
-                        </div>
-                      </div>
+                  </div>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
                   <Input type="date" />
                 </div>
-        </div>
+              </div>
 
               {/* Tabs Navigation */}
               <div className="border-b mb-6 overflow-x-auto">
@@ -832,60 +1232,67 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
             {/* Activity Feed */}
             <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-medium">Today</h3>
-              </div>
+              {Object.entries(groupedActivities).map(([date, dateActivities]: [string, Activity[]]) => (
+                <div key={date}>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium">{date === new Date().toLocaleDateString() ? 'Today' : date}</h3>
+                  </div>
 
-              {/* Activity Items */}
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <Avatar className="w-8 h-8 bg-purple-600">
-                    <span>M</span>
-                  </Avatar>
-              <div>
+                  {/* Activity Items */}
+                  <div className="space-y-4">
+                    {dateActivities.map((activity: Activity) => (
+                      <div key={activity.id} className="flex items-start gap-3">
+                        <Avatar className="w-8 h-8">
+                          <AvatarImage 
+                            src={activity.user.profile_image_url || '/default-avatar.png'} 
+                            alt={activity.user.full_name} 
+                          />
+                          <AvatarFallback>
+                            {activity.user.full_name.charAt(0)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
                           <div className="flex items-center gap-2">
-                      <span className="font-medium">Marc Demo</span>
-                      <span className="text-sm text-gray-500">1 hour ago</span>
+                            <span className="font-medium">{activity.user.full_name}</span>
+                            <span className="text-sm text-gray-500">
+                              {new Date(activity.created_at).toLocaleTimeString([], { 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                              })}
+                            </span>
                           </div>
-                    <p>hi</p>
-                  </div>
-              </div>
-
-                <div className="flex items-start gap-3">
-                  <Avatar className="w-8 h-8 bg-purple-600">
-                    <span>M</span>
-                  </Avatar>
-              <div>
-                  <div className="flex items-center gap-2">
-                      <span className="font-medium">Marc Demo</span>
-                      <span className="text-red-500">@</span>
-                      <span className="text-sm text-gray-500">1 hour ago</span>
-                    </div>
-                    <p>lets do it</p>
-                  </div>
-              </div>
-
-                <div className="flex items-start gap-3">
-                  <Avatar className="w-8 h-8 bg-purple-600">
-                    <span>M</span>
-                  </Avatar>
-              <div>
-                <div className="flex items-center gap-2">
-                      <span className="font-medium">Mitchell Admin</span>
-                      <span className="text-sm text-gray-500">9 hours ago</span>
-                    </div>
-                    <p>Task Created</p>
+                          <p className="text-sm">{activity.description}</p>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {dateActivities.length === 0 && (
+                      <p className="text-sm text-gray-500 text-center py-2">
+                        No activities for this day
+                      </p>
+                    )}
                   </div>
                 </div>
-              </div>
+              ))}
+
+              {isLoadingActivities ? (
+                <div className="flex justify-center py-4">
+                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
+                </div>
+              ) : Object.keys(groupedActivities).length === 0 && (
+                <p className="text-sm text-gray-500 text-center py-4">
+                  No activities recorded yet
+                </p>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Render both dialogs */}
+      {/* Render all dialogs */}
       <MilestoneDialog />
       <CreateMilestoneDialog />
+      <AssigneeDialog />
     </div>
   );
 }

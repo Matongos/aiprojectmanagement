@@ -44,8 +44,6 @@ app.add_middleware(
         "X-Requested-With",
         "Access-Control-Request-Method",
         "Access-Control-Request-Headers",
-        "Access-Control-Allow-Origin",
-        "Access-Control-Allow-Credentials",
     ],
     expose_headers=["*"],  # Expose all headers
     max_age=600,  # How long the results of a preflight request can be cached

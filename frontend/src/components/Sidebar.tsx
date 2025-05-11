@@ -97,11 +97,11 @@ export default function Sidebar() {
                     href={item.href}
                     className={`group flex items-center px-3 py-2 text-sm font-medium rounded-md ${
                       isActiveLink(item)
-                        ? 'bg-purple-50 text-purple-700'
-                        : 'text-gray-700 hover:text-purple-700 hover:bg-gray-50'
+                        ? 'bg-blue-50 text-blue-800'
+                        : 'text-gray-700 hover:text-blue-800 hover:bg-gray-50'
                     }`}
                   >
-                    <span className={`mr-3 ${isActiveLink(item) ? 'text-purple-700' : 'text-gray-500 group-hover:text-purple-700'}`}>
+                    <span className={`mr-3 ${isActiveLink(item) ? 'text-blue-800' : 'text-gray-500 group-hover:text-blue-800'}`}>
                       {item.icon}
                     </span>
                     {item.name}
@@ -123,11 +123,11 @@ export default function Sidebar() {
                       href={item.href}
                       className={`group flex items-center px-3 py-2 text-sm font-medium rounded-md ${
                         isActiveLink(item)
-                          ? 'bg-purple-50 text-purple-700'
-                          : 'text-gray-700 hover:text-purple-700 hover:bg-gray-50'
+                          ? 'bg-blue-50 text-blue-800'
+                          : 'text-gray-700 hover:text-blue-800 hover:bg-gray-50'
                       }`}
                     >
-                      <span className={`mr-3 ${isActiveLink(item) ? 'text-purple-700' : 'text-gray-500 group-hover:text-purple-700'}`}>
+                      <span className={`mr-3 ${isActiveLink(item) ? 'text-blue-800' : 'text-gray-500 group-hover:text-blue-800'}`}>
                         {item.icon}
                       </span>
                       {item.name}
@@ -139,17 +139,17 @@ export default function Sidebar() {
           )}
           
           <div className="pt-4 mt-4 border-t border-gray-200">
-            <div className="px-3 py-3 rounded-md bg-purple-50">
+            <div className="px-3 py-3 rounded-md bg-blue-50">
               <div className="flex items-center">
-                <HelpCircle className="h-5 w-5 text-purple-700 mr-3" />
+                <HelpCircle className="h-5 w-5 text-blue-800 mr-3" />
                 <div>
-                  <h4 className="text-sm font-medium text-purple-700">Need help?</h4>
+                  <h4 className="text-sm font-medium text-blue-800">Need help?</h4>
                   <p className="text-xs text-gray-600 mt-1">Check our documentation</p>
                 </div>
               </div>
               <Link 
                 href="/help" 
-                className="mt-2 text-xs font-medium text-purple-700 hover:text-purple-800 flex justify-end"
+                className="mt-2 text-xs font-medium text-blue-800 hover:text-blue-900 flex justify-end"
               >
                 View Documentation →
               </Link>
