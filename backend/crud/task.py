@@ -63,7 +63,7 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         obj_in_data = obj_in.model_dump()
         
         # Create new Task object with default state
-        db_obj = self.model(**obj_in_data, created_by=creator_id, state=TaskState.DRAFT)
+        db_obj = self.model(**obj_in_data, created_by=creator_id, state=TaskState.IN_PROGRESS)
         
         # Add to session, commit and refresh
         db.add(db_obj)
@@ -145,11 +145,11 @@ def create_task(db: Session, *, obj_in: TaskCreate, created_by: int) -> Task:
     if obj_in.depends_on_ids:
         depends_on = db.query(Task).filter(Task.id.in_(obj_in.depends_on_ids)).all()
     
-    # Create task object with default state
+    # Create task object with IN_PROGRESS as default state
     db_obj = Task(
         **obj_in.model_dump(exclude={'depends_on_ids'}),
         created_by=created_by,
-        state=TaskState.DRAFT
+        state=TaskState.IN_PROGRESS
     )
     
     # Add dependencies

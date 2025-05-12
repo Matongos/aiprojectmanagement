@@ -45,7 +45,6 @@ async def read_projects(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    # For admin users, return all projects
     if current_user.get("is_superuser", False):
         projects = project_crud.get_multi(db, skip=skip, limit=limit)
     else:

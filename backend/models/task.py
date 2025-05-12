@@ -1,9 +1,10 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint
 from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.sql import func
 from datetime import datetime
 from .base import Base
 from .task_stage import TaskStage
+from schemas.task import TaskState
 
 # Association table for task dependencies
 task_dependencies = Table(
@@ -17,13 +18,19 @@ task_dependencies = Table(
 class Task(Base):
     """Task model for project management"""
     __tablename__ = "tasks"
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('in_progress', 'changes_requested', 'approved', 'canceled', 'done')",
+            name='valid_task_states'
+        ),
+        {'extend_existing': True}
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)  # Task name (not title)
     description = Column(Text, nullable=True)
     priority = Column(String(50), default='normal')
-    state = Column(String(50), default='draft')
+    state = Column(String(50), default=TaskState.IN_PROGRESS)
     
     # Foreign Keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
@@ -41,7 +48,7 @@ class Task(Base):
     
     # Time tracking
     planned_hours = Column(Float, default=0.0)  # Not estimated_hours
-    progress = Column(Float, nullable=False, default=0.0)  # Make non-nullable with default
+    progress = Column(Float, nullable=False, default=0.0)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -84,10 +91,12 @@ class Task(Base):
         new_stage = db.query(TaskStage).filter(TaskStage.id == new_stage_id).first()
         if new_stage:
             if new_stage.fold:  # If stage is folded (typically done/canceled stages)
-                self.state = 'done'
+                self.state = TaskState.DONE
                 self.end_date = func.now()
             else:
-                self.state = 'draft'
+                # Reset approval states when moving stages
+                if self.state in [TaskState.CHANGES_REQUESTED, TaskState.APPROVED]:
+                    self.state = TaskState.IN_PROGRESS
         
         return old_stage_id != new_stage_id  # Return True if stage actually changed
 

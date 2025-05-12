@@ -6,10 +6,11 @@ from .milestone import MilestoneResponse
 from enum import Enum
 
 class TaskState(str, Enum):
-    DRAFT = "draft"
     IN_PROGRESS = "in_progress"
-    DONE = "done"
+    CHANGES_REQUESTED = "changes_requested"
+    APPROVED = "approved"
     CANCELED = "canceled"
+    DONE = "done"
 
 class TaskPriority(str, Enum):
     LOW = "low"
@@ -53,7 +54,7 @@ class TaskBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Task name (required)")
     description: Optional[str] = Field(default="", description="Task description")
     priority: Optional[TaskPriority] = Field(default=TaskPriority.NORMAL, description="Task priority")
-    state: Optional[TaskState] = Field(default=TaskState.DRAFT, description="Task state")
+    state: Optional[TaskState] = Field(default=TaskState.IN_PROGRESS, description="Task state")
     project_id: int = Field(..., description="Project ID (required)")
     stage_id: int = Field(..., description="Stage ID (required)")
     parent_id: Optional[int] = Field(default=None, description="Parent task ID")
@@ -97,7 +98,18 @@ class Task(TaskBase):
     depends_on_ids: List[int] = []
     subtask_ids: List[int] = []
     attachments: Optional[List[FileAttachment]] = None
-    milestone: Optional[MilestoneResponse] = None  # Use MilestoneResponse for milestone
+    milestone: Optional[dict] = {
+        'id': int,
+        'name': str,
+        'description': Optional[str],
+        'due_date': Optional[str],
+        'is_completed': bool,
+        'is_active': bool,
+        'project_id': int,
+        'created_at': datetime,
+        'created_by': Optional[int],
+        'updated_at': Optional[datetime]
+    }
     company: Optional[dict] = None
     assignee: Optional[dict] = None
 
@@ -117,7 +129,11 @@ class Task(TaskBase):
                 'description': self.milestone.description,
                 'due_date': self.milestone.due_date.isoformat() if self.milestone.due_date else None,
                 'is_completed': self.milestone.is_completed,
-                'is_active': self.milestone.is_active
+                'is_active': self.milestone.is_active,
+                'project_id': self.milestone.project_id,
+                'created_at': self.milestone.created_at.isoformat() if self.milestone.created_at else None,
+                'created_by': self.milestone.created_by,
+                'updated_at': self.milestone.updated_at.isoformat() if self.milestone.updated_at else None
             }
         if self.assignee:
             d['assignee'] = {
@@ -125,7 +141,7 @@ class Task(TaskBase):
                 'username': self.assignee.username,
                 'email': self.assignee.email,
                 'full_name': self.assignee.full_name,
-                'profile_image_url': self.assignee.profile_image_url
+                'profile_image_url': getattr(self.assignee, 'profile_image_url', None)
             }
         return d
 

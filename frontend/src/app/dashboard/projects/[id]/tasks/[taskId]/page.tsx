@@ -32,6 +32,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useQueryClient } from "@tanstack/react-query";
+import { TaskState, statusConfig } from "@/types/task";
 
 interface Stage {
   id: string;
@@ -47,6 +49,10 @@ interface Milestone {
   due_date: string;
   is_completed: boolean;
   is_active: boolean;
+  project_id: number;
+  created_at: string;
+  created_by?: number;
+  updated_at?: string;
 }
 
 interface User {
@@ -67,6 +73,8 @@ interface Task {
   assigned_to?: number;
   assignee?: User;
   created_by: number;
+  deadline?: string;
+  state: TaskState;
   // ... other task properties
 }
 
@@ -99,6 +107,13 @@ interface CreateMilestoneData {
   is_active: boolean;
 }
 
+interface TaskUpdateFields {
+  name?: string;
+  deadline?: string | null;
+  assigned_to?: number | null;
+  state?: TaskState;
+}
+
 export default function TaskDetails({ params }: TaskDetailsProps) {
   // Unwrap params using React.use()
   const { id, taskId } = React.use(params);
@@ -109,6 +124,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [taskName, setTaskName] = useState("");
   const [isNameChanged, setIsNameChanged] = useState(false);
+  const [deadline, setDeadline] = useState<string | null>(null);
+  const [isDeadlineChanged, setIsDeadlineChanged] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showDetailedMilestones, setShowDetailedMilestones] = useState(false);
   const [showCreateMilestone, setShowCreateMilestone] = useState(false);
   const [searchMilestone, setSearchMilestone] = useState("");
@@ -127,6 +145,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     is_active: true
   });
   const itemsPerPage = 4;
+  const queryClient = useQueryClient();
+  const [currentStatus, setCurrentStatus] = useState<TaskState>(TaskState.IN_PROGRESS);
+  const [isStatusChanged, setIsStatusChanged] = useState(false);
 
   // Fetch task details including current stage
   const { data: taskDetails, isLoading: isLoadingTask, error: taskError, refetch } = useQuery<Task>({
@@ -287,12 +308,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         const data = await response.json();
         return data;
       } catch (error) {
-        console.error("Error fetching task activities:", error);
-        toast.error("Failed to load task activities");
+        console.error('Error fetching task activities:', error);
         throw error;
       }
     },
-    enabled: !!token && !!taskId,
+    enabled: !!taskId && !!token,
   });
 
   // Group activities by date
@@ -324,6 +344,49 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setSelectedAssignees([taskDetails.assignee]);
     } else {
       setSelectedAssignees([]);
+    }
+  }, [taskDetails]);
+
+  // Set deadline when task details are loaded
+  useEffect(() => {
+    if (taskDetails?.deadline) {
+      // Convert the ISO string to local datetime-local format
+      const date = new Date(taskDetails.deadline);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      setDeadline(`${year}-${month}-${day}T${hours}:${minutes}`);
+    } else {
+      setDeadline('');
+    }
+  }, [taskDetails]);
+
+  // Update hasUnsavedChanges whenever any field changes
+  useEffect(() => {
+    setHasUnsavedChanges(
+      isNameChanged || 
+      isDeadlineChanged || 
+      isAssigneesChanged ||
+      isStatusChanged
+    );
+  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged]);
+
+  // Update currentStatus when task details are loaded
+  useEffect(() => {
+    if (taskDetails?.state) {
+      // Validate that the state from the backend is a valid TaskState
+      const stateFromBackend = taskDetails.state;
+      if (Object.values(TaskState).includes(stateFromBackend as TaskState)) {
+        setCurrentStatus(stateFromBackend as TaskState);
+        setIsStatusChanged(false); // Reset the change flag when task details are loaded
+      } else {
+        // If the state is invalid, set it to IN_PROGRESS
+        console.warn('Invalid task state received from backend:', stateFromBackend);
+        setCurrentStatus(TaskState.IN_PROGRESS);
+        setIsStatusChanged(false);
+      }
     }
   }, [taskDetails]);
 
@@ -360,32 +423,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     } catch (error) {
       console.error('Error updating task stage:', error);
       toast.error('Failed to update task stage');
-    }
-  };
-
-  // Handle task name save
-  const handleSaveTaskName = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: taskName }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update task name');
-      }
-
-      setIsEditingName(false);
-      setIsNameChanged(false);
-      toast.success('Task name updated successfully');
-      refetch(); // Refresh task data
-    } catch (error) {
-      console.error('Error updating task name:', error);
-      toast.error('Failed to update task name');
     }
   };
 
@@ -520,32 +557,91 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     setIsAssigneesChanged(true);
   };
 
-  // Save assignees changes
-  const handleSaveAssignees = async () => {
+  // Handle save changes
+  const handleSaveChanges = async () => {
+    if (!taskId || !token) return;
+
     try {
-      // For now, we'll use the first assignee as the assigned_to value
-      // In a real implementation, you'd need a backend API that supports multiple assignees
-      const primaryAssigneeId = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
-      
+      // If only status is changed, use the dedicated state update endpoint
+      if (isStatusChanged && !isNameChanged && !isDeadlineChanged && !isAssigneesChanged) {
+        const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/state?state=${currentStatus}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          }
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error('Server response:', errorData);
+          throw new Error(errorData.detail || 'Failed to update task state');
+        }
+
+        const updatedTask = await response.json();
+        console.log('Task state updated successfully:', updatedTask);
+
+        // Refresh task details and activities
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
+          queryClient.invalidateQueries({ queryKey: ['task-activities', taskId] })
+        ]);
+
+        // Reset change flags
+        setIsStatusChanged(false);
+        toast.success('Task status updated successfully');
+        return;
+      }
+
+      // For other changes, use the general update endpoint
+      const updatedFields: TaskUpdateFields = {};
+
+      if (isNameChanged) {
+        updatedFields.name = taskName;
+      }
+      if (isDeadlineChanged) {
+        updatedFields.deadline = deadline ? new Date(deadline).toISOString() : null;
+      }
+      if (isAssigneesChanged) {
+        updatedFields.assigned_to = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
+      }
+
+      // Debug logging
+      console.log('Sending update with fields:', updatedFields);
+
       const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ assigned_to: primaryAssigneeId }),
+        body: JSON.stringify(updatedFields),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to update assignees');
+        const errorData = await response.json();
+        console.error('Server response:', errorData);
+        throw new Error(errorData.detail || 'Failed to update task');
       }
 
+      const updatedTask = await response.json();
+      console.log('Task updated successfully:', updatedTask);
+
+      // Refresh task details and activities
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['task-activities', taskId] })
+      ]);
+
+      // Reset change flags
+      setIsNameChanged(false);
+      setIsDeadlineChanged(false);
       setIsAssigneesChanged(false);
-      toast.success('Task assignees updated successfully');
-      refetch(); // Refresh task data
+
+      toast.success('Task updated successfully');
     } catch (error) {
-      console.error('Error updating assignees:', error);
-      toast.error('Failed to update assignees');
+      console.error('Error updating task:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update task');
     }
   };
 
@@ -980,24 +1076,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         <div className="flex justify-between items-center py-4">
           {/* Stage Navigation */}
           <div className="flex items-center gap-1.5">
-            {isNameChanged && (
+            {hasUnsavedChanges && (
               <Button
                 variant="default"
                 size="sm"
                 className="bg-blue-800 text-white hover:bg-blue-900"
-                onClick={handleSaveTaskName}
+                onClick={handleSaveChanges}
               >
                 Save Changes
-              </Button>
-            )}
-            {isAssigneesChanged && (
-              <Button
-                variant="default"
-                size="sm"
-                className="bg-blue-800 text-white hover:bg-blue-900"
-                onClick={handleSaveAssignees}
-              >
-                Save Assignees
               </Button>
             )}
             {stages.slice(0, showAllStages ? stages.length : 4).map((stage) => {
@@ -1099,7 +1185,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                           onBlur={() => setIsEditingName(false)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
-                              handleSaveTaskName();
+                              handleSaveChanges();
                             }
                           }}
                           className="text-xl font-medium h-8 py-0"
@@ -1116,8 +1202,36 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     </div>
                   )}
                 </div>
-                <span className="text-sm bg-gray-100 px-3 py-1 rounded">In Progress</span>
-                        </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      className={`${statusConfig[currentStatus]?.color || statusConfig[TaskState.IN_PROGRESS].color} flex items-center gap-2 px-3 py-1 rounded hover:opacity-90`}
+                    >
+                      <span>{statusConfig[currentStatus]?.icon || statusConfig[TaskState.IN_PROGRESS].icon}</span>
+                      <span className="capitalize">{currentStatus.replace(/_/g, ' ')}</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-[200px]">
+                    {Object.values(TaskState).map((status) => (
+                      <DropdownMenuItem
+                        key={status}
+                        onClick={() => {
+                          setCurrentStatus(status);
+                          setIsStatusChanged(true);
+                        }}
+                        className={`flex items-center gap-2 ${currentStatus === status ? 'bg-gray-100' : ''}`}
+                      >
+                        <span>{statusConfig[status].icon}</span>
+                        <span className="capitalize">{status.replace(/_/g, ' ')}</span>
+                        {currentStatus === status && (
+                          <ChevronRight className="ml-auto h-4 w-4" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
 
               {/* Task Details Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -1188,7 +1302,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
-                  <Input type="date" />
+                  <Input 
+                    type="datetime-local" 
+                    value={deadline || ''}
+                    onChange={(e) => {
+                      const newDeadline = e.target.value;
+                      setDeadline(newDeadline);
+                      setIsDeadlineChanged(newDeadline !== taskDetails?.deadline);
+                    }}
+                  />
                 </div>
               </div>
 
@@ -1232,57 +1354,99 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
             {/* Activity Feed */}
             <div className="bg-white rounded-lg shadow p-4">
-              {Object.entries(groupedActivities).map(([date, dateActivities]: [string, Activity[]]) => (
-                <div key={date}>
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-medium">{date === new Date().toLocaleDateString() ? 'Today' : date}</h3>
-                  </div>
-
-                  {/* Activity Items */}
-                  <div className="space-y-4">
-                    {dateActivities.map((activity: Activity) => (
-                      <div key={activity.id} className="flex items-start gap-3">
-                        <Avatar className="w-8 h-8">
-                          <AvatarImage 
-                            src={activity.user.profile_image_url || '/default-avatar.png'} 
-                            alt={activity.user.full_name} 
-                          />
-                          <AvatarFallback>
-                            {activity.user.full_name.charAt(0)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{activity.user.full_name}</span>
-                            <span className="text-sm text-gray-500">
-                              {new Date(activity.created_at).toLocaleTimeString([], { 
-                                hour: '2-digit', 
-                                minute: '2-digit' 
-                              })}
-                            </span>
-                          </div>
-                          <p className="text-sm">{activity.description}</p>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {dateActivities.length === 0 && (
-                      <p className="text-sm text-gray-500 text-center py-2">
-                        No activities for this day
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium text-lg">Activity Feed</h3>
+              </div>
 
               {isLoadingActivities ? (
                 <div className="flex justify-center py-4">
                   <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                 </div>
-              ) : Object.keys(groupedActivities).length === 0 && (
+              ) : Object.entries(groupedActivities).length === 0 ? (
                 <p className="text-sm text-gray-500 text-center py-4">
                   No activities recorded yet
                 </p>
+              ) : (
+                Object.entries(groupedActivities).map(([date, dateActivities]: [string, Activity[]]) => (
+                  <div key={date} className="mb-6">
+                    <div className="flex items-center mb-3">
+                      <h3 className="text-sm font-medium text-gray-500">
+                        {date === new Date().toLocaleDateString() ? 'Today' : date}
+                      </h3>
+                      <div className="flex-1 ml-3 border-t border-gray-200" />
+                    </div>
+
+                    <div className="space-y-4">
+                      {dateActivities.map((activity: Activity) => (
+                        <div key={activity.id} className="flex items-start gap-3">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage 
+                              src={activity.user.profile_image_url || '/default-avatar.png'} 
+                              alt={activity.user.full_name} 
+                            />
+                            <AvatarFallback>
+                              {activity.user.full_name.charAt(0)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1">
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-sm text-gray-500">
+                                {new Date(activity.created_at).toLocaleTimeString([], { 
+                                  hour: '2-digit', 
+                                  minute: '2-digit' 
+                                })}
+                              </span>
+                            </div>
+                            <div className="mt-1">
+                              {activity.activity_type === 'task_update' && (
+                                <div className="text-sm">
+                                  {activity.description.includes('→') ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-gray-600">{activity.user.full_name}</span>
+                                      {activity.description.toLowerCase().includes('status') ? (
+                                        <>
+                                          <span className="text-gray-500">changed status from</span>
+                                          <span className="text-gray-600">{activity.description.split('→')[0].split(':')[1].trim()}</span>
+                                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                                          <span className={`font-medium ${
+                                            activity.description.toLowerCase().includes('done') ? 'text-green-600' :
+                                            activity.description.toLowerCase().includes('in progress') ? 'text-blue-600' :
+                                            activity.description.toLowerCase().includes('changes requested') ? 'text-orange-600' :
+                                            activity.description.toLowerCase().includes('approved') ? 'text-green-600' :
+                                            activity.description.toLowerCase().includes('canceled') ? 'text-red-600' :
+                                            'text-gray-600'
+                                          }`}>
+                                            {activity.description.split('→')[1].trim()}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span>{activity.description.split('→')[0]}</span>
+                                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                                          <span className="font-medium">{activity.description.split('→')[1]}</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-gray-600">{activity.user.full_name}</span>
+                                      <span className="text-gray-500">{activity.description}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {activity.activity_type === 'comment' && (
+                                <div className="text-sm bg-gray-50 rounded-md p-3 mt-1">
+                                  {activity.description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>

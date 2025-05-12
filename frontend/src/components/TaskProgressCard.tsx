@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { useRouter } from 'next/navigation';
+import { TaskState, statusConfig } from '@/types/task';
 
 // Task priority colors
 const priorityColors = {
@@ -13,35 +14,26 @@ const priorityColors = {
   urgent: 'bg-red-100 text-red-800',
 };
 
-// Task status colors
-const statusColors = {
-  todo: 'bg-gray-100 text-gray-800',
-  in_progress: 'bg-blue-100 text-blue-800',
-  review: 'bg-blue-100 text-blue-800',
-  done: 'bg-green-100 text-green-800',
-  cancelled: 'bg-red-100 text-red-800',
-};
-
 // Progress percentage based on status
-const getProgressPercentage = (status: string): number => {
-  switch (status) {
-    case 'todo': return 0;
-    case 'in_progress': return 50;
-    case 'review': return 75;
-    case 'done': return 100;
-    case 'cancelled': return 100;
+const getProgressPercentage = (state: TaskState): number => {
+  switch (state) {
+    case TaskState.IN_PROGRESS: return 50;
+    case TaskState.CHANGES_REQUESTED: return 25;
+    case TaskState.APPROVED: return 75;
+    case TaskState.DONE: return 100;
+    case TaskState.CANCELED: return 100;
     default: return 0;
   }
 };
 
 // Progress bar color based on status
-const getProgressColor = (status: string): string => {
-  switch (status) {
-    case 'todo': return 'bg-gray-500';
-    case 'in_progress': return 'bg-blue-500';
-    case 'review': return 'bg-blue-800';
-    case 'done': return 'bg-green-500';
-    case 'cancelled': return 'bg-red-500';
+const getProgressColor = (state: TaskState): string => {
+  switch (state) {
+    case TaskState.IN_PROGRESS: return 'bg-blue-500';
+    case TaskState.CHANGES_REQUESTED: return 'bg-orange-500';
+    case TaskState.APPROVED: return 'bg-green-500';
+    case TaskState.DONE: return 'bg-purple-500';
+    case TaskState.CANCELED: return 'bg-red-500';
     default: return 'bg-gray-500';
   }
 };
@@ -50,7 +42,7 @@ export interface TaskProps {
   id: number;
   title: string;
   description?: string;
-  status: 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled';
+  state: TaskState;
   priority: 'low' | 'medium' | 'high' | 'urgent';
   due_date?: string;
   estimated_hours?: number;
@@ -64,7 +56,7 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
   id,
   title,
   description,
-  status,
+  state,
   priority,
   due_date,
   estimated_hours,
@@ -74,8 +66,8 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
   onClick,
 }) => {
   const router = useRouter();
-  const progressPercentage = getProgressPercentage(status);
-  const progressColor = getProgressColor(status);
+  const progressPercentage = getProgressPercentage(state);
+  const progressColor = getProgressColor(state);
   
   const handleClick = () => {
     if (onClick) {
@@ -93,12 +85,14 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <h3 className="font-medium text-lg line-clamp-1">{title}</h3>
         <div className="flex space-x-2">
-          <Badge className={statusColors[status]}>{status.replace('_', ' ')}</Badge>
+          <Badge className={statusConfig[state].color}>
+            {state.replace(/_/g, ' ').toLowerCase()}
+          </Badge>
           <Badge className={priorityColors[priority]}>{priority}</Badge>
         </div>
       </CardHeader>
       
-      <CardContent className="pb-2">
+      <CardContent>
         {description && (
           <p className="text-sm text-gray-500 line-clamp-2 mb-3">{description}</p>
         )}

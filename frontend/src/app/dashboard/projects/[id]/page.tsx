@@ -71,6 +71,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TaskState, statusConfig } from "@/types/task";
 
 interface TaskStatus {
   id: string;
@@ -91,7 +92,7 @@ interface Task {
   id: number;
   name: string;
   description: string;
-  status: string;
+  state: TaskState;
   priority: 'low' | 'medium' | 'high';
   due_date: string | null;
   created_at: string;
@@ -159,6 +160,20 @@ const canAccessTask = (task, currentUser) => {
   
   // Otherwise, they can't access the task
   return false;
+};
+
+// Add StatusIndicator component
+const StatusIndicator = ({ state }: { state: TaskState }) => {
+  const config = statusConfig[state];
+  const baseColor = config.color.split(' ')[0]; // Get the background color class
+  const colorClass = baseColor.replace('100', '500'); // Make the color more vibrant for the circle
+  
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`w-2.5 h-2.5 rounded-full ${colorClass}`} />
+      <span className="text-xs text-gray-600">{state.replace('_', ' ')}</span>
+    </div>
+  );
 };
 
 export default function ProjectDetailsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -420,15 +435,10 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     return `${days} days ago`;
   };
 
-  const StatusIcon = ({ status }: { status: string }) => {
-    const taskStatus = taskStatuses.find(s => s.id === status);
-    if (!taskStatus) return null;
-
+  const StatusIcon = ({ state }: { state: TaskState }) => {
     return (
-      <div className={`rounded-full p-0.5 ${taskStatus.color} cursor-pointer`}>
-        {taskStatus.icon === 'check' && <Check className="h-2.5 w-2.5" />}
-        {taskStatus.icon === 'x' && <X className="h-2.5 w-2.5" />}
-        {taskStatus.icon === 'alert' && <AlertCircle className="h-2.5 w-2.5" />}
+      <div className={`rounded-full p-0.5 ${statusConfig[state].color} cursor-pointer`}>
+        <span>{statusConfig[state].icon}</span>
       </div>
     );
   };
@@ -1158,10 +1168,12 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                             <div className="space-y-2">
                               {stage.tasks.map((task) => (
                                 <Card 
-                                  key={task.id} 
-                                  className={`p-3 ${canAccessTask(task, user) 
-                                    ? "cursor-pointer hover:shadow-md transition-shadow" 
-                                    : "cursor-not-allowed opacity-60"}`}
+                                  key={task.id}
+                                  className={`mb-2 ${
+                                    canAccessTask(task, user) 
+                                      ? "hover:shadow-md cursor-pointer" 
+                                      : "cursor-not-allowed opacity-60"
+                                  }`}
                                   onClick={() => {
                                     if (canAccessTask(task, user)) {
                                       router.push(`/dashboard/projects/${projectId}/tasks/${task.id}`);
@@ -1170,62 +1182,39 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                     }
                                   }}
                                 >
-                                  {/* Task Header */}
-                                  <div className="flex items-start justify-between mb-2">
-                                    <div className="flex-1">
-                                      <h4 className="text-sm font-medium mb-1">{task.name}</h4>
-                                      {task.company && (
-                                        <p className="text-xs text-gray-600">{task.company.name}</p>
-                                      )}
+                                  <div className="p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <h3 className="font-medium text-sm">{task.name}</h3>
+                                      <StatusIndicator state={task.state} />
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                      {task.milestone && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          {task.milestone}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Task Details */}
-                                  <div className="flex items-center justify-between mt-3">
-                                    <div className="flex items-center gap-2">
-                                      {task.assigned_to ? (
-                                        <Avatar className="h-6 w-6">
-                                          <AvatarImage 
-                                            src={task.assignee?.profile_image_url || DEFAULT_AVATAR_URL} 
-                                            alt={task.assignee?.name || ''} 
-                                          />
-                                          <AvatarFallback>
-                                            {task.assignee?.name ? task.assignee.name[0] : '?'}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                      ) : (
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-6 w-6 p-0 rounded-full"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            // TODO: Open assignee selection
-                                          }}
-                                        >
-                                          <Plus className="h-4 w-4" />
-                                        </Button>
-                                      )}
-                                    </div>
-
-                                    {task.deadline && (
-                                      <div className="flex items-center gap-1 text-xs text-gray-500">
-                                        <Calendar className="h-3 w-3" />
-                                        <span>
-                                          {Math.max(0, Math.ceil(
-                                            (new Date(task.deadline).getTime() - new Date().getTime()) / 
-                                            (1000 * 60 * 60 * 24)
-                                          ))} days left
-                                        </span>
+                                    {/* Task Details */}
+                                    <div className="flex items-center justify-between mt-3">
+                                      <div className="flex items-center gap-2">
+                                        {task.assignee && (
+                                          <Avatar className="h-6 w-6">
+                                            <AvatarImage 
+                                              src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} 
+                                              alt={task.assignee?.name || ''} 
+                                            />
+                                            <AvatarFallback>
+                                              {task.assignee?.name ? task.assignee.name[0] : '?'}
+                                            </AvatarFallback>
+                                          </Avatar>
+                                        )}
                                       </div>
-                                    )}
+
+                                      {task.deadline && (
+                                        <div className="flex items-center gap-1 text-xs text-gray-500">
+                                          <Calendar className="h-3 w-3" />
+                                          <span>
+                                            {Math.max(0, Math.ceil(
+                                              (new Date(task.deadline).getTime() - new Date().getTime()) / 
+                                              (1000 * 60 * 60 * 24)
+                                            ))} days left
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 </Card>
                               ))}
@@ -1281,9 +1270,9 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                     }}
                   >
                     <td className="px-4 py-3">
-                      <div className="flex items-center">
-                        <StatusIcon status={task.status} />
-                        <span className="ml-2">{task.name}</span>
+                      <div className="flex items-center justify-between">
+                        <span>{task.name}</span>
+                        <StatusIndicator state={task.state} />
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm">{stage.name}</td>
@@ -1303,10 +1292,10 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                     </td>
                     <td className="px-4 py-3">
                       <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs
-                        ${task.status === 'done' ? 'bg-green-100 text-green-800' :
-                          task.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
+                        ${task.state === 'done' ? 'bg-green-100 text-green-800' :
+                          task.state === 'in_progress' ? 'bg-blue-100 text-blue-800' :
                           'bg-gray-100 text-gray-800'}`}>
-                        {task.status.replace('_', ' ')}
+                        {task.state.replace('_', ' ')}
                       </div>
                     </td>
                   </tr>
