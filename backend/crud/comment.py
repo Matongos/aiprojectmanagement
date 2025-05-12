@@ -80,11 +80,17 @@ def get_comment_with_user_data(db: Session, comment: Comment) -> Dict[str, Any]:
     if user:
         user_data = {
             "id": user.id,
-            "name": user.full_name,
+            "username": user.username,
+            "full_name": user.full_name,
             "profile_image_url": user.profile_image_url
         }
     else:
-        user_data = None
+        user_data = {
+            "id": comment.created_by,
+            "username": "Unknown",
+            "full_name": "Unknown User",
+            "profile_image_url": None
+        }
         
     return {
         "id": comment.id,

@@ -8,6 +8,8 @@ import { getRecentProjects } from '@/lib/api';
 import { Calendar } from '@/components/ui/calendar';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import { useQuery } from "@tanstack/react-query";
+import { API_BASE_URL } from "@/lib/constants";
 
 interface Project {
   id: number;
@@ -47,11 +49,23 @@ interface Task {
 }
 
 interface Comment {
-  id: string;
-  user: TeamMember;
-  project: string;
-  message: string;
-  timestamp: string;
+  id: number;
+  content: string;
+  created_at: string;
+  user: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
+  task: {
+    id: number;
+    name: string;
+  };
+  project: {
+    id: number;
+    name: string;
+  };
 }
 
 interface TeamMember {
@@ -62,14 +76,38 @@ interface TeamMember {
 }
 
 export default function Dashboard() {
-  const { user } = useAuthStore();
+  const { user, token } = useAuthStore();
   const [projects, setProjects] = useState<Project[]>([]);
   const [urgentTasks, setUrgentTasks] = useState<Task[]>([]);
-  const [comments, setComments] = useState<Comment[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [date, setDate] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch latest comments
+  const { data: latestComments = [], isLoading: isLoadingComments } = useQuery<Comment[]>({
+    queryKey: ["latest-comments"],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/comments/latest?limit=5`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch latest comments');
+        }
+
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching latest comments:', error);
+        return [];
+      }
+    },
+    enabled: !!token,
+  });
 
   // Function to check if a user has access to a project
   const hasProjectAccess = (project: Project): boolean => {
@@ -108,23 +146,6 @@ export default function Dashboard() {
           { id: '1', title: 'Finish monthly reporting', due_date: new Date().toISOString() },
           { id: '2', title: 'Report signing', due_date: new Date().toISOString() },
           { id: '3', title: 'Market overview keynote', due_date: new Date().toISOString() },
-        ]);
-
-        setComments([
-          {
-            id: '1',
-            user: { id: '1', name: 'Elsa S.', role: 'Designer', avatar: '/default-avatar.png' },
-            project: 'Market research 2024',
-            message: 'Find my keynote attached in the...',
-            timestamp: new Date().toISOString()
-          },
-          {
-            id: '2',
-            user: { id: '2', name: 'Dana R.', role: 'Developer', avatar: '/default-avatar.png' },
-            project: 'Market research 2024',
-            message: "I've added some new data. Let's...",
-            timestamp: new Date().toISOString()
-          }
         ]);
 
         setTeamMembers([
@@ -277,21 +298,43 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {comments.map((comment) => (
-                  <div key={comment.id} className="flex items-start space-x-3">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src={comment.user.avatar} alt={comment.user.name} />
-                      <AvatarFallback>{comment.user.name[0]}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <p className="text-sm font-medium">{comment.user.name}</p>
-                        <p className="text-xs text-gray-500">in {comment.project}</p>
-                      </div>
-                      <p className="text-sm text-gray-600">{comment.message}</p>
-                    </div>
+                {isLoadingComments ? (
+                  <div className="flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                   </div>
-                ))}
+                ) : latestComments.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center">No comments yet</p>
+                ) : (
+                  latestComments.map((comment) => (
+                    <div key={comment.id} className="flex items-start space-x-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage 
+                          src={comment.user.profile_image_url || '/default-avatar.png'} 
+                          alt={comment.user.full_name} 
+                        />
+                        <AvatarFallback>
+                          {comment.user.full_name?.charAt(0) || comment.user.username?.charAt(0) || 'U'}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <p className="text-sm font-medium">{comment.user.full_name || comment.user.username}</p>
+                          <p className="text-xs text-gray-500">in {comment.project.name}</p>
+                        </div>
+                        <p className="text-sm text-gray-600 line-clamp-2">{comment.content}</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {new Date(comment.created_at).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>

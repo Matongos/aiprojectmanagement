@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, and_
+from sqlalchemy import func, desc, and_, or_
 from datetime import datetime, timedelta
 from models.task import Task
 from crud.task import task
@@ -67,7 +67,7 @@ class TaskAnalytics:
         
         # Tasks completed in the period
         completed_tasks = db.query(Task).filter(
-            Task.assignee_id == user_id,
+            Task.assigned_to == user_id,
             Task.status == "done",
             Task.completed_at >= start_date
         ).all()
@@ -95,5 +95,72 @@ class TaskAnalytics:
             "over_budget_percentage": round((over_budget_tasks / completed_count) * 100, 2) if completed_count else 0,
             "days_analyzed": days
         }
+
+    @staticmethod
+    def get_user_task_stats(db: Session, user_id: int) -> Dict[str, Any]:
+        """Get task statistics for a specific user."""
+        try:
+            # Get total tasks where user is either creator or assignee
+            total_tasks = db.query(Task).filter(
+                or_(
+                    Task.created_by == user_id,
+                    Task.assigned_to == user_id
+                )
+            ).count()
+            
+            # Get tasks by status
+            tasks_by_status = db.query(
+                Task.state,
+                func.count(Task.id).label('count')
+            ).filter(
+                or_(
+                    Task.created_by == user_id,
+                    Task.assigned_to == user_id
+                )
+            ).group_by(Task.state).all()
+            
+            # Get tasks by priority
+            tasks_by_priority = db.query(
+                Task.priority,
+                func.count(Task.id).label('count')
+            ).filter(
+                or_(
+                    Task.created_by == user_id,
+                    Task.assigned_to == user_id
+                )
+            ).group_by(Task.priority).all()
+            
+            # Get overdue tasks
+            overdue_tasks = db.query(Task).filter(
+                and_(
+                    or_(
+                        Task.created_by == user_id,
+                        Task.assigned_to == user_id
+                    ),
+                    Task.deadline < func.now(),
+                    Task.state != TaskState.DONE
+                )
+            ).count()
+            
+            # Format results
+            return {
+                'total_tasks': total_tasks,
+                'tasks_by_status': {
+                    status: count for status, count in tasks_by_status
+                },
+                'tasks_by_priority': {
+                    priority: count for priority, count in tasks_by_priority
+                },
+                'overdue_tasks': overdue_tasks
+            }
+            
+        except Exception as e:
+            print(f"Error getting user task stats: {str(e)}")
+            return {
+                'total_tasks': 0,
+                'tasks_by_status': {},
+                'tasks_by_priority': {},
+                'overdue_tasks': 0
+            }
 
 task_analytics = TaskAnalytics() 

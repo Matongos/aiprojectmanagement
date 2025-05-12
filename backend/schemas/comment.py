@@ -26,5 +26,7 @@ class CommentInDB(CommentBase):
 class Comment(CommentInDB):
     user: Optional[Dict[str, Any]] = None  # User info (simplified)
     replies: Optional[List['Comment']] = None  # Recursive for nested comments
+    task: Optional[Dict[str, Any]] = None  # Task info (simplified)
+    project: Optional[Dict[str, Any]] = None  # Project info (simplified)
 
 Comment.model_rebuild()  # This handles the recursive reference 

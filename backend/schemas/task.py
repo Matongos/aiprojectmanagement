@@ -157,7 +157,7 @@ class TaskResponse(BaseModel):
     assigned_to: Optional[int] = None
     assignee: Optional[UserBase] = None  # Changed to use UserBase model
     milestone_id: Optional[int] = None
-    milestone: Optional[dict] = None
+    milestone: Optional[MilestoneResponse] = None
     deadline: Optional[datetime] = None
     progress: Optional[float] = 0.0
     created_at: datetime
@@ -169,13 +169,8 @@ class TaskResponse(BaseModel):
             datetime: lambda v: v.isoformat() if v else None
         }
 
-    @property
-    def progress_value(self) -> float:
-        """Ensure progress is always a valid float"""
-        return self.progress if self.progress is not None else 0.0
-
     def dict(self, *args, **kwargs):
-        """Override dict method to properly handle assignee serialization"""
+        """Override dict method to properly handle serialization"""
         d = super().dict(*args, **kwargs)
         if self.assignee:
             d['assignee'] = {
@@ -185,7 +180,25 @@ class TaskResponse(BaseModel):
                 'full_name': self.assignee.full_name,
                 'profile_image_url': self.assignee.profile_image_url
             }
+        if self.milestone:
+            d['milestone'] = {
+                'id': self.milestone.id,
+                'name': self.milestone.name,
+                'description': self.milestone.description,
+                'due_date': self.milestone.due_date.isoformat() if self.milestone.due_date else None,
+                'is_completed': self.milestone.is_completed,
+                'is_active': self.milestone.is_active,
+                'project_id': self.milestone.project_id,
+                'created_at': self.milestone.created_at.isoformat() if self.milestone.created_at else None,
+                'created_by': self.milestone.created_by,
+                'updated_at': self.milestone.updated_at.isoformat() if self.milestone.updated_at else None
+            }
         return d
+
+    @property
+    def progress_value(self) -> float:
+        """Ensure progress is always a valid float"""
+        return self.progress if self.progress is not None else 0.0
 
 class TaskStageWithTasks(TaskStage):
     """Task stage schema that includes the tasks in the stage"""

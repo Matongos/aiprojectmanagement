@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Plus, Search } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import TaskList from "@/components/TaskList";
 import { toast } from "react-hot-toast";
@@ -15,15 +13,34 @@ interface Task {
   id: number;
   title: string;
   description: string;
-  status: string;
-  priority: string;
-  due_date: string;
+  state: TaskState;
+  priority: "low" | "medium" | "high" | "urgent";
   project_id: number;
-  assignee_id: number;
-  creator_id: number;
+  stage_id: number;
+  assigned_to: number;
+  milestone_id: number;
+  deadline: string;
+  progress: number;
+  created_at: string;
+  updated_at: string;
   project: {
+    id: number;
     name: string;
   };
+  assignee: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
+}
+
+enum TaskState {
+  IN_PROGRESS = "in_progress",
+  CHANGES_REQUESTED = "changes_requested",
+  APPROVED = "approved",
+  CANCELED = "canceled",
+  DONE = "done"
 }
 
 function MyTasksContent() {

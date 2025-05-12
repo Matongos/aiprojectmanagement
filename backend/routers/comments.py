@@ -1,6 +1,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from crud import comment as crud
 from crud import task as task_crud
@@ -10,6 +11,9 @@ from routers.auth import get_current_user
 from services.notification_service import NotificationService
 from models.user import User
 from services import comment_service, user_service
+from models.task import Task
+from models.activity import Activity
+from models.comment import Comment
 
 router = APIRouter(
     prefix="/comments",
@@ -62,50 +66,65 @@ async def create_comment(
     current_user: dict = Depends(get_current_user)
 ):
     """Create a new comment."""
-    created_comment, error = comment_service.create_comment(db, comment.dict(), current_user["id"])
-    
-    if error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
-    
-    # Process mentions in comment content
-    if comment.content:
-        user_service.process_user_mentions(
-            db, 
-            comment.content, 
-            current_user["id"], 
-            "comment", 
-            created_comment["id"],
-            notification_service
+    try:
+        # Get task details
+        task = db.query(Task).filter(Task.id == comment.task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Create the comment first
+        db_comment = Comment(
+            content=comment.content,
+            task_id=comment.task_id,
+            parent_id=comment.parent_id,
+            created_by=current_user["id"]
         )
-    
-    # Send notification to task owner (if different from commenter)
-    task = comment_service.get_related_task(db, comment.task_id)
-    if task and task.get("created_by") != current_user["id"]:
-        notification_data = {
-            "user_id": task["created_by"],
-            "title": "New Comment on Task",
-            "content": f"New comment on task: {task['title']}",
-            "type": "comment",
-            "reference_type": "comment",
-            "reference_id": created_comment["id"],
-            "is_read": False
-        }
-        notification_service.create_notification(db, notification_data)
-    
-    # Notify task assignee if different from commenter and creator
-    if task and task.get("assignee_id") and task["assignee_id"] != current_user["id"] and task["assignee_id"] != task.get("created_by"):
-        notification_data = {
-            "user_id": task["assignee_id"],
-            "title": "New Comment on Task",
-            "content": f"New comment on task: {task['title']}",
-            "type": "comment",
-            "reference_type": "comment",
-            "reference_id": created_comment["id"],
-            "is_read": False
-        }
-        notification_service.create_notification(db, notification_data)
-    
-    return created_comment
+        db.add(db_comment)
+        db.commit()
+        db.refresh(db_comment)
+        
+        # Process mentions in comment content
+        if comment.content:
+            user_service.process_user_mentions(
+                db, 
+                comment.content, 
+                current_user["id"], 
+                "comment", 
+                db_comment.id,
+                notification_service
+            )
+        
+        # Send notification to task owner (if different from commenter)
+        if task.created_by != current_user["id"]:
+            notification_data = {
+                "user_id": task.created_by,
+                "title": "New Comment on Task",
+                "content": f"New comment on task: {task.name}",
+                "type": "comment",
+                "reference_type": "comment",
+                "reference_id": db_comment.id,
+                "is_read": False
+            }
+            notification_service.create_notification(db, notification_data)
+        
+        # Notify task assignee if different from commenter and creator
+        if task.assigned_to and task.assigned_to != current_user["id"] and task.assigned_to != task.created_by:
+            notification_data = {
+                "user_id": task.assigned_to,
+                "title": "New Comment on Task",
+                "content": f"New comment on task: {task.name}",
+                "type": "comment",
+                "reference_type": "comment",
+                "reference_id": db_comment.id,
+                "is_read": False
+            }
+            notification_service.create_notification(db, notification_data)
+        
+        return crud.get_comment_with_user_data(db, db_comment)
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/{comment_id}", response_model=CommentSchema)
@@ -163,4 +182,59 @@ async def delete_comment(
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
         
-    return {"message": "Comment deleted successfully"} 
+    return {"message": "Comment deleted successfully"}
+
+
+@router.get("/latest", response_model=List[CommentSchema])
+async def read_latest_comments(
+    skip: int = 0,
+    limit: int = 5,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get latest comments across all tasks."""
+    query = text("""
+        SELECT 
+            c.id, c.content, c.task_id, c.parent_id, c.created_by,
+            c.created_at, c.updated_at,
+            u.id as user_id, u.username, u.full_name, u.profile_image_url,
+            t.name as task_name,
+            p.id as project_id, p.name as project_name
+        FROM comments c
+        JOIN users u ON c.created_by = u.id
+        JOIN tasks t ON c.task_id = t.id
+        JOIN projects p ON t.project_id = p.id
+        WHERE c.parent_id IS NULL
+        ORDER BY c.created_at DESC
+        LIMIT :limit OFFSET :skip
+    """)
+    
+    results = db.execute(query, {"limit": limit, "skip": skip}).fetchall()
+    
+    comments = []
+    for row in results:
+        comments.append({
+            "id": row.id,
+            "content": row.content,
+            "task_id": row.task_id,
+            "parent_id": row.parent_id,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "user": {
+                "id": row.user_id,
+                "username": row.username,
+                "full_name": row.full_name,
+                "profile_image_url": row.profile_image_url
+            },
+            "task": {
+                "id": row.task_id,
+                "name": row.task_name
+            },
+            "project": {
+                "id": row.project_id,
+                "name": row.project_name
+            }
+        })
+    
+    return comments 

@@ -78,11 +78,28 @@ interface Task {
   // ... other task properties
 }
 
+type ActivityType = 'task_update' | 'comment';
+
 interface Activity {
-  id: number;
-  activity_type: string;
+  id: number | string;
+  activity_type: ActivityType;
   description: string;
   created_at: string;
+  user_id?: number;
+  user?: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
+}
+
+interface Comment {
+  id: number;
+  content: string;
+  created_at: string;
+  created_by: number;
+  task_id: string;
   user: {
     id: number;
     username: string;
@@ -148,6 +165,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const queryClient = useQueryClient();
   const [currentStatus, setCurrentStatus] = useState<TaskState>(TaskState.IN_PROGRESS);
   const [isStatusChanged, setIsStatusChanged] = useState(false);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [commentText, setCommentText] = useState('');
 
   // Fetch task details including current stage
   const { data: taskDetails, isLoading: isLoadingTask, error: taskError, refetch } = useQuery<Task>({
@@ -315,19 +334,70 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     enabled: !!taskId && !!token,
   });
 
-  // Group activities by date
+  // Fetch comments
+  const { data: comments, isLoading: isLoadingComments } = useQuery<Comment[]>({
+    queryKey: ['task-comments', taskId],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/comments/task/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch comments');
+        }
+
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching comments:', error);
+        return [];
+      }
+    },
+    enabled: !!token && !!taskId,
+  });
+
+  // Update the groupedActivities calculation
   const groupedActivities = useMemo(() => {
-    if (!taskActivities) return {};
+    if (!taskActivities || !comments) return {};
     
-    return taskActivities.reduce((groups: { [key: string]: Activity[] }, activity: Activity) => {
-      const date = new Date(activity.created_at).toLocaleDateString();
+    // Combine activities and comments into a single array
+    const allItems: Activity[] = [
+      ...(taskActivities || []).map(activity => ({
+        ...activity,
+        user: activity.user || {
+          id: activity.user_id || 0,
+          username: 'Unknown',
+          full_name: 'Unknown User',
+          profile_image_url: null
+        }
+      })),
+      ...(comments || []).map((comment: Comment): Activity => ({
+        id: `comment-${comment.id}`,
+        activity_type: 'comment',
+        description: comment.content,
+        created_at: comment.created_at,
+        user: {
+          id: comment.user.id,
+          username: comment.user.username,
+          full_name: comment.user.full_name,
+          profile_image_url: comment.user.profile_image_url
+        }
+      }))
+    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    // Group by date
+    return allItems.reduce<{ [key: string]: Activity[] }>((groups, item) => {
+      const date = new Date(item.created_at).toLocaleDateString();
       if (!groups[date]) {
         groups[date] = [];
       }
-      groups[date].push(activity);
+      groups[date].push(item);
       return groups;
     }, {});
-  }, [taskActivities]);
+  }, [taskActivities, comments]);
 
   // Set current stage when task details are loaded
   useEffect(() => {
@@ -395,7 +465,12 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       <Button variant="outline" size="sm" className="whitespace-nowrap">Send message</Button>
       <Button variant="outline" size="sm" className="whitespace-nowrap">Log note</Button>
       <Button variant="outline" size="sm" className="whitespace-nowrap">Activities</Button>
-      <Button variant="outline" size="sm" className="flex items-center gap-2 whitespace-nowrap">
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="flex items-center gap-2 whitespace-nowrap"
+        onClick={() => setShowCommentInput(true)}
+      >
         <MessageSquare className="w-4 h-4" />
         Comments
       </Button>
@@ -663,8 +738,55 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     return false;
   };
 
+  // Update the handleSendComment function
+  const handleSendComment = async () => {
+    if (!commentText.trim()) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/comments/`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          content: commentText,
+          task_id: Number(taskId),
+          parent_id: null
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.detail || 'Failed to send comment');
+      }
+
+      // Clear the input and hide comment box
+      setCommentText('');
+      setShowCommentInput(false);
+
+      // Refresh both task activities and comments
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['task-activities', taskId],
+          exact: true
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['task-comments', taskId],
+          exact: true
+        })
+      ]);
+
+      toast.success('Comment added successfully');
+    } catch (error) {
+      console.error('Error sending comment:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to add comment');
+    }
+  };
+
   // Loading states
-  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities) {
+  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities || isLoadingComments) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-pulse text-gray-500">Loading task details...</div>
@@ -1231,7 +1353,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
-              </div>
+                        </div>
 
               {/* Task Details Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -1358,6 +1480,83 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <h3 className="font-medium text-lg">Activity Feed</h3>
               </div>
 
+              {/* Comment Input Section */}
+              {showCommentInput && (
+                <div className="mb-4 bg-gray-50 rounded-lg p-3">
+                  <div className="flex items-start gap-3">
+                    <Avatar className="w-8 h-8">
+                      <AvatarImage 
+                        src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'}
+                        alt={useAuthStore.getState().user?.full_name || 'User'}
+                      />
+                      <AvatarFallback>
+                        {useAuthStore.getState().user?.full_name?.charAt(0) || 
+                         useAuthStore.getState().user?.username?.charAt(0) || 
+                         'U'}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1">
+                      <div className="relative">
+                        <textarea
+                          className="w-full min-h-[100px] p-3 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          placeholder="Add a comment here..."
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                              e.preventDefault();
+                              handleSendComment();
+                            }
+                          }}
+                        />
+                        <div className="absolute bottom-2 right-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-gray-400 hover:text-gray-600"
+                            onClick={() => {/* Add emoji picker functionality */}}
+                          >
+                            😊
+                          </button>
+                          <button
+                            type="button"
+                            className="text-gray-400 hover:text-gray-600"
+                            onClick={() => {/* Add attachment functionality */}}
+                          >
+                            📎
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="text-xs text-gray-500">
+                          Press Ctrl+Enter to send
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setShowCommentInput(false);
+                              setCommentText('');
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={handleSendComment}
+                            disabled={!commentText.trim()}
+                          >
+                            Comment
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Existing Activity Feed Content */}
               {isLoadingActivities ? (
                 <div className="flex justify-center py-4">
                   <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
@@ -1376,74 +1575,165 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                       <div className="flex-1 ml-3 border-t border-gray-200" />
                     </div>
 
-                    <div className="space-y-4">
-                      {dateActivities.map((activity: Activity) => (
-                        <div key={activity.id} className="flex items-start gap-3">
-                          <Avatar className="w-8 h-8">
-                            <AvatarImage 
-                              src={activity.user.profile_image_url || '/default-avatar.png'} 
-                              alt={activity.user.full_name} 
-                            />
-                            <AvatarFallback>
-                              {activity.user.full_name.charAt(0)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1">
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-sm text-gray-500">
-                                {new Date(activity.created_at).toLocaleTimeString([], { 
-                                  hour: '2-digit', 
-                                  minute: '2-digit' 
-                                })}
+              <div className="space-y-4">
+                    {dateActivities.map((activity: Activity) => (
+                      <div key={activity.id} className="flex items-start gap-3">
+                        <Avatar className="w-8 h-8">
+                          <AvatarImage 
+                              src={activity.user?.profile_image_url || '/default-avatar.png'} 
+                              alt={activity.user?.full_name || 'User'} 
+                          />
+                          <AvatarFallback>
+                              {activity.user?.full_name?.charAt(0) || 
+                               activity.user?.username?.charAt(0) || 
+                               'U'}
+                          </AvatarFallback>
+                  </Avatar>
+                          <div className={`flex-1 min-w-0 rounded-lg p-3 ${
+                            activity.activity_type === 'comment' ? 'bg-blue-50/50' :
+                            activity.description.toLowerCase().includes('status') ? 'bg-purple-50/50' :
+                            activity.description.toLowerCase().includes('deadline') ? 'bg-amber-50/50' :
+                            activity.description.toLowerCase().includes('title') ? 'bg-emerald-50/50' :
+                            'bg-gray-50/50'
+                          }`}>
+                            <div className="flex items-baseline justify-between">
+                              <span className="text-sm font-medium text-gray-700 truncate">
+                                {activity.user?.full_name || activity.user?.username || 'Unknown User'}
                               </span>
-                            </div>
+                              <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
+                              {new Date(activity.created_at).toLocaleTimeString([], { 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                              })}
+                            </span>
+                          </div>
                             <div className="mt-1">
                               {activity.activity_type === 'task_update' && (
                                 <div className="text-sm">
                                   {activity.description.includes('→') ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-gray-600">{activity.user.full_name}</span>
+                                    <div className="space-y-2">
                                       {activity.description.toLowerCase().includes('status') ? (
                                         <>
-                                          <span className="text-gray-500">changed status from</span>
-                                          <span className="text-gray-600">{activity.description.split('→')[0].split(':')[1].trim()}</span>
-                                          <ChevronRight className="h-4 w-4 text-gray-400" />
-                                          <span className={`font-medium ${
-                                            activity.description.toLowerCase().includes('done') ? 'text-green-600' :
-                                            activity.description.toLowerCase().includes('in progress') ? 'text-blue-600' :
-                                            activity.description.toLowerCase().includes('changes requested') ? 'text-orange-600' :
-                                            activity.description.toLowerCase().includes('approved') ? 'text-green-600' :
-                                            activity.description.toLowerCase().includes('canceled') ? 'text-red-600' :
-                                            'text-gray-600'
-                                          }`}>
-                                            {activity.description.split('→')[1].trim()}
-                                          </span>
+                                          <div className="text-gray-500 text-xs">
+                                            changed status from
+                  </div>
+                                          <div className="flex items-center gap-2">
+                                            <span className={`px-2 py-0.5 rounded-full text-xs ${
+                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
+                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
+                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
+                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
+                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
+                                              'bg-gray-100 text-gray-800'
+                                            }`}>
+                                              {activity.description.split('→')[0].split(':')[1].trim()}
+                                            </span>
+                                            <ChevronRight className="h-3 w-3 text-gray-400" />
+                                            <span className={`px-2 py-0.5 rounded-full text-xs ${
+                                              activity.description.split('→')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
+                                              activity.description.split('→')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
+                                              activity.description.split('→')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
+                                              activity.description.split('→')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
+                                              activity.description.split('→')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
+                                              'bg-gray-100 text-gray-800'
+                                            }`}>
+                                              {activity.description.split('→')[1].trim()}
+                                            </span>
+              </div>
+                                        </>
+                                      ) : activity.description.toLowerCase().includes('deadline') ? (
+                                        <>
+                                          <div className="text-gray-500 text-xs">
+                                            changed deadline from
+                                          </div>
+                                          <div className="flex items-center gap-2 text-xs">
+                                            <span className="text-gray-700">
+                                              {(() => {
+                                                try {
+                                                  const previousDate = activity.description.split('→')[0].split('Deadline:')[1].trim();
+                                                  return previousDate === 'None' ? 'Not set' : new Date(previousDate).toLocaleString('en-US', {
+                                                    year: '2-digit',
+                                                    month: 'numeric',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                    hour12: true
+                                                  });
+                                                } catch (e) {
+                                                  console.error('Error parsing old date:', e);
+                                                  return 'Invalid date';
+                                                }
+                                              })()}
+                                            </span>
+                                            <ChevronRight className="h-3 w-3 text-gray-400" />
+                                            <span className="text-gray-700">
+                                              {(() => {
+                                                try {
+                                                  const updatedDate = activity.description.split('→')[1].trim();
+                                                  return updatedDate === 'None' ? 'Not set' : new Date(updatedDate).toLocaleString('en-US', {
+                                                    year: '2-digit',
+                                                    month: 'numeric',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                    hour12: true
+                                                  });
+                                                } catch (e) {
+                                                  console.error('Error parsing new date:', e);
+                                                  return 'Invalid date';
+                                                }
+                                              })()}
+                                            </span>
+                                          </div>
+                                        </>
+                                      ) : activity.description.toLowerCase().includes('title') ? (
+                                        <>
+                                          <div className="text-gray-500 text-xs">
+                                            changed title from
+                                          </div>
+                                          <div className="flex items-center gap-2 text-xs">
+                                            <span className="text-gray-700">
+                                              {activity.description.split('→')[0].split(':')[1].trim()}
+                                            </span>
+                                            <ChevronRight className="h-3 w-3 text-gray-400" />
+                                            <span className="text-gray-700">
+                                              {activity.description.split('→')[1].trim()}
+                                            </span>
+                                          </div>
                                         </>
                                       ) : (
                                         <>
-                                          <span>{activity.description.split('→')[0]}</span>
-                                          <ChevronRight className="h-4 w-4 text-gray-400" />
-                                          <span className="font-medium">{activity.description.split('→')[1]}</span>
+                                          <div className="text-gray-500 text-xs">
+                                            made changes to
+                                          </div>
+                                          <div className="flex items-center gap-2 text-xs">
+                                            <span className="text-gray-700">
+                                              {activity.description.split('→')[0]}
+                                            </span>
+                                            <ChevronRight className="h-3 w-3 text-gray-400" />
+                                            <span className="text-gray-700">
+                                              {activity.description.split('→')[1]}
+                                            </span>
+                                          </div>
                                         </>
                                       )}
                                     </div>
                                   ) : (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-gray-600">{activity.user.full_name}</span>
-                                      <span className="text-gray-500">{activity.description}</span>
+                                    <div className="text-gray-700 text-xs">
+                                      {activity.description}
                                     </div>
                                   )}
                                 </div>
                               )}
                               {activity.activity_type === 'comment' && (
-                                <div className="text-sm bg-gray-50 rounded-md p-3 mt-1">
+                                <div className="text-sm text-gray-700">
                                   {activity.description}
                                 </div>
                               )}
                             </div>
-                          </div>
-                        </div>
-                      ))}
+                    </div>
+                  </div>
+              ))}
                     </div>
                   </div>
                 ))

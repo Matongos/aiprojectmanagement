@@ -74,25 +74,25 @@ class TaskScheduler:
             
             # Send notifications for tasks due tomorrow
             for task in due_tomorrow:
-                if task.assignee_id:
+                if task.assigned_to:
                     NotificationService.notify_due_date_approaching(
                         db=db,
                         task_id=task.id,
                         task_title=task.name,
                         days_remaining=1,
-                        user_id=task.assignee_id
+                        user_id=task.assigned_to
                     )
             
             # Send notifications for tasks due within the next week
             for task in due_next_week:
-                if task.assignee_id:
+                if task.assigned_to:
                     days_remaining = (task.due_date.date() - today).days
                     NotificationService.notify_due_date_approaching(
                         db=db,
                         task_id=task.id,
                         task_title=task.name,
                         days_remaining=days_remaining,
-                        user_id=task.assignee_id
+                        user_id=task.assigned_to
                     )
             
             print(f"Sent notifications for {len(due_tomorrow)} tasks due tomorrow and {len(due_next_week)} tasks due next week")
@@ -102,4 +102,40 @@ class TaskScheduler:
             print(f"Error checking due dates: {str(e)}")
             db.rollback()
         finally:
-            db.close() 
+            db.close()
+
+def send_task_notifications(db: Session, task: Task):
+    """Send notifications for task updates."""
+    try:
+        # Notify task assignee if task is assigned
+        if task.assigned_to:
+            NotificationService.create_notification(
+                db,
+                {
+                    "title": "Task Update",
+                    "content": f"Task '{task.name}' has been updated",
+                    "type": "task_update",
+                    "reference_type": "task",
+                    "reference_id": task.id,
+                    "user_id": task.assigned_to,
+                    "is_read": False
+                }
+            )
+        
+        # Notify task creator if different from assignee
+        if task.created_by != task.assigned_to:
+            NotificationService.create_notification(
+                db,
+                {
+                    "title": "Task Update",
+                    "content": f"Task '{task.name}' has been updated",
+                    "type": "task_update",
+                    "reference_type": "task",
+                    "reference_id": task.id,
+                    "user_id": task.created_by,
+                    "is_read": False
+                }
+            )
+    except Exception as e:
+        print(f"Error sending task notifications: {str(e)}")
+        # Don't raise the error - notifications are not critical 

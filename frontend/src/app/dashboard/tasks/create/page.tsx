@@ -101,29 +101,33 @@ export default function CreateTaskPage({
         throw new Error("Please select a project");
       }
 
+      const taskData = {
+        name: title,
+        description: description,
+        priority: priority,
+        project_id: parseInt(projectId),
+        assigned_to: assigneeId ? parseInt(assigneeId) : null,
+        due_date: dueDate?.toISOString(),
+        status: "todo",
+      };
+
       const response = await fetch("http://192.168.56.1:8003/tasks/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          title,
-          description,
-          priority,
-          project_id: parseInt(projectId),
-          assignee_id: assigneeId ? parseInt(assigneeId) : null,
-          due_date: dueDate?.toISOString(),
-          status: "todo",
-        }),
+        body: JSON.stringify(taskData),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create task");
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to create task");
       }
 
+      const createdTask = await response.json();
       toast.success("Task created successfully");
-      router.push("/dashboard/tasks");
+      router.push(`/dashboard/projects/${projectId}/tasks/${createdTask.id}`);
     } catch (error) {
       console.error("Error creating task:", error);
       toast.error(error instanceof Error ? error.message : "Failed to create task");
