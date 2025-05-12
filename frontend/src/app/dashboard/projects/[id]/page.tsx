@@ -72,6 +72,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TaskState, statusConfig } from "@/types/task";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface TaskStatus {
   id: string;
@@ -162,17 +168,24 @@ const canAccessTask = (task, currentUser) => {
   return false;
 };
 
-// Add StatusIndicator component
+// Update StatusIndicator component
 const StatusIndicator = ({ state }: { state: TaskState }) => {
   const config = statusConfig[state];
-  const baseColor = config.color.split(' ')[0]; // Get the background color class
-  const colorClass = baseColor.replace('100', '500'); // Make the color more vibrant for the circle
+  const baseColor = config.color.split(' ')[0];
+  const colorClass = baseColor.replace('100', '500');
+  const stateLabel = state.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
   
   return (
-    <div className="flex items-center gap-2">
-      <div className={`w-2.5 h-2.5 rounded-full ${colorClass}`} />
-      <span className="text-xs text-gray-600">{state.replace('_', ' ')}</span>
-    </div>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger>
+          <div className={`w-3.5 h-3.5 rounded-full ${colorClass}`} />
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{stateLabel}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 };
 
@@ -1183,12 +1196,27 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                   }}
                                 >
                                   <div className="p-3">
-                                    <div className="flex items-center justify-between mb-2">
+                                    {/* Task Name at Top */}
+                                    <div className="mb-3">
                                       <h3 className="font-medium text-sm">{task.name}</h3>
-                                      <StatusIndicator state={task.state} />
                                     </div>
+
                                     {/* Task Details */}
                                     <div className="flex items-center justify-between mt-3">
+                                      {/* Deadline on Left */}
+                                      {task.deadline && (
+                                        <div className="flex items-center gap-1 text-xs text-gray-500">
+                                          <Calendar className="h-3 w-3" />
+                                          <span>
+                                            {Math.max(0, Math.ceil(
+                                              (new Date(task.deadline).getTime() - new Date().getTime()) / 
+                                              (1000 * 60 * 60 * 24)
+                                            ))} days left
+                                          </span>
+                                        </div>
+                                      )}
+
+                                      {/* Status and Assignee on Right */}
                                       <div className="flex items-center gap-2">
                                         {task.assignee && (
                                           <Avatar className="h-6 w-6">
@@ -1201,19 +1229,8 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                             </AvatarFallback>
                                           </Avatar>
                                         )}
+                                        <StatusIndicator state={task.state} />
                                       </div>
-
-                                      {task.deadline && (
-                                        <div className="flex items-center gap-1 text-xs text-gray-500">
-                                          <Calendar className="h-3 w-3" />
-                                          <span>
-                                            {Math.max(0, Math.ceil(
-                                              (new Date(task.deadline).getTime() - new Date().getTime()) / 
-                                              (1000 * 60 * 60 * 24)
-                                            ))} days left
-                                          </span>
-                                        </div>
-                                      )}
                                     </div>
                                   </div>
                                 </Card>
