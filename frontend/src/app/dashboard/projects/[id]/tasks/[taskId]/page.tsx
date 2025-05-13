@@ -37,6 +37,7 @@ import { TaskState, statusConfig } from "@/types/task";
 import "@/styles/tags.css";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useRouter } from "next/navigation";
 
 interface Stage {
   id: string;
@@ -148,7 +149,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const { id, taskId } = React.use(params);
   const [currentStage, setCurrentStage] = useState<string>("");
   const [description, setDescription] = useState("");
-  const { token } = useAuthStore();
+  const { token, checkAuth } = useAuthStore();
   const [showAllStages, setShowAllStages] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [taskName, setTaskName] = useState("");
@@ -184,12 +185,30 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [tagInput, setTagInput] = useState("");
   const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
+  const router = useRouter();
 
-  // Fetch task details including current stage
+  // Add authentication check effect
+  useEffect(() => {
+    const validateAuth = async () => {
+      const isAuthenticated = await checkAuth();
+      if (!isAuthenticated) {
+        toast.error("Your session has expired. Please log in again.");
+        router.push('/auth/login');
+      }
+    };
+    validateAuth();
+  }, [checkAuth, router]);
+
+  // Update the task details query
   const { data: taskDetails, isLoading: isLoadingTask, error: taskError, refetch } = useQuery<Task>({
     queryKey: ["task-details", taskId],
     queryFn: async () => {
       try {
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          throw new Error("Authentication required");
+        }
+
         const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -198,7 +217,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         });
 
         if (response.status === 401) {
-          toast.error("Please log in to view this content");
+          localStorage.removeItem('token');
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
           throw new Error("Unauthorized");
         }
 
@@ -207,9 +228,13 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         }
 
         const data = await response.json();
-        console.log("Task Details Response:", data); // Debug log
-        setTaskName(data.name); // Set initial task name
-        setDescription(data.description || ''); // Set initial description
+        console.log("Task Details Response:", data);
+        setTaskName(data.name);
+        setDescription(data.description || '');
+        // Set the initial selected tags when task is loaded
+        if (data.tags) {
+          setSelectedTags(data.tags);
+        }
         return data;
       } catch (error) {
         console.error("Error fetching task:", error);
@@ -218,13 +243,25 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
     },
     enabled: !!token && !!taskId,
+    retry: (failureCount, error) => {
+      if (error.message === "Unauthorized" || error.message === "Authentication required") {
+        return false;
+      }
+      return failureCount < 3;
+    },
   });
 
-  // Fetch project stages
+  // Update the stages query to handle auth errors
   const { data: stages = [], isLoading: isLoadingStages, error: stagesError } = useQuery<Stage[]>({
     queryKey: ["project-stages", id],
     queryFn: async () => {
       try {
+        // Validate auth before making the request
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          throw new Error("Authentication required");
+        }
+
         const response = await fetch(`${API_BASE_URL}/projects/${id}/stages`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -233,7 +270,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         });
         
         if (response.status === 401) {
-          toast.error("Please log in to view this content");
+          // Clear token and redirect to login
+          localStorage.removeItem('token');
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
           throw new Error("Unauthorized");
         }
         
@@ -242,7 +282,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         }
 
         const data = await response.json();
-        console.log("Stages Response:", data); // Debug log
+        console.log("Stages Response:", data);
         return data;
       } catch (error) {
         console.error("Error fetching stages:", error);
@@ -251,14 +291,27 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
     },
     enabled: !!token && !!id,
+    retry: (failureCount, error) => {
+      // Don't retry on auth errors
+      if (error.message === "Unauthorized" || error.message === "Authentication required") {
+        return false;
+      }
+      return failureCount < 3;
+    },
   });
 
-  // Fetch milestones
+  // Update the milestones query to handle auth errors
   const { data: milestones = [], isLoading: isLoadingMilestones, refetch: refetchMilestones } = useQuery<Milestone[]>({
     queryKey: ["project-milestones", id],
     queryFn: async () => {
       try {
-        console.log("Fetching milestones for project:", id); // Debug log
+        // Validate auth before making the request
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          throw new Error("Authentication required");
+        }
+
+        console.log("Fetching milestones for project:", id);
         const response = await fetch(`${API_BASE_URL}/milestones/project/${id}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -266,9 +319,17 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           },
         });
 
+        if (response.status === 401) {
+          // Clear token and redirect to login
+          localStorage.removeItem('token');
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
+          throw new Error("Unauthorized");
+        }
+
         if (response.status === 404) {
-          console.log("No milestones found for project:", id); // Debug log
-          return []; // Return empty array instead of throwing error
+          console.log("No milestones found for project:", id);
+          return [];
         }
 
         if (!response.ok) {
@@ -276,56 +337,35 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         }
 
         const data = await response.json();
-        console.log("Fetched milestones:", data); // Debug log
+        console.log("Fetched milestones:", data);
         return data;
       } catch (error) {
         console.error('Error fetching milestones:', error);
         toast.error('Failed to load milestones');
-        return []; // Return empty array on error
+        return [];
       }
     },
     enabled: !!token && !!id,
-  });
-
-  // Fetch users
-  const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
-    queryKey: ["users"],
-    queryFn: async () => {
-      try {
-        console.log("Fetching users..."); // Debug log
-        const response = await fetch(`${API_BASE_URL}/users/`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (response.status === 401) {
-          toast.error("Please log in to view this content");
-          throw new Error("Unauthorized");
-        }
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch users: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        console.log("Users Response:", data); // Debug log
-        return data;
-      } catch (error) {
-        console.error("Error fetching users:", error);
-        toast.error("Failed to load users");
-        return []; // Return empty array on error
+    retry: (failureCount, error) => {
+      // Don't retry on auth errors
+      if (error.message === "Unauthorized" || error.message === "Authentication required") {
+        return false;
       }
+      return failureCount < 3;
     },
-    enabled: !!token,
   });
 
-  // Fetch task activities
+  // Update the task activities query to handle auth errors
   const { data: taskActivities, isLoading: isLoadingActivities } = useQuery<Activity[]>({
     queryKey: ["task-activities", taskId],
     queryFn: async () => {
       try {
+        // Validate auth before making the request
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          throw new Error("Authentication required");
+        }
+
         const response = await fetch(`${API_BASE_URL}/activities/task/${taskId}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -334,7 +374,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         });
 
         if (response.status === 401) {
-          toast.error("Please log in to view this content");
+          // Clear token and redirect to login
+          localStorage.removeItem('token');
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
           throw new Error("Unauthorized");
         }
 
@@ -350,6 +393,63 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
     },
     enabled: !!taskId && !!token,
+    retry: (failureCount, error) => {
+      // Don't retry on auth errors
+      if (error.message === "Unauthorized" || error.message === "Authentication required") {
+        return false;
+      }
+      return failureCount < 3;
+    },
+  });
+
+  // Update the users query to handle auth errors
+  const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
+    queryKey: ["users"],
+    queryFn: async () => {
+      try {
+        // Validate auth before making the request
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          throw new Error("Authentication required");
+        }
+
+        console.log("Fetching users...");
+        const response = await fetch(`${API_BASE_URL}/users/`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.status === 401) {
+          // Clear token and redirect to login
+          localStorage.removeItem('token');
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
+          throw new Error("Unauthorized");
+        }
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch users: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log("Users Response:", data);
+        return data;
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        toast.error("Failed to load users");
+        return [];
+      }
+    },
+    enabled: !!token,
+    retry: (failureCount, error) => {
+      // Don't retry on auth errors
+      if (error.message === "Unauthorized" || error.message === "Authentication required") {
+        return false;
+      }
+      return failureCount < 3;
+    },
   });
 
   // Fetch comments
@@ -815,11 +915,119 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
-  // Filter tags based on input
-  const filteredTags = tags.filter(tag => 
-    tag.name.toLowerCase().includes(tagInput.toLowerCase()) &&
-    !selectedTags.some(selectedTag => selectedTag.id === tag.id)
-  );
+  // Update the filteredTags calculation
+  const filteredTags = useMemo(() => {
+    return tags.filter(tag => 
+      tag.name.toLowerCase().includes(tagInput.toLowerCase()) &&
+      !selectedTags.some(selectedTag => selectedTag.id === tag.id)
+    );
+  }, [tags, tagInput, selectedTags]);
+
+  // Update the handleTagSelect function
+  const handleTagSelect = async (tag: Tag) => {
+    try {
+      console.log('Attempting to add tag:', tag.id, 'to task:', taskId);
+
+      // Check if tag is already selected locally
+      if (selectedTags.some(t => t.id === tag.id)) {
+        console.log('Tag already selected locally:', tag);
+        setIsTagPopoverOpen(false);
+        setTagInput('');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tag.id}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        if (data?.detail?.includes('already')) {
+          console.log('Tag already exists on server, updating UI');
+          setSelectedTags(prev => [...prev, tag]);
+          setIsTagPopoverOpen(false);
+          setTagInput('');
+          return;
+        }
+        throw new Error(data?.detail || 'Failed to add tag to task');
+      }
+
+      console.log('Tag added successfully:', data);
+
+      // Update local state immediately
+      setSelectedTags(prev => [...prev, tag]);
+      
+      // Close the popover
+      setIsTagPopoverOpen(false);
+      
+      // Clear the input
+      setTagInput('');
+      
+      // Show success message
+      toast.success('Tag added successfully');
+
+      // Refresh task details to get the updated tags
+      await refetch();
+    } catch (error) {
+      console.error('Error adding tag:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to add tag');
+    }
+  };
+
+  // Update the handleTagRemove function
+  const handleTagRemove = async (tagId: number) => {
+    try {
+      console.log('Attempting to remove tag:', tagId, 'from task:', taskId);
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tagId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || 'Failed to remove tag from task');
+      }
+
+      // Update local state
+      setSelectedTags(prev => prev.filter(tag => tag.id !== tagId));
+      
+      // Show success message
+      toast.success('Tag removed successfully');
+
+      // Refresh task details
+      await refetch();
+    } catch (error) {
+      console.error('Error removing tag:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to remove tag');
+    }
+  };
+
+  // Add this helper function at the top level of your component
+  const getTagColorClass = (colorIndex: number) => {
+    const colors = {
+      1: 'bg-blue-50 text-blue-700',
+      2: 'bg-purple-50 text-purple-700',
+      3: 'bg-green-50 text-green-700',
+      4: 'bg-orange-50 text-orange-700',
+      5: 'bg-pink-50 text-pink-700',
+      6: 'bg-cyan-50 text-cyan-700',
+      7: 'bg-lime-50 text-lime-700',
+      8: 'bg-amber-50 text-amber-700',
+      9: 'bg-stone-50 text-stone-700',
+      10: 'bg-indigo-50 text-indigo-700',
+      11: 'bg-red-50 text-red-700',
+    };
+    return colors[colorIndex as keyof typeof colors] || colors[1];
+  };
 
   // Handle tag input change
   const handleTagInputChange = (value: string) => {
@@ -863,106 +1071,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       console.error('Error creating tag:', error);
       toast.error('Failed to create tag');
     }
-  };
-
-  // Handle tag selection
-  const handleTagSelect = async (tag: Tag) => {
-    try {
-      console.log('Attempting to add tag:', tag.id, 'to task:', taskId); // Debug log
-
-      // Check if tag is already selected
-      if (selectedTags.some(t => t.id === tag.id)) {
-        console.log('Tag already selected:', tag); // Debug log
-        toast.error('Tag is already added to this task');
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tag.id}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      const data = await response.json();
-      console.log('Response data:', data); // Debug log
-
-      if (!response.ok) {
-        // Check for specific error messages from the backend
-        if (data?.detail?.includes('already')) {
-          console.log('Tag already exists error:', data); // Debug log
-          toast.error('This tag is already added to the task');
-          return;
-        }
-        throw new Error(data?.detail || 'Failed to add tag to task');
-      }
-
-      // Update local state
-      setSelectedTags(prev => [...prev, tag]);
-      
-      // Close the dialog
-      setShowTagDialog(false);
-      
-      // Refresh task details to get the updated tags
-      await refetch();
-      
-      toast.success('Tag added successfully');
-    } catch (error) {
-      console.error('Error adding tag:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to add tag');
-    }
-  };
-
-  // Handle tag removal
-  const handleTagRemove = async (tagId: number) => {
-    try {
-      console.log('Attempting to remove tag:', tagId, 'from task:', taskId); // Debug log
-
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tagId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        console.error('Error response:', data); // Debug log
-        throw new Error(data?.detail || 'Failed to remove tag from task');
-      }
-
-      // Update local state
-      setSelectedTags(prev => prev.filter(tag => tag.id !== tagId));
-      
-      // Refresh task details
-      await refetch();
-      
-      toast.success('Tag removed successfully');
-    } catch (error) {
-      console.error('Error removing tag:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to remove tag');
-    }
-  };
-
-  // Add this helper function at the top level of your component
-  const getTagColorClass = (colorIndex: number) => {
-    const colors = {
-      1: 'bg-blue-50 text-blue-700',
-      2: 'bg-purple-50 text-purple-700',
-      3: 'bg-green-50 text-green-700',
-      4: 'bg-orange-50 text-orange-700',
-      5: 'bg-pink-50 text-pink-700',
-      6: 'bg-cyan-50 text-cyan-700',
-      7: 'bg-lime-50 text-lime-700',
-      8: 'bg-amber-50 text-amber-700',
-      9: 'bg-stone-50 text-stone-700',
-      10: 'bg-indigo-50 text-indigo-700',
-      11: 'bg-red-50 text-red-700',
-    };
-    return colors[colorIndex as keyof typeof colors] || colors[1];
   };
 
   // Loading states
@@ -1444,25 +1552,31 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     />
                     <CommandEmpty>
                       <div className="py-3 px-4">
-                        <p className="text-sm text-gray-500">Press Enter to create a new tag</p>
+                        <p className="text-sm text-gray-500">
+                          {tagInput.trim() ? "Press Enter to create a new tag" : "No tags available"}
+                        </p>
                       </div>
                     </CommandEmpty>
                     <CommandGroup>
-                      {filteredTags.map(tag => (
-                        <CommandItem
-                          key={tag.id}
-                          value={tag.name}
-                          onSelect={() => {
-                            handleTagSelect(tag);
-                            setTagInput("");
-                          }}
-                        >
-                          <div className="flex items-center">
-                            <div className="w-2 h-2 rounded-full bg-blue-500 mr-2"></div>
-                            <span>{tag.name}</span>
-                          </div>
-                        </CommandItem>
-                      ))}
+                      {filteredTags.length > 0 ? (
+                        filteredTags.map(tag => (
+                          <CommandItem
+                            key={tag.id}
+                            value={tag.name}
+                            onSelect={() => handleTagSelect(tag)}
+                            className="cursor-pointer"
+                          >
+                            <div className="flex items-center w-full">
+                              <div className={`w-2 h-2 rounded-full mr-2 ${getTagColorClass(tag.color)}`}></div>
+                              <span>{tag.name}</span>
+                            </div>
+                          </CommandItem>
+                        ))
+                      ) : (
+                        <div className="py-3 px-4">
+                          <p className="text-sm text-gray-500">No matching tags found</p>
+                        </div>
+                      )}
                     </CommandGroup>
                   </Command>
                 </PopoverContent>
@@ -1701,77 +1815,74 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
-                  <div className="relative">
-                    <div 
-                      className="flex flex-wrap gap-2 min-h-[38px] w-full border rounded-md px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500"
-                    >
-                      {selectedTags.map(tag => (
-                        <div
-                          key={tag.id}
-                          className="flex items-center bg-[#EFF6FF] text-[#3B82F6] rounded-full px-3 py-1 text-sm"
-                        >
-                          <span>{tag.name}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleTagRemove(tag.id);
-                            }}
-                            className="ml-2 hover:text-blue-800"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                      <input
-                        type="text"
-                        value={tagInput}
-                        onChange={(e) => handleTagInputChange(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && tagInput.trim()) {
-                            e.preventDefault();
-                            handleCreateNewTag();
-                          }
-                        }}
+                  <Popover open={isTagPopoverOpen} onOpenChange={setIsTagPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <div 
+                        className="flex flex-wrap gap-2 min-h-[38px] w-full border rounded-md px-3 py-2 cursor-text focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500"
                         onClick={() => setIsTagPopoverOpen(true)}
-                        className="flex-1 outline-none min-w-[120px] bg-transparent"
-                        placeholder={selectedTags.length === 0 ? "Type or select tags..." : ""}
-                      />
-                    </div>
-                    
-                    <Popover open={isTagPopoverOpen} onOpenChange={setIsTagPopoverOpen}>
-                      <PopoverContent className="w-[300px] p-0" align="start">
-                        <Command>
-                          <CommandInput 
-                            placeholder="Search existing tags..." 
-                            value={tagInput}
-                            onValueChange={handleTagInputChange}
-                          />
-                          <CommandEmpty>
-                            <div className="py-3 px-4">
-                              <p className="text-sm text-gray-500">Press Enter to create a new tag</p>
-                            </div>
-                          </CommandEmpty>
-                          <CommandGroup>
-                            {filteredTags.map(tag => (
-                              <CommandItem
-                                key={tag.id}
-                                value={tag.name}
-                                onSelect={() => {
-                                  handleTagSelect(tag);
-                                  setTagInput("");
-                                }}
-                              >
-                                <div className="flex items-center">
-                                  <div className="w-2 h-2 rounded-full bg-blue-500 mr-2"></div>
-                                  <span>{tag.name}</span>
-                                </div>
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
-                  </div>
+                      >
+                        {selectedTags.map(tag => (
+                          <div
+                            key={tag.id}
+                            className={`flex items-center rounded-full px-3 py-1 text-sm ${getTagColorClass(tag.color)}`}
+                          >
+                            <span>{tag.name}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleTagRemove(tag.id);
+                              }}
+                              className="ml-2 hover:text-blue-800"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        <input
+                          type="text"
+                          value={tagInput}
+                          onChange={(e) => handleTagInputChange(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && tagInput.trim()) {
+                              e.preventDefault();
+                              handleCreateNewTag();
+                            }
+                          }}
+                          className="flex-1 outline-none min-w-[120px] bg-transparent"
+                          placeholder={selectedTags.length === 0 ? "Type or select tags..." : ""}
+                        />
+                      </div>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[300px] p-0" align="start">
+                      <Command>
+                        <CommandInput 
+                          placeholder="Search existing tags..." 
+                          value={tagInput}
+                          onValueChange={handleTagInputChange}
+                        />
+                        <CommandEmpty>
+                          <div className="py-3 px-4">
+                            <p className="text-sm text-gray-500">Press Enter to create a new tag</p>
+                          </div>
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {filteredTags.map(tag => (
+                            <CommandItem
+                              key={tag.id}
+                              value={tag.name}
+                              onSelect={() => handleTagSelect(tag)}
+                              className="cursor-pointer"
+                            >
+                              <div className="flex items-center w-full">
+                                <div className={`w-2 h-2 rounded-full mr-2 ${getTagColorClass(tag.color)}`}></div>
+                                <span>{tag.name}</span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>

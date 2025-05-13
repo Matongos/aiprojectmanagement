@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CalendarIcon, Clock, Users, Tag, ArrowLeft, Calendar, MessageSquare, Paperclip } from 'lucide-react';
+import { CalendarIcon, Clock, Users, Tag, ArrowLeft, Calendar, MessageSquare, Paperclip, X } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TaskProps } from '@/components/TaskProgressCard';
 import { format } from 'date-fns';
@@ -15,6 +15,8 @@ import { Progress } from '@/components/ui/progress';
 import { Separator, Avatar, Badge } from "@/components/ui";
 import { FileAttachmentList, FileAttachmentProps } from '@/components/FileAttachment';
 import { getTaskAttachments, uploadTaskAttachment, deleteFileAttachment } from '@/lib/api';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
 // Task interface
 interface Task {
@@ -44,6 +46,10 @@ interface Task {
     content: string;
     createdAt: string;
   }[];
+  tags: { id: string; name: string; color: string }[];
+  estimated_hours: number;
+  actual_hours: number;
+  progress: number;
 }
 
 // Mock task data
@@ -76,7 +82,14 @@ const mockTask: Task = {
       content: 'Great! I\'ll focus on the frontend auth components.',
       createdAt: '2023-06-16T15:45:00Z'
     }
-  ]
+  ],
+  tags: [
+    { id: '1', name: 'Authentication', color: 'bg-blue-200 text-blue-800' },
+    { id: '2', name: 'Frontend', color: 'bg-green-200 text-green-800' }
+  ],
+  estimated_hours: 0,
+  actual_hours: 0,
+  progress: 0
 };
 
 // Status and priority badges
@@ -92,6 +105,65 @@ const priorityColors = {
   medium: 'bg-orange-200 text-orange-800',
   high: 'bg-red-200 text-red-800'
 };
+
+const getTagColorClass = (colorIndex: number) => {
+  const colors = {
+    1: 'bg-blue-50 text-blue-700',
+    2: 'bg-purple-50 text-purple-700',
+    3: 'bg-green-50 text-green-700',
+    4: 'bg-orange-50 text-orange-700',
+    5: 'bg-pink-50 text-pink-700',
+    6: 'bg-cyan-50 text-cyan-700',
+    7: 'bg-lime-50 text-lime-700',
+    8: 'bg-amber-50 text-amber-700',
+    9: 'bg-stone-50 text-stone-700',
+    10: 'bg-indigo-50 text-indigo-700',
+    11: 'bg-red-50 text-red-700',
+  };
+  return colors[colorIndex as keyof typeof colors] || colors[1];
+};
+
+const availableTags = [
+  { id: '1', name: 'Bug', color: '1' },
+  { id: '2', name: 'Feature', color: '2' },
+  { id: '3', name: 'Enhancement', color: '3' },
+  { id: '4', name: 'Documentation', color: '4' },
+  { id: '5', name: 'Design', color: '5' },
+  { id: '6', name: 'Testing', color: '6' },
+  { id: '7', name: 'Security', color: '7' },
+  { id: '8', name: 'Performance', color: '8' },
+  { id: '9', name: 'Refactoring', color: '9' },
+  { id: '10', name: 'Technical Debt', color: '10' },
+];
+
+const TaskDetailSkeleton = () => (
+  <div className="grid gap-6">
+    <div className="grid gap-4">
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-8 w-full mb-2" />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {[...Array(5)].map((_, i) => (
+            <Skeleton key={i} className="h-6 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+    <div>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-24" />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {[...Array(6)].map((_, i) => (
+            <Skeleton key={i} className="h-6 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  </div>
+);
 
 const TaskDetailPage = () => {
   const router = useRouter();
@@ -139,7 +211,7 @@ const TaskDetailPage = () => {
             actual_hours: mockTask.actual_hours || 0,
             progress: mockTask.progress || 0,
             due_date: mockTask.dueDate || '',
-            tags: mockTask.tags || ''
+            tags: mockTask.tags.map(tag => tag.name).join(',')
           });
           setIsLoading(false);
         }, 1000);
@@ -222,22 +294,22 @@ const TaskDetailPage = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!task) return;
     
-    // Simulate API call to update task
     setIsLoading(true);
     try {
-      // In a real app, update task via API
-      // const response = await fetch(`/api/tasks/${id}`, {
-      //   method: 'PUT',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(formData)
-      // });
-      
-      // For demo purposes
+      // Simulate API call
       setTimeout(() => {
         setTask({
           ...task,
-          ...formData
+          description: formData.description,
+          status: formData.status as Task['status'],
+          priority: formData.priority as Task['priority'],
+          estimated_hours: formData.estimated_hours,
+          actual_hours: formData.actual_hours,
+          progress: formData.progress,
+          dueDate: formData.due_date,
+          tags: task.tags
         });
         setIsEditing(false);
         setIsLoading(false);
@@ -298,12 +370,8 @@ const TaskDetailPage = () => {
   };
 
   const handleAddComment = () => {
-    if (!newComment.trim()) return;
+    if (!task || !newComment.trim()) return;
     
-    // In a real app, send the comment to the API
-    console.log('Adding comment:', newComment);
-    
-    // Mock adding a comment
     const updatedTask = {
       ...task,
       comments: [
@@ -523,13 +591,77 @@ const TaskDetailPage = () => {
                   
                   <div>
                     <Label htmlFor="tags">Tags</Label>
-                    <Input
-                      id="tags"
-                      name="tags"
-                      value={formData.tags}
-                      onChange={handleInputChange}
-                      placeholder="Separate tags with commas"
-                    />
+                    <div className="flex flex-col gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            className="w-full justify-between"
+                          >
+                            Select tags
+                            <Tag className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0">
+                          <Command>
+                            <CommandInput placeholder="Search tags..." />
+                            <CommandEmpty>No tags found.</CommandEmpty>
+                            <CommandGroup>
+                              {availableTags.map((tag) => (
+                                <CommandItem
+                                  key={tag.id}
+                                  onSelect={() => {
+                                    if (!task.tags.some(t => t.id === tag.id)) {
+                                      const newTags = [...task.tags, { ...tag, color: getTagColorClass(parseInt(tag.color)) }];
+                                      setTask({
+                                        ...task,
+                                        tags: newTags
+                                      });
+                                      setFormData({
+                                        ...formData,
+                                        tags: newTags.map(t => t.name).join(',')
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <span className={`mr-2 h-2 w-2 rounded-full ${getTagColorClass(parseInt(tag.color))}`} />
+                                  {tag.name}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      
+                      <div className="flex flex-wrap gap-2">
+                        {task.tags.map((tag) => (
+                          <div
+                            key={tag.id}
+                            className={`flex items-center gap-1 px-2 py-1 rounded-full text-sm ${typeof tag.color === 'string' ? tag.color : getTagColorClass(parseInt(tag.color))}`}
+                          >
+                            <span>{tag.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newTags = task.tags.filter(t => t.id !== tag.id);
+                                setTask({
+                                  ...task,
+                                  tags: newTags
+                                });
+                                setFormData({
+                                  ...formData,
+                                  tags: newTags.map(t => t.name).join(',')
+                                });
+                              }}
+                              className="hover:text-red-600 focus:outline-none"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                   
                   <div className="flex justify-end space-x-2">
@@ -622,22 +754,24 @@ const TaskDetailPage = () => {
                         </div>
                       </div>
                       
+                      {task.tags && task.tags.length > 0 && (
                       <div className="flex items-start">
                         <Tag className="h-5 w-5 mr-2 text-gray-500 mt-0.5" />
                         <div>
                           <p className="text-sm font-medium">Tags</p>
                           <div className="flex flex-wrap gap-1 mt-1">
-                            {task.tags && task.tags.split(',').map((tag, index) => (
+                              {task.tags.map((tag) => (
                               <span 
-                                key={index} 
-                                className="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded"
+                                  key={tag.id} 
+                                  className={`text-xs px-2 py-1 rounded-full ${getTagColorClass(parseInt(tag.color))}`}
                               >
-                                {tag.trim()}
+                                  {tag.name}
                               </span>
                             ))}
                           </div>
                         </div>
                       </div>
+                      )}
                     </CardContent>
                   </Card>
                 </div>

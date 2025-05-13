@@ -18,12 +18,14 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
   const filteredTasks = tasks.filter((task) => {
     // Search term filter
     const matchesSearch = 
-      task.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (task.description && task.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (task.tags && task.tags.toLowerCase().includes(searchTerm.toLowerCase()));
+      (task.tags && task.tags.some(tag => 
+        tag.name.toLowerCase().includes(searchTerm.toLowerCase())
+      ));
 
     // Status filter
-    const matchesStatus = statusFilter === 'all_status' || task.status === statusFilter;
+    const matchesStatus = statusFilter === 'all_status' || task.state === statusFilter;
 
     // Priority filter
     const matchesPriority = priorityFilter === 'all_priority' || task.priority === priorityFilter;
@@ -53,17 +55,20 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-2">
+      <div className="flex flex-col sm:flex-row gap-4">
         <Input
           placeholder="Search tasks..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="flex-grow"
+          className="flex-1"
         />
         
-        <div className="flex space-x-2">
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[130px]">
+        <div className="flex gap-2">
+          <Select
+            value={statusFilter}
+            onValueChange={setStatusFilter}
+          >
+            <SelectTrigger className="w-[140px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -72,12 +77,14 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onTaskClick }) => {
               <SelectItem value="in_progress">In Progress</SelectItem>
               <SelectItem value="review">Review</SelectItem>
               <SelectItem value="done">Done</SelectItem>
-              <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
           </Select>
           
-          <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-            <SelectTrigger className="w-[130px]">
+          <Select
+            value={priorityFilter}
+            onValueChange={setPriorityFilter}
+          >
+            <SelectTrigger className="w-[140px]">
               <SelectValue placeholder="Priority" />
             </SelectTrigger>
             <SelectContent>

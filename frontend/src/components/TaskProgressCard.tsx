@@ -38,6 +38,13 @@ const getProgressColor = (state: TaskState): string => {
   }
 };
 
+interface Tag {
+  id: number;
+  name: string;
+  color: number;
+  active: boolean;
+}
+
 export interface TaskProps {
   id: number;
   title: string;
@@ -47,10 +54,28 @@ export interface TaskProps {
   due_date?: string;
   estimated_hours?: number;
   actual_hours?: number;
-  tags?: string;
+  tags?: Tag[];
   project_id: number;
   onClick?: () => void;
 }
+
+// Helper function to get tag color class
+const getTagColorClass = (colorIndex: number) => {
+  const colors = {
+    1: 'bg-blue-50 text-blue-700',
+    2: 'bg-purple-50 text-purple-700',
+    3: 'bg-green-50 text-green-700',
+    4: 'bg-orange-50 text-orange-700',
+    5: 'bg-pink-50 text-pink-700',
+    6: 'bg-cyan-50 text-cyan-700',
+    7: 'bg-lime-50 text-lime-700',
+    8: 'bg-amber-50 text-amber-700',
+    9: 'bg-stone-50 text-stone-700',
+    10: 'bg-indigo-50 text-indigo-700',
+    11: 'bg-red-50 text-red-700',
+  };
+  return colors[colorIndex as keyof typeof colors] || colors[1];
+};
 
 export const TaskProgressCard: React.FC<TaskProps> = ({
   id,
@@ -92,12 +117,25 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
         </div>
       </CardHeader>
       
-      <CardContent>
+      <CardContent className="space-y-4">
         {description && (
-          <p className="text-sm text-gray-500 line-clamp-2 mb-3">{description}</p>
+          <p className="text-sm text-gray-500 line-clamp-2">{description}</p>
         )}
         
-        <div className="mb-4">
+        {tags && tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <span
+                key={tag.id}
+                className={`px-3 py-1 rounded-full text-sm ${getTagColorClass(tag.color)}`}
+              >
+                {tag.name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div>
           <div className="flex justify-between text-xs text-gray-500 mb-1">
             <span>Progress</span>
             <span>{progressPercentage}%</span>
@@ -114,7 +152,7 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
         </div>
         
         {(estimated_hours || actual_hours) && (
-          <div className="flex items-center justify-between text-xs text-gray-500 mt-2">
+          <div className="flex items-center justify-between text-xs text-gray-500">
             {estimated_hours && <span>Est: {estimated_hours}h</span>}
             {actual_hours && <span>Actual: {actual_hours}h</span>}
           </div>
@@ -126,16 +164,6 @@ export const TaskProgressCard: React.FC<TaskProps> = ({
           <span className="text-xs text-gray-500">
             Due: {format(new Date(due_date), 'MMM d, yyyy')}
           </span>
-        )}
-        
-        {tags && (
-          <div className="flex flex-wrap gap-1">
-            {tags.split(',').map((tag, index) => (
-              <Badge key={index} variant="outline" className="text-xs">
-                {tag.trim()}
-              </Badge>
-            ))}
-          </div>
         )}
       </CardFooter>
     </Card>

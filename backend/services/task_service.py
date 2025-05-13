@@ -182,15 +182,24 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
         task_id: ID of the task to retrieve
         
     Returns:
-        Task dictionary
+        Task dictionary with all related data including tags
     """
     query = text("""
     SELECT 
-        id, title, description, status, priority, due_date,
-        estimated_hours, tags, created_by, assignee_id, project_id,
-        created_at, updated_at
-    FROM tasks
-    WHERE id = :task_id
+        t.id, t.title, t.description, t.status, t.priority, t.due_date,
+        t.estimated_hours, t.created_by, t.assignee_id, t.project_id,
+        t.created_at, t.updated_at,
+        array_agg(DISTINCT jsonb_build_object(
+            'id', tg.id,
+            'name', tg.name,
+            'color', tg.color,
+            'active', tg.active
+        )) FILTER (WHERE tg.id IS NOT NULL) as tags
+    FROM tasks t
+    LEFT JOIN task_tag tt ON t.id = tt.task_id
+    LEFT JOIN tags tg ON tt.tag_id = tg.id
+    WHERE t.id = :task_id
+    GROUP BY t.id
     """)
     
     result = db.execute(query, {"task_id": task_id}).fetchone()
@@ -198,7 +207,7 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     if not result:
         return None
     
-    return {
+    task_dict = {
         "id": result[0],
         "title": result[1],
         "description": result[2],
@@ -206,13 +215,15 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
         "priority": result[4],
         "due_date": result[5],
         "estimated_hours": result[6],
-        "tags": result[7],
-        "created_by": result[8],
-        "assignee_id": result[9],
-        "project_id": result[10],
-        "created_at": result[11],
-        "updated_at": result[12]
+        "created_by": result[7],
+        "assignee_id": result[8],
+        "project_id": result[9],
+        "created_at": result[10],
+        "updated_at": result[11],
+        "tags": result[12] if result[12] else []
     }
+    
+    return task_dict
 
 def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """

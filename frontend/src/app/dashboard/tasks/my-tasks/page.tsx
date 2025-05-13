@@ -8,6 +8,14 @@ import TaskList from "@/components/TaskList";
 import { toast } from "react-hot-toast";
 import AuthWrapper from "@/components/AuthWrapper";
 import { API_BASE_URL } from "@/lib/constants";
+import { TaskState } from "@/types/task";
+
+interface Tag {
+  id: number;
+  name: string;
+  color: number;
+  active: boolean;
+}
 
 interface Task {
   id: number;
@@ -23,6 +31,7 @@ interface Task {
   progress: number;
   created_at: string;
   updated_at: string;
+  tags: Tag[];
   project: {
     id: number;
     name: string;
@@ -35,95 +44,70 @@ interface Task {
   };
 }
 
-enum TaskState {
-  IN_PROGRESS = "in_progress",
-  CHANGES_REQUESTED = "changes_requested",
-  APPROVED = "approved",
-  CANCELED = "canceled",
-  DONE = "done"
-}
-
-function MyTasksContent() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+function MyTasksPage() {
   const router = useRouter();
-  const { token, user } = useAuthStore();
+  const { token } = useAuthStore();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const fetchMyTasks = async () => {
+    const fetchTasks = async () => {
+      if (!token) return;
+
       try {
-        setLoading(true);
         const response = await fetch(`${API_BASE_URL}/tasks/my-tasks`, {
           headers: {
-            Authorization: `Bearer ${token}`,
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
         });
 
         if (!response.ok) {
-          throw new Error("Failed to fetch tasks");
+          throw new Error('Failed to fetch tasks');
         }
 
         const data = await response.json();
         setTasks(data);
       } catch (error) {
-        console.error("Error fetching tasks:", error);
-        toast.error("Failed to load tasks");
+        console.error('Error fetching tasks:', error);
+        toast.error('Failed to load tasks');
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
-    fetchMyTasks();
+    fetchTasks();
   }, [token]);
 
   const handleTaskClick = (taskId: number) => {
     router.push(`/dashboard/tasks/${taskId}`);
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-      </div>
-    );
-  }
-
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">My Tasks</h1>
-          <p className="text-gray-600">Tasks assigned to {user?.full_name}</p>
-        </div>
-        <div className="flex items-center gap-4">
-          <Button onClick={() => router.push("/dashboard/tasks/create")}>
-            <Plus className="h-4 w-4 mr-2" />
-            New Task
+    <AuthWrapper>
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="flex justify-between items-center">
+          <h1 className="text-2xl font-semibold">My Tasks</h1>
+          <Button onClick={() => router.push('/dashboard/tasks/new')}>
+            Create Task
           </Button>
         </div>
-      </div>
 
-      {tasks.length === 0 ? (
-        <div className="text-center py-12">
-          <h2 className="text-xl font-semibold mb-2">No tasks assigned to you</h2>
-          <p className="text-gray-600 mb-4">
-            You currently don't have any tasks assigned. Create a new task or wait for assignments.
-          </p>
-          <Button onClick={() => router.push("/dashboard/tasks/create")}>
-            Create New Task
-          </Button>
-        </div>
-      ) : (
-        <TaskList tasks={tasks} onTaskClick={handleTaskClick} />
-      )}
-    </div>
+        {isLoading ? (
+          <div className="text-center py-10">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
+            <p className="mt-2 text-gray-600">Loading tasks...</p>
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="text-center py-10">
+            <p className="text-gray-600">No tasks found</p>
+          </div>
+        ) : (
+          <TaskList tasks={tasks} onTaskClick={handleTaskClick} />
+        )}
+      </div>
+    </AuthWrapper>
   );
 }
 
-export default function MyTasksPage() {
-  return (
-    <AuthWrapper>
-      <MyTasksContent />
-    </AuthWrapper>
-  );
-} 
+export default MyTasksPage; 
