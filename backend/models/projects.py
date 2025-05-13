@@ -4,6 +4,7 @@ from sqlalchemy.sql import func
 from .base import Base
 from .milestone import Milestone  # Import Milestone from its dedicated module
 from .task import Task  # Import Task model
+from .tag import Tag, project_tag  # Import Tag model and project_tag table
 
 # Association table for project tags
 project_tag = Table(
@@ -31,6 +32,7 @@ class ProjectMember(Base):
 
 class Project(Base):
     __tablename__ = "projects"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
@@ -80,18 +82,4 @@ class Project(Base):
         return sum(task.progress for task in tasks) / len(tasks)
 
     def __repr__(self):
-        return f"<Project {self.name}>"
-
-class Tag(Base):
-    __tablename__ = "tags"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    color = Column(String(7), default="#3498db")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    projects = relationship("Project", secondary=project_tag, back_populates="tags")
-
-    def __repr__(self):
-        return f"<Tag {self.name}>" 
+        return f"<Project {self.name}>" 

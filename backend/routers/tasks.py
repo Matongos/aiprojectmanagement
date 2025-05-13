@@ -2,7 +2,7 @@ from typing import Any, List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, date
-from models.task import Task
+from models.task import Task as TaskModel
 from models.task_stage import TaskStage
 from models.user import User
 from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskState, TaskPriority
@@ -10,6 +10,7 @@ from schemas.file_attachment import FileAttachment as FileAttachmentSchema, File
 from crud import task as task_crud
 from crud import file_attachment as file_attachment_crud
 from crud import activity
+from crud.tag import tag as tag_crud
 from schemas.activity import ActivityCreate
 from database import get_db
 from routers.auth import get_current_user
@@ -18,6 +19,7 @@ from services.file_service import FileService
 from services.notification_service import NotificationService
 from services.task_service import TaskService
 from models.projects import Project
+from schemas.tag import Tag as TagSchema
 
 router = APIRouter(
     prefix="/tasks",
@@ -684,10 +686,10 @@ async def read_upcoming_tasks(
         future_date = current_date + timedelta(days=days)
         
         tasks = (
-            db.query(Task)
+            db.query(TaskModel)
             .filter(
-                Task.due_date.between(current_date, future_date),
-                Task.status != "done"
+                TaskModel.due_date.between(current_date, future_date),
+                TaskModel.status != "done"
             )
             .offset(skip)
             .limit(limit)
@@ -833,8 +835,8 @@ async def read_created_tasks(
     """Get all tasks created by the current user."""
     try:
         tasks = (
-            db.query(Task)
-            .filter(Task.created_by == current_user["id"])
+            db.query(TaskModel)
+            .filter(TaskModel.created_by == current_user["id"])
             .offset(skip)
             .limit(limit)
             .all()
@@ -1003,7 +1005,7 @@ async def move_task_stage(
     """Move a task to a different stage"""
     try:
         # Get the task
-        task = db.query(Task).filter(Task.id == task_id).first()
+        task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1061,3 +1063,184 @@ async def move_task_stage(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error moving task to new stage: {str(e)}"
         ) 
+
+@router.post("/{task_id}/tags/{tag_id}", response_model=TaskSchema)
+async def add_tag_to_task(
+    task_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Add a tag to a task.
+    """
+    # Check if task exists
+    task = task_crud.get(db, id=task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Check if tag exists
+    tag = tag_crud.get(db, id=tag_id)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    
+    # Check if tag is already added
+    if tag in task.tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tag is already added to this task"
+        )
+    
+    # Add tag to task
+    task.tags.append(tag)
+    db.commit()
+    db.refresh(task)
+    
+    # Log activity
+    activity_data = ActivityCreate(
+        activity_type="task_update",
+        description=f"Added tag: {tag.name}",
+        task_id=task_id,
+        project_id=task.project_id,
+        user_id=current_user["id"]
+    )
+    activity.create_activity(db, activity_data)
+    
+    return task
+
+@router.delete("/{task_id}/tags/{tag_id}", response_model=TaskSchema)
+async def remove_tag_from_task(
+    task_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Remove a tag from a task.
+    """
+    # Check if task exists
+    task = task_crud.get(db, id=task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Check if tag exists
+    tag = tag_crud.get(db, id=tag_id)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    
+    # Check if tag is added to task
+    if tag not in task.tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tag is not added to this task"
+        )
+    
+    # Remove tag from task
+    task.tags.remove(tag)
+    db.commit()
+    db.refresh(task)
+    
+    # Log activity
+    activity_data = ActivityCreate(
+        activity_type="task_update",
+        description=f"Removed tag: {tag.name}",
+        task_id=task_id,
+        project_id=task.project_id,
+        user_id=current_user["id"]
+    )
+    activity.create_activity(db, activity_data)
+    
+    return task
+
+@router.get("/{task_id}/tags", response_model=List[TagSchema])
+async def get_task_tags(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all tags associated with a task.
+    """
+    task = task_crud.get(db, id=task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    return task.tags
+
+@router.put("/{task_id}/tags", response_model=TaskSchema)
+async def update_task_tags(
+    task_id: int,
+    tag_ids: List[int],
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update all tags for a task. This will replace existing tags with the new list.
+    """
+    # Check if task exists
+    task = task_crud.get(db, id=task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Verify all tags exist
+    tags = []
+    for tag_id in tag_ids:
+        tag = tag_crud.get(db, id=tag_id)
+        if not tag:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tag with id {tag_id} not found"
+            )
+        tags.append(tag)
+    
+    # Get removed and added tags for activity log
+    old_tags = set(task.tags)
+    new_tags = set(tags)
+    removed_tags = old_tags - new_tags
+    added_tags = new_tags - old_tags
+    
+    # Update task tags
+    task.tags = tags
+    db.commit()
+    db.refresh(task)
+    
+    # Log activities
+    for tag in removed_tags:
+        activity_data = ActivityCreate(
+            activity_type="task_update",
+            description=f"Removed tag: {tag.name}",
+            task_id=task_id,
+            project_id=task.project_id,
+            user_id=current_user["id"]
+        )
+        activity.create_activity(db, activity_data)
+    
+    for tag in added_tags:
+        activity_data = ActivityCreate(
+            activity_type="task_update",
+            description=f"Added tag: {tag.name}",
+            task_id=task_id,
+            project_id=task.project_id,
+            user_id=current_user["id"]
+        )
+        activity.create_activity(db, activity_data)
+    
+    return task 

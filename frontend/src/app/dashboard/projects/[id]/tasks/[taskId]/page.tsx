@@ -34,6 +34,9 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useQueryClient } from "@tanstack/react-query";
 import { TaskState, statusConfig } from "@/types/task";
+import "@/styles/tags.css";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Stage {
   id: string;
@@ -63,6 +66,13 @@ interface User {
   profile_image_url?: string;
 }
 
+interface Tag {
+  id: number;
+  name: string;
+  color: number;
+  active: boolean;
+}
+
 interface Task {
   id: string;
   name: string;
@@ -75,6 +85,7 @@ interface Task {
   created_by: number;
   deadline?: string;
   state: TaskState;
+  tags: Tag[];
   // ... other task properties
 }
 
@@ -129,6 +140,7 @@ interface TaskUpdateFields {
   deadline?: string | null;
   assigned_to?: number | null;
   state?: TaskState;
+  description?: string;
 }
 
 export default function TaskDetails({ params }: TaskDetailsProps) {
@@ -167,6 +179,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [isStatusChanged, setIsStatusChanged] = useState(false);
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [isDescriptionChanged, setIsDescriptionChanged] = useState(false);
+  const [showTagDialog, setShowTagDialog] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
 
   // Fetch task details including current stage
   const { data: taskDetails, isLoading: isLoadingTask, error: taskError, refetch } = useQuery<Task>({
@@ -192,6 +209,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         const data = await response.json();
         console.log("Task Details Response:", data); // Debug log
         setTaskName(data.name); // Set initial task name
+        setDescription(data.description || ''); // Set initial description
         return data;
       } catch (error) {
         console.error("Error fetching task:", error);
@@ -359,6 +377,31 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     enabled: !!token && !!taskId,
   });
 
+  // Fetch tags
+  const { data: tags = [], isLoading: isLoadingTags } = useQuery<Tag[]>({
+    queryKey: ["tags"],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/tags/`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch tags');
+        }
+
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching tags:', error);
+        return [];
+      }
+    },
+    enabled: !!token,
+  });
+
   // Update the groupedActivities calculation
   const groupedActivities = useMemo(() => {
     if (!taskActivities || !comments) return {};
@@ -457,6 +500,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         setCurrentStatus(TaskState.IN_PROGRESS);
         setIsStatusChanged(false);
       }
+    }
+  }, [taskDetails]);
+
+  // Set initial selected tags when task details are loaded
+  useEffect(() => {
+    if (taskDetails?.tags) {
+      console.log('Setting tags from task details:', taskDetails.tags); // Debug log
+      setSelectedTags(taskDetails.tags);
     }
   }, [taskDetails]);
 
@@ -637,38 +688,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     if (!taskId || !token) return;
 
     try {
-      // If only status is changed, use the dedicated state update endpoint
-      if (isStatusChanged && !isNameChanged && !isDeadlineChanged && !isAssigneesChanged) {
-        const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/state?state=${currentStatus}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          }
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error('Server response:', errorData);
-          throw new Error(errorData.detail || 'Failed to update task state');
-        }
-
-        const updatedTask = await response.json();
-        console.log('Task state updated successfully:', updatedTask);
-
-        // Refresh task details and activities
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
-          queryClient.invalidateQueries({ queryKey: ['task-activities', taskId] })
-        ]);
-
-        // Reset change flags
-        setIsStatusChanged(false);
-        toast.success('Task status updated successfully');
-        return;
-      }
-
-      // For other changes, use the general update endpoint
       const updatedFields: TaskUpdateFields = {};
 
       if (isNameChanged) {
@@ -679,6 +698,12 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
       if (isAssigneesChanged) {
         updatedFields.assigned_to = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
+      }
+      if (isDescriptionChanged) {
+        updatedFields.description = description;
+      }
+      if (isStatusChanged) {
+        updatedFields.state = currentStatus;
       }
 
       // Debug logging
@@ -702,6 +727,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       const updatedTask = await response.json();
       console.log('Task updated successfully:', updatedTask);
 
+      // Update local state with the response data
+      setDescription(updatedTask.description || '');
+
       // Refresh task details and activities
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
@@ -712,11 +740,13 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setIsNameChanged(false);
       setIsDeadlineChanged(false);
       setIsAssigneesChanged(false);
-
+      setIsDescriptionChanged(false);
+      setIsStatusChanged(false);
+      
       toast.success('Task updated successfully');
     } catch (error) {
       console.error('Error updating task:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update task');
+      toast.error('Failed to update task');
     }
   };
 
@@ -785,8 +815,158 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
+  // Filter tags based on input
+  const filteredTags = tags.filter(tag => 
+    tag.name.toLowerCase().includes(tagInput.toLowerCase()) &&
+    !selectedTags.some(selectedTag => selectedTag.id === tag.id)
+  );
+
+  // Handle tag input change
+  const handleTagInputChange = (value: string) => {
+    setTagInput(value);
+  };
+
+  // Handle creating a new tag
+  const handleCreateNewTag = async () => {
+    if (!tagInput.trim()) return;
+
+    try {
+      // Check if tag already exists
+      const existingTag = tags.find(t => t.name.toLowerCase() === tagInput.trim().toLowerCase());
+      if (existingTag) {
+        await handleTagSelect(existingTag);
+        setTagInput("");
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/tags/`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: tagInput.trim(),
+          color: Math.floor(Math.random() * 11) + 1,
+          active: true
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create tag');
+      }
+
+      const newTag = await response.json();
+      await handleTagSelect(newTag);
+      setTagInput("");
+    } catch (error) {
+      console.error('Error creating tag:', error);
+      toast.error('Failed to create tag');
+    }
+  };
+
+  // Handle tag selection
+  const handleTagSelect = async (tag: Tag) => {
+    try {
+      console.log('Attempting to add tag:', tag.id, 'to task:', taskId); // Debug log
+
+      // Check if tag is already selected
+      if (selectedTags.some(t => t.id === tag.id)) {
+        console.log('Tag already selected:', tag); // Debug log
+        toast.error('Tag is already added to this task');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tag.id}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+      console.log('Response data:', data); // Debug log
+
+      if (!response.ok) {
+        // Check for specific error messages from the backend
+        if (data?.detail?.includes('already')) {
+          console.log('Tag already exists error:', data); // Debug log
+          toast.error('This tag is already added to the task');
+          return;
+        }
+        throw new Error(data?.detail || 'Failed to add tag to task');
+      }
+
+      // Update local state
+      setSelectedTags(prev => [...prev, tag]);
+      
+      // Close the dialog
+      setShowTagDialog(false);
+      
+      // Refresh task details to get the updated tags
+      await refetch();
+      
+      toast.success('Tag added successfully');
+    } catch (error) {
+      console.error('Error adding tag:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to add tag');
+    }
+  };
+
+  // Handle tag removal
+  const handleTagRemove = async (tagId: number) => {
+    try {
+      console.log('Attempting to remove tag:', tagId, 'from task:', taskId); // Debug log
+
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/tags/${tagId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        console.error('Error response:', data); // Debug log
+        throw new Error(data?.detail || 'Failed to remove tag from task');
+      }
+
+      // Update local state
+      setSelectedTags(prev => prev.filter(tag => tag.id !== tagId));
+      
+      // Refresh task details
+      await refetch();
+      
+      toast.success('Tag removed successfully');
+    } catch (error) {
+      console.error('Error removing tag:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to remove tag');
+    }
+  };
+
+  // Add this helper function at the top level of your component
+  const getTagColorClass = (colorIndex: number) => {
+    const colors = {
+      1: 'bg-blue-50 text-blue-700',
+      2: 'bg-purple-50 text-purple-700',
+      3: 'bg-green-50 text-green-700',
+      4: 'bg-orange-50 text-orange-700',
+      5: 'bg-pink-50 text-pink-700',
+      6: 'bg-cyan-50 text-cyan-700',
+      7: 'bg-lime-50 text-lime-700',
+      8: 'bg-amber-50 text-amber-700',
+      9: 'bg-stone-50 text-stone-700',
+      10: 'bg-indigo-50 text-indigo-700',
+      11: 'bg-red-50 text-red-700',
+    };
+    return colors[colorIndex as keyof typeof colors] || colors[1];
+  };
+
   // Loading states
-  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities || isLoadingComments) {
+  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities || isLoadingComments || isLoadingTags) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-pulse text-gray-500">Loading task details...</div>
@@ -1191,6 +1371,118 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     </Dialog>
   );
 
+  // Tag Dialog Component
+  const TagDialog = () => (
+    <Dialog open={showTagDialog} onOpenChange={setShowTagDialog}>
+      <DialogContent 
+        className="sm:max-w-[500px]" 
+        aria-describedby="tag-dialog-description"
+      >
+        <DialogHeader>
+          <div className="flex items-center justify-between">
+            <DialogTitle>Add Tags</DialogTitle>
+            <div id="tag-dialog-description" className="sr-only">
+              Add or remove tags for this task
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowTagDialog(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </DialogHeader>
+        
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Tags</label>
+            <div className="relative">
+              <div 
+                className="flex flex-wrap gap-2 min-h-[38px] w-full border rounded-md px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500"
+              >
+                {selectedTags.map(tag => (
+                  <div
+                    key={tag.id}
+                    className="flex items-center bg-[#EFF6FF] text-[#3B82F6] rounded-full px-3 py-1 text-sm"
+                  >
+                    <span>{tag.name}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTagRemove(tag.id);
+                      }}
+                      className="ml-2 hover:text-blue-800"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <input
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => handleTagInputChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && tagInput.trim()) {
+                      e.preventDefault();
+                      handleCreateNewTag();
+                    }
+                  }}
+                  onClick={() => setIsTagPopoverOpen(true)}
+                  className="flex-1 outline-none min-w-[120px] bg-transparent"
+                  placeholder={selectedTags.length === 0 ? "Type or select tags..." : ""}
+                />
+              </div>
+              
+              <Popover open={isTagPopoverOpen} onOpenChange={setIsTagPopoverOpen}>
+                <PopoverContent className="w-[300px] p-0" align="start">
+                  <Command>
+                    <CommandInput 
+                      placeholder="Search existing tags..." 
+                      value={tagInput}
+                      onValueChange={handleTagInputChange}
+                    />
+                    <CommandEmpty>
+                      <div className="py-3 px-4">
+                        <p className="text-sm text-gray-500">Press Enter to create a new tag</p>
+                      </div>
+                    </CommandEmpty>
+                    <CommandGroup>
+                      {filteredTags.map(tag => (
+                        <CommandItem
+                          key={tag.id}
+                          value={tag.name}
+                          onSelect={() => {
+                            handleTagSelect(tag);
+                            setTagInput("");
+                          }}
+                        >
+                          <div className="flex items-center">
+                            <div className="w-2 h-2 rounded-full bg-blue-500 mr-2"></div>
+                            <span>{tag.name}</span>
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+          </div>
+          
+          <div className="flex justify-end mt-4">
+            <Button
+              variant="ghost"
+              onClick={() => setShowTagDialog(false)}
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation with Stages and Actions */}
@@ -1409,7 +1701,77 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
-                  <Input placeholder="Add tags..." />
+                  <div className="relative">
+                    <div 
+                      className="flex flex-wrap gap-2 min-h-[38px] w-full border rounded-md px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500"
+                    >
+                      {selectedTags.map(tag => (
+                        <div
+                          key={tag.id}
+                          className="flex items-center bg-[#EFF6FF] text-[#3B82F6] rounded-full px-3 py-1 text-sm"
+                        >
+                          <span>{tag.name}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTagRemove(tag.id);
+                            }}
+                            className="ml-2 hover:text-blue-800"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      <input
+                        type="text"
+                        value={tagInput}
+                        onChange={(e) => handleTagInputChange(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && tagInput.trim()) {
+                            e.preventDefault();
+                            handleCreateNewTag();
+                          }
+                        }}
+                        onClick={() => setIsTagPopoverOpen(true)}
+                        className="flex-1 outline-none min-w-[120px] bg-transparent"
+                        placeholder={selectedTags.length === 0 ? "Type or select tags..." : ""}
+                      />
+                    </div>
+                    
+                    <Popover open={isTagPopoverOpen} onOpenChange={setIsTagPopoverOpen}>
+                      <PopoverContent className="w-[300px] p-0" align="start">
+                        <Command>
+                          <CommandInput 
+                            placeholder="Search existing tags..." 
+                            value={tagInput}
+                            onValueChange={handleTagInputChange}
+                          />
+                          <CommandEmpty>
+                            <div className="py-3 px-4">
+                              <p className="text-sm text-gray-500">Press Enter to create a new tag</p>
+                            </div>
+                          </CommandEmpty>
+                          <CommandGroup>
+                            {filteredTags.map(tag => (
+                              <CommandItem
+                                key={tag.id}
+                                value={tag.name}
+                                onSelect={() => {
+                                  handleTagSelect(tag);
+                                  setTagInput("");
+                                }}
+                              >
+                                <div className="flex items-center">
+                                  <div className="w-2 h-2 rounded-full bg-blue-500 mr-2"></div>
+                                  <span>{tag.name}</span>
+                                </div>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
@@ -1458,12 +1820,26 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
               </div>
 
               {/* Description Area */}
-              <Textarea
-                placeholder="Add details about this task..."
-                className="min-h-[200px] w-full"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
+              <div className="relative">
+                <Textarea
+                  placeholder="Add details about this task..."
+                  className="min-h-[200px] w-full"
+                  value={description}
+                  onChange={(e) => {
+                    setDescription(e.target.value);
+                    setIsDescriptionChanged(true);
+                  }}
+                />
+                {isDescriptionChanged && (
+                  <Button
+                    className="absolute bottom-4 right-4"
+                    size="sm"
+                    onClick={handleSaveChanges}
+                  >
+                    Save Changes
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1747,6 +2123,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       <MilestoneDialog />
       <CreateMilestoneDialog />
       <AssigneeDialog />
+      <TagDialog />
     </div>
   );
 }

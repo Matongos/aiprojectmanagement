@@ -5,6 +5,7 @@ from datetime import datetime
 from .base import Base
 from .task_stage import TaskStage
 from schemas.task import TaskState
+from .tag import task_tag  # Import the association table
 
 # Association table for task dependencies
 task_dependencies = Table(
@@ -68,6 +69,7 @@ class Task(Base):
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     time_entries = relationship("TimeEntry", back_populates="task", cascade="all, delete-orphan")
     subtasks = relationship("Task", back_populates="parent", remote_side=[parent_id])
+    tags = relationship("Tag", secondary=task_tag, back_populates="tasks")
 
     # Many-to-many relationship for task dependencies
     depends_on = relationship(

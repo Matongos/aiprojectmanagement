@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from models.projects import Project, ProjectMember
+from models.projects import Project as ProjectModel, ProjectMember
 from models.task_stage import TaskStage
 from schemas.project import (
     ProjectCreate, 
@@ -18,6 +18,10 @@ from crud.project import project_stage
 from database import get_db
 from routers.auth import get_current_user, User
 from models.task import Task
+from schemas.tag import Tag as TagSchema
+from crud.tag import tag as tag_crud
+from crud import activity
+from schemas.activity import ActivityCreate
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -65,8 +69,8 @@ async def read_projects(
         # Get the full project objects for these IDs
         projects_with_tasks = []
         if projects_with_tasks_ids:
-            projects_with_tasks = db.query(Project).filter(
-                Project.id.in_(projects_with_tasks_ids)
+            projects_with_tasks = db.query(ProjectModel).filter(
+                ProjectModel.id.in_(projects_with_tasks_ids)
             ).all()
         
         # Combine and deduplicate projects
@@ -110,10 +114,10 @@ async def search_projects(
     """
     # For admin users, search all projects
     if current_user.get("is_superuser", False):
-        projects = db.query(Project).filter(
-            Project.name.ilike(f"%{query}%") | 
-            Project.key.ilike(f"%{query}%") | 
-            Project.description.ilike(f"%{query}%")
+        projects = db.query(ProjectModel).filter(
+            ProjectModel.name.ilike(f"%{query}%") | 
+            ProjectModel.key.ilike(f"%{query}%") | 
+            ProjectModel.description.ilike(f"%{query}%")
         ).offset(skip).limit(limit).all()
         return projects
     
@@ -123,11 +127,11 @@ async def search_projects(
     )
     
     # Add projects where the user has assigned tasks
-    projects_with_tasks_query = db.query(Project).join(Task).filter(
+    projects_with_tasks_query = db.query(ProjectModel).join(Task).filter(
         Task.assigned_to == current_user["id"],
-        Project.name.ilike(f"%{query}%") | 
-        Project.key.ilike(f"%{query}%") | 
-        Project.description.ilike(f"%{query}%")
+        ProjectModel.name.ilike(f"%{query}%") | 
+        ProjectModel.key.ilike(f"%{query}%") | 
+        ProjectModel.description.ilike(f"%{query}%")
     ).offset(skip).limit(limit)
     
     projects_with_tasks = projects_with_tasks_query.all()
@@ -261,7 +265,7 @@ async def read_recent_projects(
     try:
         # For superusers, return recent projects regardless of creator
         if current_user.get("is_superuser", False):
-            return db.query(Project).order_by(Project.updated_at.desc()).limit(limit).all()
+            return db.query(ProjectModel).order_by(ProjectModel.updated_at.desc()).limit(limit).all()
         
         # Get projects created by the user
         owned_projects = project_crud.get_recent_projects(
@@ -271,9 +275,9 @@ async def read_recent_projects(
         )
         
         # Get projects with assigned tasks
-        projects_with_tasks_query = db.query(Project).join(Task).filter(
+        projects_with_tasks_query = db.query(ProjectModel).join(Task).filter(
             Task.assigned_to == current_user["id"]
-        ).order_by(Project.updated_at.desc()).limit(limit)
+        ).order_by(ProjectModel.updated_at.desc()).limit(limit)
         
         projects_with_tasks = projects_with_tasks_query.all()
         
@@ -390,7 +394,7 @@ async def get_project_members(
 ):
     """Get all users that can be assigned to tasks"""
     # Check if project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -405,4 +409,189 @@ async def get_project_members(
             "profile_image_url": user.profile_image_url
         }
         for user in users
-    ] 
+    ]
+
+@router.post("/{project_id}/tags/{tag_id}", response_model=ProjectSchema)
+async def add_tag_to_project(
+    project_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Add a tag to a project.
+    """
+    # Check if project exists
+    project = project_crud.get(db, id=project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Check if tag exists
+    tag = tag_crud.get(db, id=tag_id)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    
+    # Check if tag is already added
+    if tag in project.tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tag is already added to this project"
+        )
+    
+    # Add tag to project
+    project.tags.append(tag)
+    db.commit()
+    db.refresh(project)
+    
+    # Log activity
+    activity.create(
+        db,
+        ActivityCreate(
+            activity_type="project_tag_added",
+            description=f"Tag '{tag.name}' added to project",
+            project_id=project.id,
+            user_id=current_user["id"]
+        )
+    )
+    
+    return project
+
+@router.delete("/{project_id}/tags/{tag_id}", response_model=ProjectSchema)
+async def remove_tag_from_project(
+    project_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Remove a tag from a project.
+    """
+    # Check if project exists
+    project = project_crud.get(db, id=project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Check if tag exists
+    tag = tag_crud.get(db, id=tag_id)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    
+    # Check if tag is added to project
+    if tag not in project.tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tag is not added to this project"
+        )
+    
+    # Remove tag from project
+    project.tags.remove(tag)
+    db.commit()
+    db.refresh(project)
+    
+    # Log activity
+    activity.create(
+        db,
+        ActivityCreate(
+            activity_type="project_tag_removed",
+            description=f"Tag '{tag.name}' removed from project",
+            project_id=project.id,
+            user_id=current_user["id"]
+        )
+    )
+    
+    return project
+
+@router.get("/{project_id}/tags", response_model=List[TagSchema])
+async def get_project_tags(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all tags associated with a project.
+    """
+    project = project_crud.get(db, id=project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    return project.tags
+
+@router.put("/{project_id}/tags", response_model=ProjectSchema)
+async def update_project_tags(
+    project_id: int,
+    tag_ids: List[int],
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update all tags for a project. This will replace existing tags with the new list.
+    """
+    # Check if project exists
+    project = project_crud.get(db, id=project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Verify all tags exist
+    tags = []
+    for tag_id in tag_ids:
+        tag = tag_crud.get(db, id=tag_id)
+        if not tag:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tag with id {tag_id} not found"
+            )
+        tags.append(tag)
+    
+    # Get removed and added tags for activity log
+    old_tags = set(project.tags)
+    new_tags = set(tags)
+    removed_tags = old_tags - new_tags
+    added_tags = new_tags - old_tags
+    
+    # Update project tags
+    project.tags = tags
+    db.commit()
+    db.refresh(project)
+    
+    # Log activities
+    for tag in removed_tags:
+        activity.create(
+            db,
+            ActivityCreate(
+                activity_type="project_tag_removed",
+                description=f"Tag '{tag.name}' removed from project",
+                project_id=project.id,
+                user_id=current_user["id"]
+            )
+        )
+    
+    for tag in added_tags:
+        activity.create(
+            db,
+            ActivityCreate(
+                activity_type="project_tag_added",
+                description=f"Tag '{tag.name}' added to project",
+                project_id=project.id,
+                user_id=current_user["id"]
+            )
+        )
+    
+    return project 

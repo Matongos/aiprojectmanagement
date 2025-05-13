@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr
 from .file_attachment import FileAttachment
 from .milestone import MilestoneResponse
+from .tag import Tag
 from enum import Enum
 
 class TaskState(str, Enum):
@@ -65,6 +66,7 @@ class TaskBase(BaseModel):
     end_date: Optional[datetime] = None
     deadline: Optional[datetime] = None
     planned_hours: Optional[float] = Field(default=0.0, ge=0)
+    tag_ids: Optional[List[int]] = Field(default=[], description="List of tag IDs")
 
 class TaskCreate(TaskBase):
     """Task creation schema with required fields:
@@ -87,6 +89,7 @@ class TaskUpdate(BaseModel):
     end_date: Optional[datetime] = None
     deadline: Optional[datetime] = None
     planned_hours: Optional[float] = Field(None, ge=0)
+    tag_ids: Optional[List[int]] = None
 
 class Task(TaskBase):
     id: int
@@ -112,6 +115,7 @@ class Task(TaskBase):
     }
     company: Optional[dict] = None
     assignee: Optional[dict] = None
+    tags: Optional[List[Tag]] = Field(default=[], description="List of associated tags")
 
     class Config:
         from_attributes = True
