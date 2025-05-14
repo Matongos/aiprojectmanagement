@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -33,12 +33,19 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://192.168.56.1:3000"],  # Frontend URLs
+    allow_origins=[
+        "http://localhost:3000",
+        "http://192.168.56.1:3000",
+        "http://localhost:8003",
+        "http://192.168.56.1:8003",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8003"
+        # Removed wildcard "*" since we're using credentials
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["Content-Type", "Authorization"],
-    max_age=3600,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # Mount static files
@@ -61,6 +68,7 @@ app.include_router(stages.router)
 app.include_router(permissions.router)
 app.include_router(milestones.router)
 app.include_router(tags.router)
+app.include_router(log_notes.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

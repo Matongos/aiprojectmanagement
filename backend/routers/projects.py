@@ -49,39 +49,18 @@ async def read_projects(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    if current_user.get("is_superuser", False):
-        projects = project_crud.get_multi(db, skip=skip, limit=limit)
-    else:
-        # For regular users, also include projects where they have assigned tasks
-        # First get projects they own
-        owned_projects = project_crud.get_by_owner(
-            db=db, owner_id=current_user["id"], skip=skip, limit=limit
-        )
-        
-        # Get projects with assigned tasks 
-        # This query finds all unique project IDs where the user has tasks
-        projects_with_tasks_query = db.query(Task.project_id).filter(
-            Task.assigned_to == current_user["id"]
-        ).distinct()
-        
-        projects_with_tasks_ids = [p[0] for p in projects_with_tasks_query.all()]
-        
-        # Get the full project objects for these IDs
-        projects_with_tasks = []
-        if projects_with_tasks_ids:
-            projects_with_tasks = db.query(ProjectModel).filter(
-                ProjectModel.id.in_(projects_with_tasks_ids)
-            ).all()
-        
-        # Combine and deduplicate projects
-        all_projects = {project.id: project for project in owned_projects}
-        for project in projects_with_tasks:
-            if project.id not in all_projects:
-                all_projects[project.id] = project
-        
-        projects = list(all_projects.values())
-
-    # Calculate member count for each project
+    """Get all projects with access information."""
+    # Get all projects
+    projects = project_crud.get_multi(db, skip=skip, limit=limit)
+    
+    # Get projects with assigned tasks for the current user
+    projects_with_tasks_query = db.query(Task.project_id).filter(
+        Task.assigned_to == current_user["id"]
+    ).distinct()
+    
+    projects_with_tasks_ids = set(p[0] for p in projects_with_tasks_query.all())
+    
+    # For each project, calculate member count and add access information
     for project in projects:
         # Get unique users assigned to tasks in the project
         task_assignees = db.query(Task.assigned_to).filter(
@@ -98,6 +77,14 @@ async def read_projects(
             
         # Set the member count
         project.member_count = len(unique_assignees)
+        
+        # Add access information
+        project.has_user_tasks = project.id in projects_with_tasks_ids
+        project.has_access = (
+            current_user.get("is_superuser", False) or  # Admin access
+            project.created_by == current_user["id"] or  # Creator access
+            project.id in projects_with_tasks_ids  # Has assigned tasks
+        )
 
     return projects
 

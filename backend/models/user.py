@@ -36,6 +36,8 @@ class User(Base):
     notifications = relationship("Notification", back_populates="user")
     uploaded_files = relationship("FileAttachment", back_populates="user")
     activities = relationship("Activity", back_populates="user")
+    log_notes = relationship("LogNote", back_populates="user")
+    log_note_attachments = relationship("LogNoteAttachment", back_populates="user")
 
     def __repr__(self):
         return f"<User {self.username}>" 

@@ -389,9 +389,11 @@ function ProjectsContent() {
           return (
             <Card
               key={project.id}
-              className={`p-4 transition-all ${projectAccess 
-                ? 'cursor-pointer hover:shadow-lg' 
-                : 'cursor-not-allowed opacity-60'}`}
+              className={`p-4 transition-all ${
+                projectAccess 
+                  ? 'cursor-pointer hover:shadow-lg' 
+                  : 'cursor-not-allowed opacity-60'
+              }`}
               onClick={() => {
                 if (projectAccess) {
                   router.push(`/dashboard/projects/${project.id}`);
@@ -417,69 +419,67 @@ function ProjectsContent() {
                   </div>
                 </div>
                 
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                    <button className="text-gray-400 hover:text-gray-600">
-                      <MoreVertical className="w-5 h-5" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
-                    {projectAccess ? (
-                      <>
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/view`)}>
-                            <Eye className="mr-2 h-4 w-4" />
-                            <span>View</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/tasks`)}>
-                            <ListTodo className="mr-2 h-4 w-4" />
-                            <span>Tasks</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Milestone className="mr-2 h-4 w-4" />
-                            <span>Milestones</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem>
-                            <FileText className="mr-2 h-4 w-4" />
-                            <span>Project Updates</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <LineChart className="mr-2 h-4 w-4" />
-                            <span>Tasks Analysis</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <BarChart3 className="mr-2 h-4 w-4" />
-                            <span>Burndown Chart</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem>
-                          <Share2 className="mr-2 h-4 w-4" />
-                          <span>Share</span>
+                {projectAccess && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                      <button className="text-gray-400 hover:text-gray-600">
+                        <MoreVertical className="w-5 h-5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56" align="end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/view`)}>
+                          <Eye className="mr-2 h-4 w-4" />
+                          <span>View</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/tasks`)}>
+                          <ListTodo className="mr-2 h-4 w-4" />
+                          <span>Tasks</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem>
-                          <Settings className="mr-2 h-4 w-4" />
-                          <span>Settings</span>
+                          <Milestone className="mr-2 h-4 w-4" />
+                          <span>Milestones</span>
                         </DropdownMenuItem>
-                      </>
-                    ) : (
-                      <DropdownMenuItem disabled>
-                        <span className="text-gray-400">No available actions</span>
+                      </DropdownMenuGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem>
+                          <FileText className="mr-2 h-4 w-4" />
+                          <span>Project Updates</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <LineChart className="mr-2 h-4 w-4" />
+                          <span>Tasks Analysis</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <BarChart3 className="mr-2 h-4 w-4" />
+                          <span>Burndown Chart</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem>
+                        <Share2 className="mr-2 h-4 w-4" />
+                        <span>Share</span>
                       </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      <DropdownMenuItem>
+                        <Settings className="mr-2 h-4 w-4" />
+                        <span>Settings</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
-
+              
               <div className="flex items-center justify-between mt-4">
                 <div className="flex gap-2">
                   {project.tags?.map((tag, index) => (
                     <span
                       key={index}
-                      className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600"
+                      className={`px-2 py-1 text-xs rounded-full ${
+                        projectAccess 
+                          ? 'bg-gray-100 text-gray-600' 
+                          : 'bg-gray-50 text-gray-400'
+                      }`}
                     >
                       {tag}
                     </span>
@@ -488,7 +488,7 @@ function ProjectsContent() {
                 <div className="flex items-center gap-4">
                   <div className="flex -space-x-2">
                     {project.members?.slice(0, 3).map((member) => (
-                      <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
+                      <Avatar key={member.id} className={`h-6 w-6 border-2 border-white ${!projectAccess && 'opacity-60'}`}>
                         <AvatarImage 
                           src={member.user.profile_image_url || '/default-avatar.png'} 
                           alt={member.user.name}
@@ -498,52 +498,17 @@ function ProjectsContent() {
                       </Avatar>
                     ))}
                     {project.member_count > 3 && (
-                      <div className="h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center">
+                      <div className={`h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center ${!projectAccess && 'opacity-60'}`}>
                         <span className="text-xs text-gray-600">+{project.member_count - 3}</span>
                       </div>
                     )}
                   </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button 
-                        className="flex items-center gap-2 hover:bg-gray-100 px-2 py-1 rounded-md transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
-                      >
-                        <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
-                        <span className="text-sm text-gray-600">{statusConfig[project.status]?.label || statusConfig.default.label}</span>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="w-56" align="end">
-                      {(Object.keys(statusConfig) as ProjectStatus[])
-                        .filter(key => key !== 'default')
-                        .map((key) => (
-                          <DropdownMenuItem 
-                            key={key}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (projectAccess) {
-                                handleStatusChange(project.id, key);
-                              } else {
-                                toast.error("You don't have permission to change project status");
-                              }
-                            }}
-                            className={`${project.status === key ? 'bg-gray-100' : ''}`}
-                            disabled={!projectAccess}
-                          >
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${statusConfig[key].color}`} />
-                              <div>
-                                <div className="text-sm font-medium">{statusConfig[key].label}</div>
-                                <div className="text-xs text-gray-500">{statusConfig[key].description}</div>
-                              </div>
-                            </div>
-                          </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <span className="text-sm font-medium">{project.task_count || 0} Tasks</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                    <span className={`text-sm ${projectAccess ? 'text-gray-600' : 'text-gray-400'}`}>
+                      {project.task_count || 0} Tasks
+                    </span>
+                  </div>
                 </div>
               </div>
             </Card>

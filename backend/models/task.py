@@ -70,6 +70,7 @@ class Task(Base):
     time_entries = relationship("TimeEntry", back_populates="task", cascade="all, delete-orphan")
     subtasks = relationship("Task", back_populates="parent", remote_side=[parent_id])
     tags = relationship("Tag", secondary=task_tag, back_populates="tasks")
+    log_notes = relationship("LogNote", back_populates="task", cascade="all, delete-orphan")
 
     # Many-to-many relationship for task dependencies
     depends_on = relationship(

@@ -24,7 +24,7 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
                 for task in stage.tasks:
                     # Handle assignee serialization
                     if task.assignee:
-                        task.assignee = {
+                        task.assignee_data = {
                             'id': task.assignee.id,
                             'username': task.assignee.username,
                             'email': task.assignee.email,

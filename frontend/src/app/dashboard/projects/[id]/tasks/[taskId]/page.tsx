@@ -4,7 +4,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User } from "lucide-react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, RefreshCw } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -38,6 +38,9 @@ import "@/styles/tags.css";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useRouter } from "next/navigation";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { format } from "date-fns";
 
 interface Stage {
   id: string;
@@ -64,7 +67,7 @@ interface User {
   username: string;
   email: string;
   full_name: string;
-  profile_image_url?: string;
+  profile_image_url: string | null;
 }
 
 interface Tag {
@@ -75,49 +78,41 @@ interface Tag {
 }
 
 interface Task {
-  id: string;
+  id: number;
   name: string;
   description: string;
   stage_id: number;
   milestone_id?: number;
-  milestone?: Milestone;
+  milestone?: {
+    id: number;
+    name: string;
+  };
   assigned_to?: number;
   assignee?: User;
   created_by: number;
   deadline?: string;
   state: TaskState;
   tags: Tag[];
-  // ... other task properties
+  comments: Comment[];
 }
 
 type ActivityType = 'task_update' | 'comment';
 
 interface Activity {
-  id: number | string;
+  id: number;
   activity_type: ActivityType;
   description: string;
   created_at: string;
   user_id?: number;
-  user?: {
-    id: number;
-    username: string;
-    full_name: string;
-    profile_image_url: string | null;
-  };
+  user: User;
+  uniqueId?: string;
 }
 
 interface Comment {
   id: number;
   content: string;
   created_at: string;
-  created_by: number;
-  task_id: string;
-  user: {
-    id: number;
-    username: string;
-    full_name: string;
-    profile_image_url: string | null;
-  };
+  user: User;
 }
 
 interface TaskDetailsProps {
@@ -144,12 +139,202 @@ interface TaskUpdateFields {
   description?: string;
 }
 
+interface LogNote {
+  id: number;
+  content: string;
+  created_at: string;
+  user: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
+  attachments: Array<{
+    id: number;
+    filename: string;
+    original_filename: string;
+    content_type: string;
+  }>;
+}
+
+interface Task {
+  id: number;
+  title: string;
+  description: string;
+  comments: Comment[];
+}
+
+// Add TaskStage interface
+interface TaskStage {
+  id: number;
+  name: string;
+  sequence: number;
+  description?: string;
+  project_id: number;
+  tasks?: Task[];
+  duration?: string;
+}
+
+// Add interfaces for activity feed items
+interface BaseActivityItem {
+  id: number;
+  created_at: string;
+  user: User;
+}
+
+interface LogNote extends BaseActivityItem {
+  id: number;
+  content: string;
+  created_at: string;
+  user: User;
+  attachments: Array<{
+    id: number;
+    filename: string;
+    original_filename: string;
+    content_type: string;
+  }>;
+}
+
+interface ActivityItem extends BaseActivityItem {
+  activity_type: 'task_update' | 'comment';
+  description: string;
+}
+
+type FeedItem = LogNote | ActivityItem;
+
 export default function TaskDetails({ params }: TaskDetailsProps) {
-  // Unwrap params using React.use()
-  const { id, taskId } = React.use(params);
+  const router = useRouter();
+  
+  // Unwrap params at the very start of the component
+  const resolvedParams = React.use(params);
+  const { id, taskId } = resolvedParams;
+
+  // Constants
+  const itemsPerPage = 4;
+
+  // Query client setup
+  const queryClient = useQueryClient();
+
+  // Auth store
+  const { token, checkAuth } = useAuthStore();
+
+  // Task query with loading and error states
+  const { 
+    data: currentTask, 
+    isLoading: isLoadingTask, 
+    error: taskError,
+    refetch: refetchTask 
+  } = useQuery({
+    queryKey: ['task', resolvedParams.taskId],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch task');
+      return response.json();
+    },
+    enabled: !!token && !!resolvedParams.taskId,
+  });
+
+  // Milestones query with loading state
+  const { data: milestonesData, isLoading: isLoadingMilestones, refetch: refetchMilestones } = useQuery({
+    queryKey: ['milestones', id],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/milestones/project/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch milestones');
+      return response.json();
+    },
+    enabled: !!token && !!id,
+  });
+
+  // Users query with loading state
+  const { data: usersData, isLoading: isLoadingUsers } = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error('You do not have permission to view users');
+        }
+        throw new Error('Failed to fetch users');
+      }
+      return response.json();
+    },
+    enabled: !!token,
+    retry: false
+  });
+
+  // Stages query with loading and error states
+  const { data: stagesData, isLoading: isLoadingStages, error: stagesError } = useQuery({
+    queryKey: ['stages', id],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/stages/project/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch stages');
+      const data = await response.json();
+      
+      // Transform the data to use assignee_data instead of assignee
+      return data.map((stage: any) => ({
+        ...stage,
+        tasks: stage.tasks?.map((task: any) => ({
+          ...task,
+          assignee: task.assignee_data || task.assignee
+        }))
+      }));
+    },
+    enabled: !!token && !!id,
+  });
+
+  // Activities query with loading state
+  const { 
+    data: activitiesData, 
+    isLoading: isLoadingActivities,
+    refetch: refetchActivities 
+  } = useQuery({
+    queryKey: ['activities', resolvedParams.taskId],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/activities/task/${resolvedParams.taskId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Failed to fetch activities');
+      return response.json();
+    },
+    enabled: !!token && !!resolvedParams.taskId,
+    refetchInterval: 2000, // Refetch every 2 seconds
+    refetchOnWindowFocus: true,
+  });
+
+  // Derived state
+  const users = usersData || [];
+  const milestones = milestonesData || [];
+  const stages = stagesData || [];
+  const activities = activitiesData || [];
+
+  // State declarations
   const [currentStage, setCurrentStage] = useState<string>("");
   const [description, setDescription] = useState("");
-  const { token, checkAuth } = useAuthStore();
   const [showAllStages, setShowAllStages] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [taskName, setTaskName] = useState("");
@@ -174,286 +359,156 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     is_completed: false,
     is_active: true
   });
-  const itemsPerPage = 4;
-  const queryClient = useQueryClient();
+  const [logNotes, setLogNotes] = useState<LogNote[]>([]);
+  const [showLogForm, setShowLogForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const [tagInput, setTagInput] = useState("");
+  const [isDescriptionChanged, setIsDescriptionChanged] = useState(false);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
   const [currentStatus, setCurrentStatus] = useState<TaskState>(TaskState.IN_PROGRESS);
   const [isStatusChanged, setIsStatusChanged] = useState(false);
-  const [showCommentInput, setShowCommentInput] = useState(false);
-  const [commentText, setCommentText] = useState('');
-  const [isDescriptionChanged, setIsDescriptionChanged] = useState(false);
-  const [showTagDialog, setShowTagDialog] = useState(false);
-  const [tagInput, setTagInput] = useState("");
+  const [task, setTask] = useState<Task | null>(null);
+  const [taskActivities, setTaskActivities] = useState<Activity[]>([]);
   const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
-  const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
-  const router = useRouter();
+  // Additional state declarations
+  const [showTagDialog, setShowTagDialog] = useState(false);
 
-  // Add authentication check effect
+  // Helper function to check if task exists and has required data
+  const hasTaskData = () => {
+    return task && task.id && task.name;
+  };
+
+  // Helper function to get task name safely
+  const getTaskName = () => {
+    return task?.name || taskName;
+  };
+
+  // Helper function to get task description safely
+  const getTaskDescription = () => {
+    return task?.description || description;
+  };
+
+  // Helper function to get task deadline safely
+  const getTaskDeadline = () => {
+    return task?.deadline || deadline;
+  };
+
+  // Helper function to get task state safely
+  const getTaskState = () => {
+    return task?.state || currentStatus;
+  };
+
+  // Helper function to get task comments safely
+  const getTaskComments = () => {
+    return task?.comments || [];
+  };
+
+  // Authentication check effect
   useEffect(() => {
     const validateAuth = async () => {
       const isAuthenticated = await checkAuth();
       if (!isAuthenticated) {
         toast.error("Your session has expired. Please log in again.");
         router.push('/auth/login');
+        return;
       }
     };
     validateAuth();
   }, [checkAuth, router]);
 
-  // Update the task details query
-  const { data: taskDetails, isLoading: isLoadingTask, error: taskError, refetch } = useQuery<Task>({
-    queryKey: ["task-details", taskId],
-    queryFn: async () => {
+  // Fetch task effect
+  useEffect(() => {
+    const fetchTask = async () => {
+      if (!token || !taskId) return;
+      
       try {
-        const isAuthenticated = await checkAuth();
-        if (!isAuthenticated) {
-          throw new Error("Authentication required");
-        }
-
         const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
           },
         });
-
-        if (response.status === 401) {
-          localStorage.removeItem('token');
-          toast.error("Your session has expired. Please log in again.");
-          router.push('/auth/login');
-          throw new Error("Unauthorized");
+        
+        if (response.ok) {
+          const data = await response.json();
+          setTask(data);
+          setTaskName(data.name);
+          setDescription(data.description || "");
+          setDeadline(data.deadline);
+          setCurrentStage(data.stage_id);
+          setCurrentStatus(data.state);
+        } else {
+          setError("Failed to load task details");
         }
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch task details: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        console.log("Task Details Response:", data);
-        setTaskName(data.name);
-        setDescription(data.description || '');
-        // Set the initial selected tags when task is loaded
-        if (data.tags) {
-          setSelectedTags(data.tags);
-        }
-        return data;
       } catch (error) {
         console.error("Error fetching task:", error);
-        toast.error("Failed to load task details");
-        throw error;
+        setError("Failed to load task details");
+      } finally {
+        setLoading(false);
       }
-    },
-    enabled: !!token && !!taskId,
-    retry: (failureCount, error) => {
-      if (error.message === "Unauthorized" || error.message === "Authentication required") {
-        return false;
-      }
-      return failureCount < 3;
-    },
-  });
+    };
 
-  // Update the stages query to handle auth errors
-  const { data: stages = [], isLoading: isLoadingStages, error: stagesError } = useQuery<Stage[]>({
-    queryKey: ["project-stages", id],
-    queryFn: async () => {
+    fetchTask();
+  }, [taskId, token]);
+
+  // Fetch task activities effect
+  useEffect(() => {
+    const fetchActivities = async () => {
+      if (!token || !taskId) return;
+
       try {
-        // Validate auth before making the request
-        const isAuthenticated = await checkAuth();
-        if (!isAuthenticated) {
-          throw new Error("Authentication required");
-        }
-
-        const response = await fetch(`${API_BASE_URL}/projects/${id}/stages`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        
-        if (response.status === 401) {
-          // Clear token and redirect to login
-          localStorage.removeItem('token');
-          toast.error("Your session has expired. Please log in again.");
-          router.push('/auth/login');
-          throw new Error("Unauthorized");
-        }
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch project stages: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        console.log("Stages Response:", data);
-        return data;
-      } catch (error) {
-        console.error("Error fetching stages:", error);
-        toast.error("Failed to load project stages");
-        throw error;
-      }
-    },
-    enabled: !!token && !!id,
-    retry: (failureCount, error) => {
-      // Don't retry on auth errors
-      if (error.message === "Unauthorized" || error.message === "Authentication required") {
-        return false;
-      }
-      return failureCount < 3;
-    },
-  });
-
-  // Update the milestones query to handle auth errors
-  const { data: milestones = [], isLoading: isLoadingMilestones, refetch: refetchMilestones } = useQuery<Milestone[]>({
-    queryKey: ["project-milestones", id],
-    queryFn: async () => {
-      try {
-        // Validate auth before making the request
-        const isAuthenticated = await checkAuth();
-        if (!isAuthenticated) {
-          throw new Error("Authentication required");
-        }
-
-        console.log("Fetching milestones for project:", id);
-        const response = await fetch(`${API_BASE_URL}/milestones/project/${id}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (response.status === 401) {
-          // Clear token and redirect to login
-          localStorage.removeItem('token');
-          toast.error("Your session has expired. Please log in again.");
-          router.push('/auth/login');
-          throw new Error("Unauthorized");
-        }
-
-        if (response.status === 404) {
-          console.log("No milestones found for project:", id);
-          return [];
-        }
-
-        if (!response.ok) {
-          throw new Error('Failed to fetch milestones');
-        }
-
-        const data = await response.json();
-        console.log("Fetched milestones:", data);
-        return data;
-      } catch (error) {
-        console.error('Error fetching milestones:', error);
-        toast.error('Failed to load milestones');
-        return [];
-      }
-    },
-    enabled: !!token && !!id,
-    retry: (failureCount, error) => {
-      // Don't retry on auth errors
-      if (error.message === "Unauthorized" || error.message === "Authentication required") {
-        return false;
-      }
-      return failureCount < 3;
-    },
-  });
-
-  // Update the task activities query to handle auth errors
-  const { data: taskActivities, isLoading: isLoadingActivities } = useQuery<Activity[]>({
-    queryKey: ["task-activities", taskId],
-    queryFn: async () => {
-      try {
-        // Validate auth before making the request
-        const isAuthenticated = await checkAuth();
-        if (!isAuthenticated) {
-          throw new Error("Authentication required");
-        }
-
         const response = await fetch(`${API_BASE_URL}/activities/task/${taskId}`, {
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
           },
         });
 
-        if (response.status === 401) {
-          // Clear token and redirect to login
-          localStorage.removeItem('token');
-          toast.error("Your session has expired. Please log in again.");
-          router.push('/auth/login');
-          throw new Error("Unauthorized");
+        if (response.ok) {
+          const data = await response.json();
+          setTaskActivities(data);
+        } else {
+          console.error("Failed to fetch task activities");
         }
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch task activities: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        return data;
       } catch (error) {
-        console.error('Error fetching task activities:', error);
-        throw error;
+        console.error("Error fetching task activities:", error);
       }
-    },
-    enabled: !!taskId && !!token,
-    retry: (failureCount, error) => {
-      // Don't retry on auth errors
-      if (error.message === "Unauthorized" || error.message === "Authentication required") {
-        return false;
-      }
-      return failureCount < 3;
-    },
-  });
+    };
 
-  // Update the users query to handle auth errors
-  const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
-    queryKey: ["users"],
-    queryFn: async () => {
+    fetchActivities();
+  }, [taskId, token]);
+
+  // Fetch log notes effect
+  useEffect(() => {
+    const fetchLogNotes = async () => {
+      if (!token || !resolvedParams.taskId) return;
+      
       try {
-        // Validate auth before making the request
-        const isAuthenticated = await checkAuth();
-        if (!isAuthenticated) {
-          throw new Error("Authentication required");
-        }
-
-        console.log("Fetching users...");
-        const response = await fetch(`${API_BASE_URL}/users/`, {
+        const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams.taskId}`, {
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
           },
         });
-
-        if (response.status === 401) {
-          // Clear token and redirect to login
-          localStorage.removeItem('token');
-          toast.error("Your session has expired. Please log in again.");
-          router.push('/auth/login');
-          throw new Error("Unauthorized");
+        
+        if (response.ok) {
+          const data = await response.json();
+          setLogNotes(data);
+        } else {
+          console.error("Failed to fetch log notes");
         }
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch users: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        console.log("Users Response:", data);
-        return data;
       } catch (error) {
-        console.error("Error fetching users:", error);
-        toast.error("Failed to load users");
-        return [];
+        console.error("Error fetching log notes:", error);
       }
-    },
-    enabled: !!token,
-    retry: (failureCount, error) => {
-      // Don't retry on auth errors
-      if (error.message === "Unauthorized" || error.message === "Authentication required") {
-        return false;
-      }
-      return failureCount < 3;
-    },
-  });
+    };
+
+    if (resolvedParams.taskId) {
+      fetchLogNotes();
+    }
+  }, [resolvedParams.taskId, token]);
 
   // Fetch comments
-  const { data: comments, isLoading: isLoadingComments } = useQuery<Comment[]>({
+  const { data: comments = [], isLoading: isLoadingComments } = useQuery<Comment[]>({
     queryKey: ['task-comments', taskId],
     queryFn: async () => {
       try {
@@ -506,10 +561,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const groupedActivities = useMemo(() => {
     if (!taskActivities || !comments) return {};
     
-    // Combine activities and comments into a single array
+    // Combine activities and comments into a single array with unique keys
     const allItems: Activity[] = [
       ...(taskActivities || []).map(activity => ({
         ...activity,
+        uniqueId: `activity-${activity.id}`,
         user: activity.user || {
           id: activity.user_id || 0,
           username: 'Unknown',
@@ -518,7 +574,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         }
       })),
       ...(comments || []).map((comment: Comment): Activity => ({
-        id: `comment-${comment.id}`,
+        id: Number(comment.id),
+        uniqueId: `comment-${comment.id}`,
         activity_type: 'comment',
         description: comment.content,
         created_at: comment.created_at,
@@ -542,29 +599,27 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }, {});
   }, [taskActivities, comments]);
 
-  // Set current stage when task details are loaded
+  // Update effects to use task state instead of taskDetails
   useEffect(() => {
-    if (taskDetails?.stage_id) {
-      const stageId = taskDetails.stage_id.toString();
-      console.log("Setting current stage to:", stageId); // Debug log
+    if (task?.stage_id) {
+      const stageId = task.stage_id.toString();
+      console.log("Setting current stage to:", stageId);
       setCurrentStage(stageId);
     }
-  }, [taskDetails]);
+  }, [task]);
 
-  // Set selected assignees when task details are loaded
   useEffect(() => {
-    if (taskDetails?.assignee) {
-      setSelectedAssignees([taskDetails.assignee]);
+    if (task?.assignee) {
+      setSelectedAssignees([task.assignee]);
     } else {
       setSelectedAssignees([]);
     }
-  }, [taskDetails]);
+  }, [task]);
 
-  // Set deadline when task details are loaded
   useEffect(() => {
-    if (taskDetails?.deadline) {
+    if (task?.deadline) {
       // Convert the ISO string to local datetime-local format
-      const date = new Date(taskDetails.deadline);
+      const date = new Date(task.deadline);
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
@@ -574,7 +629,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     } else {
       setDeadline('');
     }
-  }, [taskDetails]);
+  }, [task]);
 
   // Update hasUnsavedChanges whenever any field changes
   useEffect(() => {
@@ -588,9 +643,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Update currentStatus when task details are loaded
   useEffect(() => {
-    if (taskDetails?.state) {
+    if (task?.state) {
       // Validate that the state from the backend is a valid TaskState
-      const stateFromBackend = taskDetails.state;
+      const stateFromBackend = task.state;
       if (Object.values(TaskState).includes(stateFromBackend as TaskState)) {
         setCurrentStatus(stateFromBackend as TaskState);
         setIsStatusChanged(false); // Reset the change flag when task details are loaded
@@ -601,15 +656,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         setIsStatusChanged(false);
       }
     }
-  }, [taskDetails]);
+  }, [task]);
 
-  // Set initial selected tags when task details are loaded
+  // Set initial selected tags when task is loaded
   useEffect(() => {
-    if (taskDetails?.tags) {
-      console.log('Setting tags from task details:', taskDetails.tags); // Debug log
-      setSelectedTags(taskDetails.tags);
+    if (task?.tags) {
+      console.log('Setting tags from task:', task.tags);
+      setSelectedTags(task.tags);
     }
-  }, [taskDetails]);
+  }, [task]);
 
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
@@ -629,22 +684,22 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   );
 
   // Handle stage change
-  const handleStageChange = async (stageId: string) => {
+  const handleStageChange = async (stageId: number) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/stage`, {
+      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}/stage`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ stage_id: stageId }),
+        body: JSON.stringify({ stage_id: stageId.toString() }),
       });
 
       if (!response.ok) {
         throw new Error('Failed to update task stage');
       }
 
-      setCurrentStage(stageId);
+      setCurrentStage(stageId.toString());
       toast.success('Task stage updated successfully');
     } catch (error) {
       console.error('Error updating task stage:', error);
@@ -652,9 +707,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
-  // Filter milestones based on search
-  const filteredMilestones = milestones.filter(milestone =>
+  // Type-safe filter functions
+  const filteredMilestones = milestones.filter((milestone: Milestone) =>
     milestone.name.toLowerCase().includes(searchMilestone.toLowerCase())
+  );
+
+  const filteredUsers = users.filter((user: User) =>
+    user.full_name?.toLowerCase().includes(searchUser.toLowerCase()) ||
+    user.username?.toLowerCase().includes(searchUser.toLowerCase()) ||
+    user.email?.toLowerCase().includes(searchUser.toLowerCase())
   );
 
   // Calculate pagination
@@ -665,7 +726,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const paginationText = `${startIndex + 1}-${Math.min(endIndex, filteredMilestones.length)}/${filteredMilestones.length}`;
 
   // Handle milestone selection
-  const handleMilestoneSelect = async (milestoneId: number | null) => {
+  const handleMilestoneSelect = async (milestone: Milestone) => {
     try {
       const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
         method: 'PUT',
@@ -673,7 +734,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ milestone_id: milestoneId }),
+        body: JSON.stringify({ milestone_id: milestone.id }),
       });
 
       if (!response.ok) {
@@ -738,13 +799,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
-  // Filter users based on search
-  const filteredUsers = users.filter(user =>
-    user.full_name?.toLowerCase().includes(searchUser.toLowerCase()) ||
-    user.username?.toLowerCase().includes(searchUser.toLowerCase()) ||
-    user.email?.toLowerCase().includes(searchUser.toLowerCase())
-  );
-
   // Calculate pagination for users
   const userItemsPerPage = 5;
   const userTotalPages = Math.ceil(filteredUsers.length / userItemsPerPage);
@@ -785,7 +839,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Handle save changes
   const handleSaveChanges = async () => {
-    if (!taskId || !token) return;
+    if (!resolvedParams.taskId || !token) return;
 
     try {
       const updatedFields: TaskUpdateFields = {};
@@ -806,10 +860,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         updatedFields.state = currentStatus;
       }
 
-      // Debug logging
-      console.log('Sending update with fields:', updatedFields);
-
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -820,21 +871,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error('Server response:', errorData);
         throw new Error(errorData.detail || 'Failed to update task');
       }
 
       const updatedTask = await response.json();
-      console.log('Task updated successfully:', updatedTask);
-
-      // Update local state with the response data
       setDescription(updatedTask.description || '');
-
-      // Refresh task details and activities
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['task-activities', taskId] })
-      ]);
 
       // Reset change flags
       setIsNameChanged(false);
@@ -842,7 +883,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setIsAssigneesChanged(false);
       setIsDescriptionChanged(false);
       setIsStatusChanged(false);
-      
+
+      // Refresh data
+      await Promise.all([
+        refetchTask(),
+        refetchActivities(),
+        queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] })
+      ]);
+
       toast.success('Task updated successfully');
     } catch (error) {
       console.error('Error updating task:', error);
@@ -1074,7 +1123,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   };
 
   // Loading states
-  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingActivities || isLoadingComments || isLoadingTags) {
+  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingComments || isLoadingTags || isLoadingActivities) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-pulse text-gray-500">Loading task details...</div>
@@ -1108,7 +1157,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   }
 
   // Check permission to access this task
-  if (taskDetails && !canAccessTask(taskDetails)) {
+  if (task && !canAccessTask(task)) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white p-6 rounded-lg shadow-md">
@@ -1276,7 +1325,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {currentMilestones.map((milestone) => (
+                {currentMilestones.map((milestone: Milestone) => (
                   <TableRow key={milestone.id}>
                     <TableCell>{milestone.name}</TableCell>
                     <TableCell>{milestone.description || '-'}</TableCell>
@@ -1295,7 +1344,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleMilestoneSelect(milestone.id)}
+                        onClick={() => handleMilestoneSelect(milestone)}
                       >
                         Select
                       </Button>
@@ -1419,7 +1468,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <span>Unassign All</span>
               </Button>
               
-              {currentUsers.map((user) => (
+              {currentUsers.map((user: User) => (
                 <Button
                   key={user.id}
                   variant="outline"
@@ -1597,6 +1646,13 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     </Dialog>
   );
 
+  const formatDate = (dateString: string) => {
+    return format(new Date(dateString), "MMM d, yyyy 'at' h:mm a");
+  };
+
+  if (loading) return <div>Loading...</div>;
+  if (!task) return <div>Task not found</div>;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation with Stages and Actions */}
@@ -1614,13 +1670,13 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 Save Changes
               </Button>
             )}
-            {stages.slice(0, showAllStages ? stages.length : 4).map((stage) => {
+            {stages.slice(0, showAllStages ? stages.length : 4).map((stage: TaskStage) => {
               const isCurrentStage = stage.id.toString() === currentStage;
               console.log(`Stage ${stage.id} comparison:`, { 
                 stageId: stage.id, 
                 currentStage, 
                 isCurrentStage,
-                taskStageId: taskDetails?.stage_id 
+                taskStageId: task?.stage_id 
               }); // Debug log
               
               return (
@@ -1659,7 +1715,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-[200px]">
-                  {stages.slice(4).map((stage) => (
+                  {stages.slice(4).map((stage: TaskStage) => (
                     <DropdownMenuItem
                       key={stage.id}
                       onClick={() => handleStageChange(stage.id)}
@@ -1708,7 +1764,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                           value={taskName}
                           onChange={(e) => {
                             setTaskName(e.target.value);
-                            setIsNameChanged(e.target.value !== taskDetails?.name);
+                            setIsNameChanged(e.target.value !== task?.name);
                           }}
                           onBlur={() => setIsEditingName(false)}
                           onKeyDown={(e) => {
@@ -1772,7 +1828,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                   <div className="relative">
                     <Input
                       placeholder="Select milestone..."
-                      value={taskDetails?.milestone?.name || ""}
+                      value={task?.milestone?.name || ""}
                       onClick={() => setShowDetailedMilestones(true)}
                       readOnly
                       className="cursor-pointer"
@@ -1903,7 +1959,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     onChange={(e) => {
                       const newDeadline = e.target.value;
                       setDeadline(newDeadline);
-                      setIsDeadlineChanged(newDeadline !== taskDetails?.deadline);
+                      setIsDeadlineChanged(newDeadline !== task?.deadline);
                     }}
                   />
                 </div>
@@ -2044,7 +2100,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
               )}
 
               {/* Existing Activity Feed Content */}
-              {isLoadingActivities ? (
+              {isLoadingActivities && !activitiesData ? (
                 <div className="flex justify-center py-4">
                   <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                 </div>
@@ -2062,20 +2118,20 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                       <div className="flex-1 ml-3 border-t border-gray-200" />
                     </div>
 
-              <div className="space-y-4">
-                    {dateActivities.map((activity: Activity) => (
-                      <div key={activity.id} className="flex items-start gap-3">
-                        <Avatar className="w-8 h-8">
-                          <AvatarImage 
+                    <div className="space-y-4">
+                      {dateActivities.map((activity: Activity) => (
+                        <div key={activity.uniqueId} className="flex items-start gap-3">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage 
                               src={activity.user?.profile_image_url || '/default-avatar.png'} 
                               alt={activity.user?.full_name || 'User'} 
-                          />
-                          <AvatarFallback>
+                            />
+                            <AvatarFallback>
                               {activity.user?.full_name?.charAt(0) || 
                                activity.user?.username?.charAt(0) || 
                                'U'}
-                          </AvatarFallback>
-                  </Avatar>
+                            </AvatarFallback>
+                          </Avatar>
                           <div className={`flex-1 min-w-0 rounded-lg p-3 ${
                             activity.activity_type === 'comment' ? 'bg-blue-50/50' :
                             activity.description.toLowerCase().includes('status') ? 'bg-purple-50/50' :
@@ -2088,12 +2144,12 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                 {activity.user?.full_name || activity.user?.username || 'Unknown User'}
                               </span>
                               <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-                              {new Date(activity.created_at).toLocaleTimeString([], { 
-                                hour: '2-digit', 
-                                minute: '2-digit' 
-                              })}
-                            </span>
-                          </div>
+                                {new Date(activity.created_at).toLocaleTimeString([], { 
+                                  hour: '2-digit', 
+                                  minute: '2-digit' 
+                                })}
+                              </span>
+                            </div>
                             <div className="mt-1">
                               {activity.activity_type === 'task_update' && (
                                 <div className="text-sm">
@@ -2103,7 +2159,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                         <>
                                           <div className="text-gray-500 text-xs">
                                             changed status from
-                  </div>
+                                          </div>
                                           <div className="flex items-center gap-2">
                                             <span className={`px-2 py-0.5 rounded-full text-xs ${
                                               activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
@@ -2126,7 +2182,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                             }`}>
                                               {activity.description.split('→')[1].trim()}
                                             </span>
-              </div>
+                                          </div>
                                         </>
                                       ) : activity.description.toLowerCase().includes('deadline') ? (
                                         <>
@@ -2218,9 +2274,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                 </div>
                               )}
                             </div>
-                    </div>
-                  </div>
-              ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))
@@ -2235,6 +2291,173 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       <CreateMilestoneDialog />
       <AssigneeDialog />
       <TagDialog />
+
+      {showLogForm && (
+        <div className="mb-6">
+          <LogNoteForm
+            taskId={resolvedParams.taskId}
+            onLogAdded={() => {
+              setShowLogForm(false);
+              // Refresh the log notes by refetching the task
+              refetch();
+            }}
+          />
+        </div>
+      )}
+
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            <h2 className="text-xl font-semibold">Activity Feed</h2>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowLogForm(!showLogForm)}
+          >
+            <Pencil className="h-4 w-4 mr-2" />
+            Add Log Note
+          </Button>
+        </div>
+
+        <div className="space-y-4">
+          {[...(logNotes || []), ...(task?.comments || [])].sort((a, b) => 
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          ).map((item: LogNote | Comment) => {
+            const isLogNote = 'attachments' in item;
+            return (
+              <div key={`${item.id}-${isLogNote ? 'log' : 'comment'}`} className="flex gap-3">
+                <Avatar className="h-10 w-10">
+                  <AvatarImage src={item.user?.profile_image_url || '/default-avatar.png'} />
+                  <AvatarFallback>{item.user?.full_name?.[0] || item.user?.username?.[0] || 'U'}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium">{item.user?.full_name || item.user?.username}</p>
+                    <p className="text-xs text-gray-500">
+                      {formatDate(item.created_at)}
+                    </p>
+                    {isLogNote && (
+                      <Badge variant="secondary" className="text-xs">
+                        Log Note
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="mt-1">
+                    {isLogNote ? (item as LogNote).content : (item as Comment).content}
+                  </p>
+                  {isLogNote && (item as LogNote).attachments?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(item as LogNote).attachments.map((attachment) => (
+                        <a
+                          key={attachment.id}
+                          href={`${API_BASE_URL}/uploads/log_notes/${attachment.filename}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                        >
+                          <Paperclip className="h-4 w-4" />
+                          {attachment.original_filename}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
     </div>
   );
 }
+
+// Update the LogNoteForm component
+const LogNoteForm: React.FC<{ taskId: string; onLogAdded: () => void }> = ({ taskId, onLogAdded }) => {
+  const [content, setContent] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { token } = useAuthStore();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!content.trim()) return;
+
+    setIsSubmitting(true);
+    try {
+      const formData = new FormData();
+      formData.append("content", content);
+      formData.append("task_id", taskId);
+      
+      files.forEach(file => {
+        formData.append("files", file);
+      });
+
+      const response = await fetch(`${API_BASE_URL}/log-notes/`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Failed to add log note");
+
+      setContent("");
+      setFiles([]);
+      onLogAdded();
+      toast.success("Log note added successfully");
+    } catch (error) {
+      console.error("Error adding log note:", error);
+      toast.error("Failed to add log note");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="flex items-start gap-4">
+        <Avatar className="h-10 w-10">
+          <AvatarImage src="/default-avatar.png" />
+          <AvatarFallback>U</AvatarFallback>
+        </Avatar>
+        <div className="flex-1 space-y-2">
+          <Textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Add a log note..."
+            className="min-h-[100px]"
+          />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                multiple
+                onChange={(e) => setFiles(Array.from(e.target.files || []))}
+                className="hidden"
+                id="log-attachments"
+              />
+              <label
+                htmlFor="log-attachments"
+                className="cursor-pointer text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              >
+                <Paperclip className="h-4 w-4" />
+                Attach files
+              </label>
+              {files.length > 0 && (
+                <span className="text-sm text-gray-500">
+                  {files.length} file(s) selected
+                </span>
+              )}
+            </div>
+            <Button type="submit" disabled={isSubmitting || !content.trim()}>
+              Log
+            </Button>
+          </div>
+        </div>
+      </div>
+    </form>
+  );
+};

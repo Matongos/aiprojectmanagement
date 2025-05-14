@@ -17,6 +17,31 @@ class TaskStageCreate(TaskStageBase):
 class TaskStageUpdate(TaskStageBase):
     pass
 
+class TaskStageWithTasks(TaskStageBase):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    tasks: List[TaskResponse] = []
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
+
+    def dict(self, *args, **kwargs):
+        """Override dict method to properly handle serialization"""
+        d = super().dict(*args, **kwargs)
+        if self.tasks:
+            d['tasks'] = [
+                {
+                    **task.dict(),
+                    'assignee': task.assignee_data if hasattr(task, 'assignee_data') else task.assignee
+                }
+                for task in self.tasks
+            ]
+        return d
+
 class TaskStage(TaskStageBase):
     id: int
     created_at: datetime
@@ -25,10 +50,6 @@ class TaskStage(TaskStageBase):
 
     class Config:
         from_attributes = True
-
-class TaskStageWithTasks(TaskStage):
-    """Task stage schema that includes the tasks in the stage"""
-    tasks: List[TaskResponse] = []
-
-    class Config:
-        from_attributes = True 
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        } 
