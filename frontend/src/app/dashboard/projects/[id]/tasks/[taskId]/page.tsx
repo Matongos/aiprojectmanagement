@@ -4,8 +4,8 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, RefreshCw } from "lucide-react";
-import { useEffect, useState, useMemo } from "react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, RefreshCw, ChevronUp } from "lucide-react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { API_BASE_URL } from "@/lib/constants";
@@ -137,6 +137,7 @@ interface TaskUpdateFields {
   assigned_to?: number | null;
   state?: TaskState;
   description?: string;
+  stage_id?: number;
 }
 
 interface LogNote {
@@ -204,6 +205,7 @@ type FeedItem = LogNote | ActivityItem;
 
 export default function TaskDetails({ params }: TaskDetailsProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   
   // Unwrap params at the very start of the component
   const resolvedParams = React.use(params);
@@ -212,22 +214,23 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // Constants
   const itemsPerPage = 4;
 
-  // Query client setup
-  const queryClient = useQueryClient();
-
   // Auth store
   const { token, checkAuth } = useAuthStore();
 
+  // Add state for log note form
+  const [content, setContent] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Task query with loading and error states
   const { 
-    data: currentTask, 
     isLoading: isLoadingTask, 
     error: taskError,
     refetch: refetchTask 
   } = useQuery({
-    queryKey: ['task', resolvedParams.taskId],
+    queryKey: ['task', taskId],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -236,7 +239,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       if (!response.ok) throw new Error('Failed to fetch task');
       return response.json();
     },
-    enabled: !!token && !!resolvedParams.taskId,
+    enabled: !!token && !!taskId,
   });
 
   // Milestones query with loading state
@@ -375,6 +378,30 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
   // Additional state declarations
   const [showTagDialog, setShowTagDialog] = useState(false);
+  const [isStageChanged, setIsStageChanged] = useState(false);
+  const [newStageId, setNewStageId] = useState<string | null>(null);
+  // Add state for tracking original stage
+  const [originalStageName, setOriginalStageName] = useState<string>("");
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const activityFeedRef = useRef<HTMLDivElement>(null);
+
+  // Add scroll handler to show/hide scroll to latest button
+  const handleActivityScroll = useCallback(() => {
+    if (!activityFeedRef.current) return;
+    
+    const { scrollTop } = activityFeedRef.current;
+    // Show button if scrolled down more than 100px
+    setShowScrollToLatest(scrollTop > 100);
+  }, []);
+
+  // Scroll to latest function
+  const scrollToLatest = useCallback(() => {
+    if (!activityFeedRef.current) return;
+    activityFeedRef.current.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    });
+  }, []);
 
   // Helper function to check if task exists and has required data
   const hasTaskData = () => {
@@ -409,11 +436,17 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // Authentication check effect
   useEffect(() => {
     const validateAuth = async () => {
-      const isAuthenticated = await checkAuth();
-      if (!isAuthenticated) {
-        toast.error("Your session has expired. Please log in again.");
+      try {
+        const isAuthenticated = await checkAuth();
+        if (!isAuthenticated) {
+          toast.error("Your session has expired. Please log in again.");
+          router.push('/auth/login');
+          return;
+        }
+      } catch (error) {
+        console.error("Authentication error:", error);
+        toast.error("Authentication failed. Please log in again.");
         router.push('/auth/login');
-        return;
       }
     };
     validateAuth();
@@ -485,20 +518,29 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       if (!token || !resolvedParams.taskId) return;
       
       try {
+        console.log('Fetching log notes for task:', resolvedParams.taskId);
         const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams.taskId}`, {
           headers: {
-            Authorization: `Bearer ${token}`,
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
           },
+          credentials: 'include',
+          mode: 'cors'
         });
         
-        if (response.ok) {
-          const data = await response.json();
-          setLogNotes(data);
-        } else {
-          console.error("Failed to fetch log notes");
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          console.error('Error response from server:', errorData);
+          throw new Error(errorData?.detail || 'Failed to fetch log notes');
         }
+        
+          const data = await response.json();
+        console.log('Log notes fetched successfully:', data);
+          setLogNotes(data);
       } catch (error) {
-        console.error("Error fetching log notes:", error);
+        console.error('Error fetching log notes:', error);
+        setError('Failed to fetch log notes');
       }
     };
 
@@ -637,9 +679,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       isNameChanged || 
       isDeadlineChanged || 
       isAssigneesChanged ||
-      isStatusChanged
+      isStatusChanged ||
+      isStageChanged
     );
-  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged]);
+  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged, isStageChanged]);
 
   // Update currentStatus when task details are loaded
   useEffect(() => {
@@ -669,7 +712,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
       <Button variant="outline" size="sm" className="whitespace-nowrap">Send message</Button>
-      <Button variant="outline" size="sm" className="whitespace-nowrap">Log note</Button>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="flex items-center gap-2 whitespace-nowrap"
+        onClick={() => setShowLogForm(true)}
+      >
+        <Pencil className="w-4 h-4" />
+        Log note
+      </Button>
       <Button variant="outline" size="sm" className="whitespace-nowrap">Activities</Button>
       <Button 
         variant="outline" 
@@ -684,27 +735,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   );
 
   // Handle stage change
-  const handleStageChange = async (stageId: number) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}/stage`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ stage_id: stageId.toString() }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update task stage');
-      }
-
+  const handleStageChange = (stageId: number) => {
+    // Store the original stage name before changing
+    const currentStageName = stages.find((s: TaskStage) => s.id.toString() === currentStage)?.name || "Unknown Stage";
+    setOriginalStageName(currentStageName);
+    
+    setNewStageId(stageId.toString());
+    setIsStageChanged(true);
       setCurrentStage(stageId.toString());
-      toast.success('Task stage updated successfully');
-    } catch (error) {
-      console.error('Error updating task stage:', error);
-      toast.error('Failed to update task stage');
-    }
   };
 
   // Type-safe filter functions
@@ -860,7 +898,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         updatedFields.state = currentStatus;
       }
 
-      const response = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
+      // First update the task details
+      const taskResponse = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -869,33 +908,147 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         body: JSON.stringify(updatedFields),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
+      if (!taskResponse.ok) {
+        const errorData = await taskResponse.json();
         throw new Error(errorData.detail || 'Failed to update task');
       }
 
-      const updatedTask = await response.json();
-      setDescription(updatedTask.description || '');
+      // If stage was changed, update the stage
+      if (isStageChanged && newStageId) {
+        try {
+          // Validate token first
+          const isAuthenticated = await checkAuth();
+          if (!isAuthenticated) {
+            toast.error("Session expired. Please log in again.");
+            router.push('/auth/login');
+            return;
+          }
 
-      // Reset change flags
+          // Get the new stage name
+          const newStage = stages.find((s: TaskStage) => s.id.toString() === newStageId)?.name || 'Unknown Stage';
+
+          console.log('Moving task to new stage:', {
+            taskId: resolvedParams.taskId,
+            newStageId,
+            fromStage: originalStageName,
+            toStage: newStage
+          });
+
+          // Use the stages endpoint to move the task
+          const stageResponse = await fetch(`${API_BASE_URL}/stages/${newStageId}/tasks/${resolvedParams.taskId}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            }
+          });
+
+          console.log('Stage update response status:', stageResponse.status);
+          
+          let responseData;
+          try {
+            responseData = await stageResponse.json();
+            console.log('Stage update response data:', responseData);
+          } catch (e) {
+            console.error('Error parsing response:', e);
+            responseData = { detail: 'Failed to parse server response' };
+          }
+
+          if (!stageResponse.ok) {
+            let errorMessage = 'Failed to update task stage';
+            
+            if (responseData) {
+              if (typeof responseData.detail === 'string') {
+                errorMessage = responseData.detail;
+              } else if (Array.isArray(responseData.detail)) {
+                errorMessage = responseData.detail.map((err: any) => err.msg || err.message || String(err)).join(', ');
+              } else if (typeof responseData === 'object') {
+                errorMessage = Object.values(responseData).map(val => String(val)).join(', ');
+              }
+            }
+            
+            throw new Error(errorMessage);
+          }
+
+          // Create activity log for stage change
+          const activityResponse = await fetch(`${API_BASE_URL}/activities/`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              task_id: Number(resolvedParams.taskId),
+              project_id: Number(id),
+              activity_type: 'task_update',
+              description: `Changed task stage from "${originalStageName}" to "${newStage}"`,
+              user_id: useAuthStore.getState().user?.id,
+              created_at: new Date().toISOString()
+            })
+          });
+
+          if (!activityResponse.ok) {
+            const activityError = await activityResponse.json().catch(() => null);
+            console.error('Failed to create activity log:', activityError);
+          } else {
+            console.log('Activity log created successfully for stage change');
+          }
+
+          // Update local state
+          setCurrentStage(newStageId);
+          setOriginalStageName(""); // Reset the original stage name
+          
+          // Reset stage change flag
+          setIsStageChanged(false);
+          setNewStageId(null);
+
+          // Refresh all relevant data
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['stages', id] }),
+            queryClient.invalidateQueries({ queryKey: ['tasks', resolvedParams.taskId] }),
+            queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
+            queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
+            queryClient.invalidateQueries({ queryKey: ['tags'] })
+          ]);
+          
+          toast.success('Task stage updated successfully');
+        } catch (error) {
+          console.error('Stage update error:', error);
+          
+          // Check if it's an authentication error
+          if (error instanceof Error && error.message.toLowerCase().includes('unauthorized')) {
+            toast.error("Session expired. Please log in again.");
+            router.push('/auth/login');
+            return;
+          }
+          
+          toast.error(error instanceof Error ? error.message : 'Failed to update task stage');
+          throw error;
+        }
+      }
+
+      // Reset all change flags
       setIsNameChanged(false);
       setIsDeadlineChanged(false);
       setIsAssigneesChanged(false);
       setIsDescriptionChanged(false);
       setIsStatusChanged(false);
+      setIsStageChanged(false);
+      setNewStageId(null);
 
       // Refresh data
       await Promise.all([
         refetchTask(),
         refetchActivities(),
         queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] })
+        queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['stages', id] })
       ]);
 
       toast.success('Task updated successfully');
     } catch (error) {
       console.error('Error updating task:', error);
-      toast.error('Failed to update task');
+      toast.error(error instanceof Error ? error.message : 'Failed to update task');
     }
   };
 
@@ -1742,14 +1895,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           <div className="hidden lg:block">
             {actionButtons}
           </div>
-            </div>
-          </div>
+        </div>
+      </div>
 
       {/* Main Content */}
       <div className="container mx-auto px-6">
-        <div className="flex flex-col lg:flex-row gap-6">
+        <div className="activity-feed-layout">
           {/* Main Content Area */}
-          <div className="flex-grow order-1 lg:order-1">
+          <div className="activity-feed-main">
             <div className="bg-white rounded-lg shadow p-6">
               {/* Task Header */}
               <div className="flex items-center justify-between mb-6">
@@ -2010,277 +2163,223 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
             </div>
           </div>
 
-          {/* Action Buttons and Activity Feed for Mobile */}
-          <div className="lg:w-80 order-2 lg:order-2">
+          {/* Activity Feed */}
+          <div className="activity-feed-aside">
             {/* Mobile Action Buttons */}
             <div className="lg:hidden mb-4">
               {actionButtons}
             </div>
 
-            {/* Activity Feed */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between mb-4">
+            <div className="activity-feed-container bg-white rounded-lg shadow">
+              <div className="p-4 border-b">
                 <h3 className="font-medium text-lg">Activity Feed</h3>
               </div>
 
-              {/* Comment Input Section */}
-              {showCommentInput && (
-                <div className="mb-4 bg-gray-50 rounded-lg p-3">
-                  <div className="flex items-start gap-3">
-                    <Avatar className="w-8 h-8">
-                      <AvatarImage 
-                        src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'}
-                        alt={useAuthStore.getState().user?.full_name || 'User'}
-                      />
-                      <AvatarFallback>
-                        {useAuthStore.getState().user?.full_name?.charAt(0) || 
-                         useAuthStore.getState().user?.username?.charAt(0) || 
-                         'U'}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <div className="relative">
-                        <textarea
-                          className="w-full min-h-[100px] p-3 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                          placeholder="Add a comment here..."
-                          value={commentText}
-                          onChange={(e) => setCommentText(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                              e.preventDefault();
-                              handleSendComment();
-                            }
-                          }}
-                        />
-                        <div className="absolute bottom-2 right-2 flex items-center gap-2">
-                          <button
-                            type="button"
-                            className="text-gray-400 hover:text-gray-600"
-                            onClick={() => {/* Add emoji picker functionality */}}
-                          >
-                            😊
-                          </button>
-                          <button
-                            type="button"
-                            className="text-gray-400 hover:text-gray-600"
-                            onClick={() => {/* Add attachment functionality */}}
-                          >
-                            📎
-                          </button>
-                        </div>
+              {/* Activity Feed Content */}
+              <div 
+                ref={activityFeedRef}
+                onScroll={handleActivityScroll}
+                className="activity-feed-scroll overflow-hidden hover:overflow-y-auto p-4 relative"
+              >
+                {showScrollToLatest && (
+                  <div className="scroll-to-latest-enter-active">
+                    <Button
+                      onClick={scrollToLatest}
+                      className="fixed bottom-8 right-8 bg-white/90 backdrop-blur-sm shadow-lg rounded-full p-2 hover:bg-blue-50 hover:text-blue-600 transition-all duration-200 z-50 group"
+                      size="icon"
+                      variant="outline"
+                    >
+                      <div className="absolute -top-8 right-0 bg-gray-800 text-white text-xs py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+                        Scroll to latest
                       </div>
-                      <div className="flex items-center justify-between mt-2">
-                        <div className="text-xs text-gray-500">
-                          Press Ctrl+Enter to send
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setShowCommentInput(false);
-                              setCommentText('');
-                            }}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            variant="default"
-                            size="sm"
-                            onClick={handleSendComment}
-                            disabled={!commentText.trim()}
-                          >
-                            Comment
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
+                      <ChevronUp className="h-4 w-4" />
+                    </Button>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Existing Activity Feed Content */}
-              {isLoadingActivities && !activitiesData ? (
-                <div className="flex justify-center py-4">
-                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
-                </div>
-              ) : Object.entries(groupedActivities).length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-4">
-                  No activities recorded yet
-                </p>
-              ) : (
-                Object.entries(groupedActivities).map(([date, dateActivities]: [string, Activity[]]) => (
-                  <div key={date} className="mb-6">
-                    <div className="flex items-center mb-3">
-                      <h3 className="text-sm font-medium text-gray-500">
-                        {date === new Date().toLocaleDateString() ? 'Today' : date}
-                      </h3>
-                      <div className="flex-1 ml-3 border-t border-gray-200" />
-                    </div>
+                {isLoadingActivities && !activitiesData ? (
+                  <div className="flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
+                  </div>
+                ) : Object.entries(groupedActivities).length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">
+                    No activities recorded yet
+                  </p>
+                ) : (
+                  Object.entries(groupedActivities).map(([date, dateActivities]: [string, Activity[]]) => (
+                    <div key={date} className="mb-6 last:mb-0">
+                      <div className="flex items-center mb-3 sticky top-0 bg-white z-10 py-2">
+                        <h3 className="text-sm font-medium text-gray-500 whitespace-nowrap">
+                          {date === new Date().toLocaleDateString() ? 'Today' : date}
+                        </h3>
+                        <div className="flex-1 ml-3 border-t border-gray-200" />
+                      </div>
 
-                    <div className="space-y-4">
-                      {dateActivities.map((activity: Activity) => (
-                        <div key={activity.uniqueId} className="flex items-start gap-3">
-                          <Avatar className="w-8 h-8">
-                            <AvatarImage 
-                              src={activity.user?.profile_image_url || '/default-avatar.png'} 
-                              alt={activity.user?.full_name || 'User'} 
-                            />
-                            <AvatarFallback>
-                              {activity.user?.full_name?.charAt(0) || 
-                               activity.user?.username?.charAt(0) || 
-                               'U'}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className={`flex-1 min-w-0 rounded-lg p-3 ${
-                            activity.activity_type === 'comment' ? 'bg-blue-50/50' :
-                            activity.description.toLowerCase().includes('status') ? 'bg-purple-50/50' :
-                            activity.description.toLowerCase().includes('deadline') ? 'bg-amber-50/50' :
-                            activity.description.toLowerCase().includes('title') ? 'bg-emerald-50/50' :
-                            'bg-gray-50/50'
-                          }`}>
-                            <div className="flex items-baseline justify-between">
-                              <span className="text-sm font-medium text-gray-700 truncate">
-                                {activity.user?.full_name || activity.user?.username || 'Unknown User'}
-                              </span>
-                              <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-                                {new Date(activity.created_at).toLocaleTimeString([], { 
-                                  hour: '2-digit', 
-                                  minute: '2-digit' 
-                                })}
-                              </span>
-                            </div>
-                            <div className="mt-1">
-                              {activity.activity_type === 'task_update' && (
-                                <div className="text-sm">
-                                  {activity.description.includes('→') ? (
-                                    <div className="space-y-2">
-                                      {activity.description.toLowerCase().includes('status') ? (
-                                        <>
-                                          <div className="text-gray-500 text-xs">
-                                            changed status from
-                                          </div>
-                                          <div className="flex items-center gap-2">
-                                            <span className={`px-2 py-0.5 rounded-full text-xs ${
-                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
-                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
-                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
-                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
-                                              activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
-                                              'bg-gray-100 text-gray-800'
-                                            }`}>
-                                              {activity.description.split('→')[0].split(':')[1].trim()}
-                                            </span>
-                                            <ChevronRight className="h-3 w-3 text-gray-400" />
-                                            <span className={`px-2 py-0.5 rounded-full text-xs ${
-                                              activity.description.split('→')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
-                                              activity.description.split('→')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
-                                              activity.description.split('→')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
-                                              activity.description.split('→')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
-                                              activity.description.split('→')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
-                                              'bg-gray-100 text-gray-800'
-                                            }`}>
-                                              {activity.description.split('→')[1].trim()}
-                                            </span>
-                                          </div>
-                                        </>
-                                      ) : activity.description.toLowerCase().includes('deadline') ? (
-                                        <>
-                                          <div className="text-gray-500 text-xs">
-                                            changed deadline from
-                                          </div>
-                                          <div className="flex items-center gap-2 text-xs">
-                                            <span className="text-gray-700">
-                                              {(() => {
-                                                try {
-                                                  const previousDate = activity.description.split('→')[0].split('Deadline:')[1].trim();
-                                                  return previousDate === 'None' ? 'Not set' : new Date(previousDate).toLocaleString('en-US', {
-                                                    year: '2-digit',
-                                                    month: 'numeric',
-                                                    day: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                    hour12: true
-                                                  });
-                                                } catch (e) {
-                                                  console.error('Error parsing old date:', e);
-                                                  return 'Invalid date';
-                                                }
-                                              })()}
-                                            </span>
-                                            <ChevronRight className="h-3 w-3 text-gray-400" />
-                                            <span className="text-gray-700">
-                                              {(() => {
-                                                try {
-                                                  const updatedDate = activity.description.split('→')[1].trim();
-                                                  return updatedDate === 'None' ? 'Not set' : new Date(updatedDate).toLocaleString('en-US', {
-                                                    year: '2-digit',
-                                                    month: 'numeric',
-                                                    day: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                    hour12: true
-                                                  });
-                                                } catch (e) {
-                                                  console.error('Error parsing new date:', e);
-                                                  return 'Invalid date';
-                                                }
-                                              })()}
-                                            </span>
-                                          </div>
-                                        </>
-                                      ) : activity.description.toLowerCase().includes('title') ? (
-                                        <>
-                                          <div className="text-gray-500 text-xs">
-                                            changed title from
-                                          </div>
-                                          <div className="flex items-center gap-2 text-xs">
-                                            <span className="text-gray-700">
-                                              {activity.description.split('→')[0].split(':')[1].trim()}
-                                            </span>
-                                            <ChevronRight className="h-3 w-3 text-gray-400" />
-                                            <span className="text-gray-700">
-                                              {activity.description.split('→')[1].trim()}
-                                            </span>
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <div className="text-gray-500 text-xs">
-                                            made changes to
-                                          </div>
-                                          <div className="flex items-center gap-2 text-xs">
-                                            <span className="text-gray-700">
-                                              {activity.description.split('→')[0]}
-                                            </span>
-                                            <ChevronRight className="h-3 w-3 text-gray-400" />
-                                            <span className="text-gray-700">
-                                              {activity.description.split('→')[1]}
-                                            </span>
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <div className="text-gray-700 text-xs">
-                                      {activity.description}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                              {activity.activity_type === 'comment' && (
-                                <div className="text-sm text-gray-700">
-                                  {activity.description}
-                                </div>
-                              )}
+                      <div className="space-y-4">
+                        {dateActivities.map((activity: Activity) => (
+                          <div key={activity.uniqueId} className="flex items-start gap-3 transition-opacity duration-200">
+                            <Avatar className="w-8 h-8 flex-shrink-0">
+                              <AvatarImage 
+                                src={activity.user?.profile_image_url || '/default-avatar.png'} 
+                                alt={activity.user?.full_name || 'User'} 
+                              />
+                              <AvatarFallback>
+                                {activity.user?.full_name?.charAt(0) || 
+                                 activity.user?.username?.charAt(0) || 
+                                 'U'}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className={`flex-1 min-w-0 rounded-lg p-3 ${
+                              activity.activity_type === 'comment' ? 'bg-blue-50' :
+                              activity.description.toLowerCase().includes('stage') ? 'bg-purple-100' :
+                              activity.description.toLowerCase().includes('status') ? 'bg-purple-100' :
+                              activity.description.toLowerCase().includes('deadline') ? 'bg-amber-100' :
+                              activity.description.toLowerCase().includes('title') ? 'bg-emerald-100' :
+                              'bg-gray-100'
+                            }`}>
+                              <div className="flex items-baseline justify-between flex-nowrap">
+                                <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
+                                  {activity.user?.full_name || activity.user?.username || 'Unknown User'}
+                                </span>
+                                <span className="text-xs text-gray-500 whitespace-nowrap ml-3">
+                                  {new Date(activity.created_at).toLocaleTimeString([], { 
+                                    hour: '2-digit', 
+                                    minute: '2-digit' 
+                                  })}
+                                </span>
+                              </div>
+                              <div className="mt-1">
+                                {activity.activity_type === 'task_update' && (
+                                  <div className="text-sm">
+                                    {activity.description.includes('→') ? (
+                                      <div className="space-y-2">
+                                        {activity.description.toLowerCase().includes('status') ? (
+                                          <>
+                                            <div className="text-gray-500 text-xs whitespace-nowrap">
+                                              changed status from
+                                            </div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <span className={`px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${
+                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
+                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
+                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
+                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
+                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
+                                                'bg-gray-100 text-gray-800'
+                                              }`}>
+                                                {activity.description.split('→')[0].split(':')[1].trim()}
+                                              </span>
+                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                                              <span className={`px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${
+                                                activity.description.split('→')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
+                                                activity.description.split('→')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
+                                                activity.description.split('→')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
+                                                activity.description.split('→')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
+                                                activity.description.split('→')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
+                                                'bg-gray-100 text-gray-800'
+                                              }`}>
+                                                {activity.description.split('→')[1].trim()}
+                                              </span>
+                                            </div>
+                                          </>
+                                        ) : activity.description.toLowerCase().includes('deadline') ? (
+                                          <>
+                                            <div className="text-gray-500 text-xs whitespace-nowrap">
+                                              changed deadline from
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs flex-wrap">
+                                              <span className="text-gray-700 whitespace-nowrap">
+                                                {(() => {
+                                                  try {
+                                                    const previousDate = activity.description.split('→')[0].split('Deadline:')[1].trim();
+                                                    return previousDate === 'None' ? 'Not set' : new Date(previousDate).toLocaleString('en-US', {
+                                                      year: '2-digit',
+                                                      month: 'numeric',
+                                                      day: 'numeric',
+                                                      hour: '2-digit',
+                                                      minute: '2-digit',
+                                                      hour12: true
+                                                    });
+                                                  } catch (e) {
+                                                    console.error('Error parsing old date:', e);
+                                                    return 'Invalid date';
+                                                  }
+                                                })()}
+                                              </span>
+                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                                              <span className="text-gray-700 whitespace-nowrap">
+                                                {(() => {
+                                                  try {
+                                                    const updatedDate = activity.description.split('→')[1].trim();
+                                                    return updatedDate === 'None' ? 'Not set' : new Date(updatedDate).toLocaleString('en-US', {
+                                                      year: '2-digit',
+                                                      month: 'numeric',
+                                                      day: 'numeric',
+                                                      hour: '2-digit',
+                                                      minute: '2-digit',
+                                                      hour12: true
+                                                    });
+                                                  } catch (e) {
+                                                    console.error('Error parsing new date:', e);
+                                                    return 'Invalid date';
+                                                  }
+                                                })()}
+                                              </span>
+                                            </div>
+                                          </>
+                                        ) : activity.description.toLowerCase().includes('title') ? (
+                                          <>
+                                            <div className="text-gray-500 text-xs whitespace-nowrap">
+                                              changed title from
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs flex-wrap">
+                                              <span className="text-gray-700">
+                                                {activity.description.split('→')[0].split(':')[1].trim()}
+                                              </span>
+                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                                              <span className="text-gray-700">
+                                                {activity.description.split('→')[1].trim()}
+                                              </span>
+                                            </div>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <div className="text-gray-500 text-xs whitespace-nowrap">
+                                              made changes to
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs flex-wrap">
+                                              <span className="text-gray-700">
+                                                {activity.description.split('→')[0]}
+                                              </span>
+                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                                              <span className="text-gray-700">
+                                                {activity.description.split('→')[1]}
+                                              </span>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="text-gray-700 text-xs">
+                                        {activity.description}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {activity.activity_type === 'comment' && (
+                                  <div className="text-sm text-gray-700">
+                                    {activity.description}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -2295,11 +2394,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       {showLogForm && (
         <div className="mb-6">
           <LogNoteForm
-            taskId={resolvedParams.taskId}
-            onLogAdded={() => {
+            taskId={taskId}
+            onLogAdded={async () => {
               setShowLogForm(false);
-              // Refresh the log notes by refetching the task
-              refetch();
+              // Refresh the task and activities data
+              await Promise.all([
+                refetchTask(),
+                refetchActivities(),
+                queryClient.invalidateQueries({ queryKey: ['activities', taskId] })
+              ]);
             }}
           />
         </div>
@@ -2315,9 +2418,19 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
             variant="outline"
             size="sm"
             onClick={() => setShowLogForm(!showLogForm)}
+            className="flex items-center gap-2"
           >
-            <Pencil className="h-4 w-4 mr-2" />
-            Add Log Note
+            {showLogForm ? (
+              <>
+                <X className="h-4 w-4" />
+                <span>Close</span>
+              </>
+            ) : (
+              <>
+                <Pencil className="h-4 w-4" />
+                <span>Add Log Note</span>
+              </>
+            )}
           </Button>
         </div>
 
@@ -2402,62 +2515,94 @@ const LogNoteForm: React.FC<{ taskId: string; onLogAdded: () => void }> = ({ tas
         body: formData,
       });
 
-      if (!response.ok) throw new Error("Failed to add log note");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.detail || 'Failed to add log note');
+      }
 
       setContent("");
       setFiles([]);
-      onLogAdded();
+      
       toast.success("Log note added successfully");
+      onLogAdded();
     } catch (error) {
-      console.error("Error adding log note:", error);
-      toast.error("Failed to add log note");
+      console.error('Error adding log note:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to add log note');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleCancel = () => {
+    setContent("");
+    setFiles([]);
+    onLogAdded();
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="flex items-start gap-4">
-        <Avatar className="h-10 w-10">
-          <AvatarImage src="/default-avatar.png" />
-          <AvatarFallback>U</AvatarFallback>
-        </Avatar>
-        <div className="flex-1 space-y-2">
-          <Textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="Add a log note..."
-            className="min-h-[100px]"
-          />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <input
-                type="file"
-                multiple
-                onChange={(e) => setFiles(Array.from(e.target.files || []))}
-                className="hidden"
-                id="log-attachments"
-              />
-              <label
-                htmlFor="log-attachments"
-                className="cursor-pointer text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
-              >
-                <Paperclip className="h-4 w-4" />
-                Attach files
-              </label>
-              {files.length > 0 && (
-                <span className="text-sm text-gray-500">
-                  {files.length} file(s) selected
-                </span>
-              )}
+    <div className="bg-white rounded-lg shadow-sm border p-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="flex items-start gap-4">
+          <Avatar className="h-8 w-8 mt-2">
+            <AvatarImage 
+              src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'} 
+              alt={useAuthStore.getState().user?.full_name || 'User'} 
+            />
+            <AvatarFallback>
+              {useAuthStore.getState().user?.full_name?.charAt(0) || 
+               useAuthStore.getState().user?.username?.charAt(0) || 
+               'U'}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 space-y-3">
+            <Textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="Write a log note..."
+              className="min-h-[120px] resize-none focus-visible:ring-1 focus-visible:ring-offset-1"
+            />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  multiple
+                  onChange={(e) => setFiles(Array.from(e.target.files || []))}
+                  className="hidden"
+                  id="log-attachments"
+                />
+                <label
+                  htmlFor="log-attachments"
+                  className="cursor-pointer text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                >
+                  <Paperclip className="h-4 w-4" />
+                  Attach files
+                </label>
+                {files.length > 0 && (
+                  <span className="text-sm text-gray-500">
+                    {files.length} file(s) selected
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  onClick={handleCancel}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={isSubmitting || !content.trim()}
+                  className="bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Log Note
+                </Button>
+              </div>
             </div>
-            <Button type="submit" disabled={isSubmitting || !content.trim()}>
-              Log
-            </Button>
           </div>
         </div>
-      </div>
-    </form>
+      </form>
+    </div>
   );
 };

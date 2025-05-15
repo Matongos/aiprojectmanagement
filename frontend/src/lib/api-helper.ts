@@ -31,17 +31,16 @@ export async function fetchApi<T>(
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
     'Accept': 'application/json',
-    'Origin': typeof window !== 'undefined' ? window.location.origin : '',
     ...options.headers,
   };
 
   try {
-    // Make the request with credentials
+    // Make the request
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       headers,
-      credentials: 'include',
-      mode: 'cors'
+      mode: 'cors',  // Explicitly set CORS mode
+      credentials: 'same-origin'  // Changed from 'include' to 'same-origin'
     });
 
     // Handle redirects for authentication

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -35,12 +35,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://192.168.56.1:3000",
         "http://localhost:8003",
-        "http://192.168.56.1:8003",
         "http://127.0.0.1:3000",
-        "http://127.0.0.1:8003"
-        # Removed wildcard "*" since we're using credentials
+        "http://127.0.0.1:8003",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -69,6 +66,7 @@ app.include_router(permissions.router)
 app.include_router(milestones.router)
 app.include_router(tags.router)
 app.include_router(log_notes.router)
+app.include_router(time_entries.router)
 
 # Add a simplified token endpoint
 @app.post("/token")
