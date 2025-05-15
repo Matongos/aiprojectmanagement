@@ -362,21 +362,42 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
   };
 
   const handleCreateTask = async () => {
-    if (!newTaskTitle.trim() || !currentStageId) return;
+    if (!newTaskTitle.trim()) {
+      toast.error('Task title is required');
+      return;
+    }
+
+    if (!currentStageId) {
+      toast.error('Please select a stage for the task');
+      return;
+    }
+
+    if (!projectId) {
+      toast.error('Project ID is missing');
+      return;
+    }
 
     try {
       const taskData = {
         name: newTaskTitle.trim(),
         description: "",
+        status: "in_progress",
         priority: "normal",
-        state: "draft",
+        date_start: new Date().toISOString(),
+        date_deadline: deadline ? new Date(deadline).toISOString() : null,
+        date_end: null,
+        estimated_hours: 0,
+        tags: "",
+        created_by: user?.id || 0,
+        assigned_to: selectedAssignees.length > 0 ? selectedAssignees[0].id : null,
         project_id: Number(projectId),
         stage_id: currentStageId,
-        assigned_to: selectedAssignees.length > 0 ? selectedAssignees[0].id : null,
-        milestone_id: selectedMilestone,
-        deadline: deadline,
-        planned_hours: 0.0
+        milestone_id: selectedMilestone || null,
+        company_id: null,
+        parent_id: null
       };
+
+      console.log('Creating task with data:', taskData); // Debug log
 
       const response = await fetch(`${API_BASE_URL}/tasks`, {
         method: 'POST',
@@ -390,6 +411,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        console.error('Error response:', errorData); // Debug log
         throw new Error(errorData.detail || 'Failed to create task');
       }
 

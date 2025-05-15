@@ -3,175 +3,58 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from models.task import Task
+from schemas.task import TaskCreate
 
 class TaskService:
     def create_task(
         self,
         db: Session,
-        name: str,
-        description: str,
-        status: str,
-        priority: str,
-        date_start: Optional[datetime],
-        date_deadline: Optional[datetime],
-        date_end: Optional[datetime],
-        estimated_hours: float,
-        tags: str,
-        created_by: int,
-        assigned_to: Optional[int],
-        project_id: int,
-        stage_id: Optional[int] = None,
-        milestone_id: Optional[int] = None,
-        company_id: Optional[int] = None,
-        parent_id: Optional[int] = None,
-        is_recurring: bool = False
-    ) -> Tuple[Dict[str, Any], Optional[str]]:
-        """
-        Create a new task.
+        task_data: TaskCreate,
+        current_user_id: int
+    ) -> Task:
+        """Create a new task with default values for optional fields"""
+        # Convert task data to dict and remove tag_ids
+        task_dict = task_data.dict()
         
-        Args:
-            db: Database session
-            name: Task name
-            description: Task description
-            status: Task status
-            priority: Task priority
-            date_start: Start date
-            date_deadline: Deadline date
-            date_end: End date
-            estimated_hours: Estimated hours
-            tags: Task tags
-            created_by: User ID who created the task
-            assigned_to: User ID assigned to the task
-            project_id: Project ID
-            stage_id: Stage ID
-            milestone_id: Milestone ID
-            company_id: Company ID
-            parent_id: Parent task ID
-            is_recurring: Whether task is recurring
-            
-        Returns:
-            Tuple containing (task_dict, error_message)
-        """
-        try:
-            # Validate project exists
-            check_query = text("SELECT id FROM projects WHERE id = :project_id")
-            project = db.execute(check_query, {"project_id": project_id}).fetchone()
-            if not project:
-                return None, f"Project with ID {project_id} not found"
-            
-            # Validate stage exists if provided
-            if stage_id:
-                check_query = text("SELECT id FROM task_stages WHERE id = :stage_id")
-                stage = db.execute(check_query, {"stage_id": stage_id}).fetchone()
-                if not stage:
-                    return None, f"Stage with ID {stage_id} not found"
-            
-            # Validate milestone exists if provided
-            if milestone_id:
-                check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
-                milestone = db.execute(check_query, {"milestone_id": milestone_id}).fetchone()
-                if not milestone:
-                    return None, f"Milestone with ID {milestone_id} not found"
-            
-            # Validate company exists if provided
-            if company_id:
-                check_query = text("SELECT id FROM companies WHERE id = :company_id")
-                company = db.execute(check_query, {"company_id": company_id}).fetchone()
-                if not company:
-                    return None, f"Company with ID {company_id} not found"
-            
-            # Validate parent task exists if provided
-            if parent_id:
-                check_query = text("SELECT id FROM tasks WHERE id = :parent_id")
-                parent = db.execute(check_query, {"parent_id": parent_id}).fetchone()
-                if not parent:
-                    return None, f"Parent task with ID {parent_id} not found"
-            
-            # Insert task
-            insert_query = text("""
-            INSERT INTO tasks (
-                name, description, status, priority, date_start, date_deadline, date_end,
-                estimated_hours, tags, created_by, assigned_to, project_id, stage_id,
-                milestone_id, company_id, parent_id, is_recurring, created_at, updated_at
-            ) 
-            VALUES (
-                :name, :description, :status, :priority, :date_start, :date_deadline, :date_end,
-                :estimated_hours, :tags, :created_by, :assigned_to, :project_id, :stage_id,
-                :milestone_id, :company_id, :parent_id, :is_recurring, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-            )
-            RETURNING *
-            """)
-            
-            result = db.execute(
-                insert_query, 
-                {
-                    "name": name,
-                    "description": description,
-                    "status": status,
-                    "priority": priority,
-                    "date_start": date_start,
-                    "date_deadline": date_deadline,
-                    "date_end": date_end,
-                    "estimated_hours": estimated_hours,
-                    "tags": tags,
-                    "created_by": created_by,
-                    "assigned_to": assigned_to,
-                    "project_id": project_id,
-                    "stage_id": stage_id,
-                    "milestone_id": milestone_id,
-                    "company_id": company_id,
-                    "parent_id": parent_id,
-                    "is_recurring": is_recurring
-                }
-            ).fetchone()
-            
+        # Remove fields that are not in the Task model
+        tag_ids = task_dict.pop('tag_ids', [])
+        task_dict.pop('status', None)
+        task_dict.pop('estimated_hours', None)
+        task_dict.pop('tags', None)  # Remove tags string field
+        task_dict.pop('is_recurring', None)  # Remove is_recurring field
+        
+        # Set all default values
+        task_dict.update({
+            "created_by": current_user_id,
+            "state": "in_progress",  # Default state
+            "priority": "normal",    # Default priority
+            "description": "",       # Default empty description
+            "planned_hours": 0.0,    # Default planned hours
+            "progress": 0.0,         # Default progress
+            "parent_id": None,       # Default no parent
+            "assigned_to": None,     # Default no assignee
+            "milestone_id": None,    # Default no milestone
+            "company_id": None,      # Default no company
+            "start_date": None,      # Default no start date
+            "end_date": None,        # Default no end date
+            "deadline": None         # Default no deadline
+        })
+
+        # Create task with all fields
+        task = Task(**task_dict)
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+
+        # Add tags if tag_ids were provided
+        if tag_ids:
+            from models.tag import Tag
+            tags = db.query(Tag).filter(Tag.id.in_(tag_ids)).all()
+            task.tags = tags  # Set tags directly instead of extending
             db.commit()
-            
-            # Get assignee info if task is assigned
-            assignee_data = None
-            if assigned_to:
-                user_query = text("""
-                SELECT id, username, full_name, profile_image_url
-                FROM users
-                WHERE id = :user_id
-                """)
-                
-                assignee = db.execute(user_query, {"user_id": assigned_to}).fetchone()
-                if assignee:
-                    assignee_data = {
-                        "id": assignee[0],
-                        "username": assignee[1],
-                        "full_name": assignee[2],
-                        "profile_image_url": assignee[3]
-                    }
-            
-            task = {
-                "id": result[0],
-                "name": result[1],
-                "description": result[2],
-                "status": result[3],
-                "priority": result[4],
-                "date_start": result[5],
-                "date_deadline": result[6],
-                "date_end": result[7],
-                "estimated_hours": result[8],
-                "assigned_to": result[9],
-                "project_id": result[10],
-                "stage_id": result[11],
-                "milestone_id": result[12],
-                "company_id": result[13],
-                "parent_id": result[14],
-                "is_recurring": result[15],
-                "created_at": result[16],
-                "updated_at": result[17],
-                "assignee": assignee_data
-            }
-            
-            return task, None
-        
-        except Exception as e:
-            db.rollback()
-            return None, f"Error creating task: {str(e)}"
+            db.refresh(task)
+
+        return task
 
 def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     """

@@ -39,43 +39,63 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new task with required fields: name, project_id, and stage_id."""
+    """Create a new task with default values for optional fields"""
     try:
         # Convert 0 values to None for foreign keys
-        task_data = task.model_dump()
-        if task_data.get('assigned_to', 0) == 0:
-            task_data['assigned_to'] = None
-        if task_data.get('parent_id', 0) == 0:
-            task_data['parent_id'] = None
+        if task.assigned_to == 0:
+            task.assigned_to = None
+        if task.parent_id == 0:
+            task.parent_id = None
+        if task.milestone_id == 0:
+            task.milestone_id = None
+        if task.company_id == 0:
+            task.company_id = None
 
-        # Validate that the project exists
+        # Validate project exists
         project = db.query(Project).filter(Project.id == task.project_id).first()
         if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project with ID {task.project_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Project with ID {task.project_id} not found")
 
-        # Validate that the stage exists and belongs to the project
-        stage = db.query(TaskStage).filter(
-            TaskStage.id == task.stage_id,
-            TaskStage.project_id == task.project_id
-        ).first()
-        
+        # Validate stage exists
+        stage = db.query(TaskStage).filter(TaskStage.id == task.stage_id).first()
         if not stage:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Stage with ID {task.stage_id} not found in project {task.project_id}"
-            )
+            raise HTTPException(status_code=404, detail=f"Stage with ID {task.stage_id} not found")
 
-        # Create the task with modified data
-        created_task, error = task_service.create_task(db, task_data, current_user["id"])
-        
-        if error:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
-        
-        # Ensure proper serialization
-        task_dict = TaskSchema.model_validate(created_task).model_dump()
+        # Create task using service
+        created_task = task_service.create_task(db, task, current_user["id"])
+
+        # Create base task dictionary for serialization
+        task_dict = {
+            "id": created_task.id,
+            "name": created_task.name,
+            "description": created_task.description,
+            "priority": created_task.priority,
+            "state": created_task.state,
+            "project_id": created_task.project_id,
+            "stage_id": created_task.stage_id,
+            "assigned_to": created_task.assigned_to,
+            "parent_id": created_task.parent_id,
+            "milestone_id": created_task.milestone_id,
+            "company_id": created_task.company_id,
+            "start_date": created_task.start_date,
+            "end_date": created_task.end_date,
+            "deadline": created_task.deadline,
+            "planned_hours": created_task.planned_hours,
+            "created_by": created_task.created_by,
+            "progress": created_task.progress if created_task.progress is not None else 0.0,
+            "created_at": created_task.created_at,
+            "updated_at": created_task.updated_at,
+            "date_last_stage_update": created_task.date_last_stage_update,
+            "assignee": None,
+            "milestone": None,
+            "company": None,
+            "depends_on_ids": [],
+            "subtask_ids": [],
+            "attachments": [],
+            "tags": []
+        }
+
+        # Handle assignee
         if hasattr(created_task, 'assignee') and created_task.assignee:
             task_dict['assignee'] = {
                 'id': created_task.assignee.id,
@@ -84,15 +104,41 @@ def create_task(
                 'full_name': created_task.assignee.full_name,
                 'profile_image_url': getattr(created_task.assignee, 'profile_image_url', None)
             }
+
+        # Handle milestone
+        if hasattr(created_task, 'milestone') and created_task.milestone:
+            task_dict['milestone'] = {
+                'id': created_task.milestone.id,
+                'name': created_task.milestone.name,
+                'description': created_task.milestone.description,
+                'due_date': created_task.milestone.due_date.isoformat() if created_task.milestone.due_date else None,
+                'is_completed': created_task.milestone.is_completed,
+                'is_active': getattr(created_task.milestone, 'is_active', True)
+            }
+
+        # Handle company
+        if hasattr(created_task, 'company') and created_task.company:
+            task_dict['company'] = {
+                'id': created_task.company.id,
+                'name': created_task.company.name
+            }
+
+        # Handle tags
+        if hasattr(created_task, 'tags') and created_task.tags:
+            task_dict['tags'] = [
+                {
+                    'id': tag.id,
+                    'name': tag.name,
+                    'color': tag.color,
+                    'active': tag.active
+                }
+                for tag in created_task.tags
+            ]
+
         return TaskSchema.model_validate(task_dict)
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating task: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(

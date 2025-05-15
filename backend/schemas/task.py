@@ -62,11 +62,16 @@ class TaskBase(BaseModel):
     assigned_to: Optional[int] = Field(default=None, description="Assignee user ID")
     milestone_id: Optional[int] = Field(default=None, description="Milestone ID")
     company_id: Optional[int] = Field(default=None, description="Company ID")
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    deadline: Optional[datetime] = None
-    planned_hours: Optional[float] = Field(default=0.0, ge=0)
+    start_date: Optional[datetime] = Field(default=None, description="Task start date")
+    end_date: Optional[datetime] = Field(default=None, description="Task end date")
+    deadline: Optional[datetime] = Field(default=None, description="Task deadline")
+    planned_hours: Optional[float] = Field(default=0.0, ge=0, description="Planned hours for the task")
     tag_ids: Optional[List[int]] = Field(default=[], description="List of tag IDs")
+    status: Optional[str] = Field(default="in_progress", description="Task status")
+    estimated_hours: Optional[float] = Field(default=0.0, ge=0, description="Estimated hours for the task")
+    tags: Optional[str] = Field(default="", description="Task tags")
+    created_by: Optional[int] = Field(default=None, description="User ID who created the task")
+    is_recurring: Optional[bool] = Field(default=False, description="Whether task is recurring")
 
 class TaskCreate(TaskBase):
     """Task creation schema with required fields:
