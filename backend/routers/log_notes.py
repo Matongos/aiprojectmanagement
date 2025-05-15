@@ -18,7 +18,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure upload directory exists
 async def create_log_note(
     content: str = Form(...),
     task_id: int = Form(...),
-    files: List[UploadFile] = File(None),  # Changed to use File(None) for optional files
+    files: Optional[List[UploadFile]] = File(default=None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):

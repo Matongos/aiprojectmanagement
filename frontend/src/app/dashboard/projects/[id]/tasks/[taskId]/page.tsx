@@ -4,7 +4,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, RefreshCw, ChevronUp } from "lucide-react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, ChevronUp } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -38,8 +38,6 @@ import "@/styles/tags.css";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useRouter } from "next/navigation";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 
 interface Stage {
@@ -70,6 +68,13 @@ interface User {
   profile_image_url: string | null;
 }
 
+interface ActivityUser {
+  id: number;
+  username: string;
+  full_name: string;
+  profile_image_url: string | null;
+}
+
 interface Tag {
   id: number;
   name: string;
@@ -96,23 +101,29 @@ interface Task {
   comments: Comment[];
 }
 
-type ActivityType = 'task_update' | 'comment';
+type ActivityType = 'task_update' | 'comment' | 'log_note';
 
 interface Activity {
   id: number;
   activity_type: ActivityType;
   description: string;
   created_at: string;
+  user: ActivityUser;
   user_id?: number;
-  user: User;
   uniqueId?: string;
+  attachments?: Array<{
+    id: number;
+    filename: string;
+    original_filename: string;
+    content_type: string;
+  }>;
 }
 
 interface Comment {
   id: number;
   content: string;
   created_at: string;
-  user: User;
+  user: ActivityUser;
 }
 
 interface TaskDetailsProps {
@@ -325,8 +336,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       return response.json();
     },
     enabled: !!token && !!resolvedParams.taskId,
-    refetchInterval: 2000, // Refetch every 2 seconds
+    refetchInterval: 5000, // Refetch every 5 seconds
     refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    staleTime: 0 // Consider data stale immediately
   });
 
   // Derived state
@@ -601,11 +614,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Update the groupedActivities calculation
   const groupedActivities = useMemo(() => {
-    if (!taskActivities || !comments) return {};
+    if (!taskActivities || !comments || !activitiesData) return {};
     
-    // Combine activities and comments into a single array with unique keys
-    const allItems: Activity[] = [
-      ...(taskActivities || []).map(activity => ({
+    // Combine activities, comments, and log notes into a single array with unique keys
+    const allItems = [
+      ...(taskActivities || []).map((activity: Activity) => ({
         ...activity,
         uniqueId: `activity-${activity.id}`,
         user: activity.user || {
@@ -627,6 +640,17 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           full_name: comment.user.full_name,
           profile_image_url: comment.user.profile_image_url
         }
+      })),
+      ...(activitiesData || []).filter((activity: Activity) => activity.activity_type === 'log_note').map((logNote: Activity) => ({
+        ...logNote,
+        uniqueId: `log-${logNote.id}`,
+        activity_type: 'log_note',
+        user: logNote.user || {
+          id: logNote.user_id || 0,
+          username: 'Unknown',
+          full_name: 'Unknown User',
+          profile_image_url: null
+        }
       }))
     ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -639,7 +663,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       groups[date].push(item);
       return groups;
     }, {});
-  }, [taskActivities, comments]);
+  }, [taskActivities, comments, activitiesData]);
 
   // Update effects to use task state instead of taskDetails
   useEffect(() => {
@@ -726,7 +750,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         variant="outline" 
         size="sm" 
         className="flex items-center gap-2 whitespace-nowrap"
-        onClick={() => setShowCommentInput(true)}
+        onClick={() => setShowCommentInput(prev => !prev)}
       >
         <MessageSquare className="w-4 h-4" />
         Comments
@@ -881,22 +905,40 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
     try {
       const updatedFields: TaskUpdateFields = {};
+      const optimisticActivity = {
+        id: Date.now(), // Temporary ID
+        activity_type: 'task_update' as const,
+        description: '',
+        created_at: new Date().toISOString(),
+        user: useAuthStore.getState().user,
+        uniqueId: `temp-${Date.now()}`
+      };
 
       if (isNameChanged) {
         updatedFields.name = taskName;
+        optimisticActivity.description = `Changed task title from "${task?.name}" to "${taskName}"`;
       }
       if (isDeadlineChanged) {
         updatedFields.deadline = deadline ? new Date(deadline).toISOString() : null;
+        optimisticActivity.description = `Updated task deadline to ${deadline ? new Date(deadline).toLocaleString() : 'none'}`;
       }
       if (isAssigneesChanged) {
         updatedFields.assigned_to = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
+        optimisticActivity.description = `Updated task assignees`;
       }
       if (isDescriptionChanged) {
         updatedFields.description = description;
+        optimisticActivity.description = `Updated task description`;
       }
       if (isStatusChanged) {
         updatedFields.state = currentStatus;
+        optimisticActivity.description = `Changed task status to ${currentStatus}`;
       }
+
+      // Optimistically update the activities cache
+      queryClient.setQueryData(['activities', resolvedParams.taskId], (old: Activity[] = []) => {
+        return [optimisticActivity, ...old];
+      });
 
       // First update the task details
       const taskResponse = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
@@ -913,7 +955,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         throw new Error(errorData.detail || 'Failed to update task');
       }
 
-      // If stage was changed, update the stage
+      // If stage was changed, handle stage update
       if (isStageChanged && newStageId) {
         try {
           // Validate token first
@@ -1036,17 +1078,18 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setIsStageChanged(false);
       setNewStageId(null);
 
-      // Refresh data
+      // Refresh all data
       await Promise.all([
-        refetchTask(),
-        refetchActivities(),
-        queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['task', resolvedParams.taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] }),
         queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
         queryClient.invalidateQueries({ queryKey: ['stages', id] })
       ]);
 
       toast.success('Task updated successfully');
     } catch (error) {
+      // Revert optimistic update on error
+      await queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] });
       console.error('Error updating task:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to update task');
     }
@@ -1074,6 +1117,21 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const handleSendComment = async () => {
     if (!commentText.trim()) return;
 
+    // Create optimistic comment
+    const optimisticComment = {
+      id: Date.now(),
+      activity_type: 'comment' as const,
+      description: commentText,
+      created_at: new Date().toISOString(),
+      user: useAuthStore.getState().user,
+      uniqueId: `temp-comment-${Date.now()}`
+    };
+
+    // Optimistically update the activities
+    queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
+      return [optimisticComment, ...old];
+    });
+
     try {
       const response = await fetch(`${API_BASE_URL}/comments/`, {
         method: 'POST',
@@ -1100,18 +1158,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
       // Refresh both task activities and comments
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ['task-activities', taskId],
-          exact: true
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['task-comments', taskId],
-          exact: true
-        })
+        queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['task-comments', taskId] })
       ]);
 
       toast.success('Comment added successfully');
     } catch (error) {
+      // Revert optimistic update on error
+      await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
       console.error('Error sending comment:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to add comment');
     }
@@ -1806,6 +1860,278 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   if (loading) return <div>Loading...</div>;
   if (!task) return <div>Task not found</div>;
 
+  // Add this before the activity feed content
+  const CommentInput = () => {
+    const [localCommentText, setLocalCommentText] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleSubmitComment = async () => {
+      if (!localCommentText.trim() || isSubmitting) return;
+
+      setIsSubmitting(true);
+      try {
+        // Create optimistic comment
+        const optimisticComment = {
+          id: Date.now(),
+          activity_type: 'comment' as const,
+          description: localCommentText,
+          created_at: new Date().toISOString(),
+          user: useAuthStore.getState().user,
+          uniqueId: `temp-comment-${Date.now()}`
+        };
+
+        // Optimistically update the activities
+        queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
+          return [optimisticComment, ...old];
+        });
+
+        const response = await fetch(`${API_BASE_URL}/comments/`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            content: localCommentText,
+            task_id: Number(taskId),
+            parent_id: null
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          throw new Error(errorData?.detail || 'Failed to send comment');
+        }
+
+        // Clear input and hide comment box
+        setLocalCommentText("");
+        setShowCommentInput(false);
+
+        // Refresh activities
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
+          queryClient.invalidateQueries({ queryKey: ['task-comments', taskId] })
+        ]);
+
+        toast.success('Comment added successfully');
+      } catch (error) {
+        // Revert optimistic update on error
+        await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+        console.error('Error sending comment:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to add comment');
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="flex items-start gap-3 p-4 border-b">
+        <Avatar className="w-8 h-8">
+          <AvatarImage 
+            src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'} 
+            alt={useAuthStore.getState().user?.full_name || 'User'} 
+          />
+          <AvatarFallback>
+            {useAuthStore.getState().user?.full_name?.charAt(0) || 
+             useAuthStore.getState().user?.username?.charAt(0) || 
+             'U'}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 space-y-2">
+          <div className="relative">
+            <Textarea
+              value={localCommentText}
+              onChange={(e) => setLocalCommentText(e.target.value)}
+              placeholder="Add a comment..."
+              className="min-h-[80px] pr-24 resize-none focus-visible:ring-1 focus-visible:ring-offset-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmitComment();
+                }
+              }}
+            />
+            <div className="absolute bottom-2 right-2 flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowCommentInput(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSubmitComment}
+                disabled={!localCommentText.trim() || isSubmitting}
+                className="bg-blue-600 text-white hover:bg-blue-700"
+              >
+                {isSubmitting ? 'Sending...' : 'Comment'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-xs text-gray-500">
+            Press Enter to submit, Shift + Enter for new line
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Add LogNoteInput component
+  const LogNoteInput = () => {
+    const [localNoteText, setLocalNoteText] = useState("");
+    const [localFiles, setLocalFiles] = useState<File[]>([]);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const queryClient = useQueryClient();
+
+    const handleSubmitNote = async () => {
+      if (!localNoteText.trim() || isSubmitting) return;
+
+      setIsSubmitting(true);
+      try {
+        // Create optimistic log note
+        const optimisticNote = {
+          id: Date.now(),
+          activity_type: 'log_note' as const,
+          description: localNoteText,
+          created_at: new Date().toISOString(),
+          user: useAuthStore.getState().user,
+          uniqueId: `temp-log-${Date.now()}`,
+          attachments: localFiles.map((file, index) => ({
+            id: -index - 1, // Temporary negative IDs for optimistic updates
+            filename: file.name,
+            original_filename: file.name,
+            content_type: file.type
+          }))
+        };
+
+        // Optimistically update the activities
+        queryClient.setQueryData(['activities', resolvedParams.taskId], (old: Activity[] = []) => {
+          return [optimisticNote, ...old];
+        });
+
+        const formData = new FormData();
+        formData.append("content", localNoteText);
+        formData.append("task_id", resolvedParams.taskId);
+        
+        if (localFiles.length > 0) {
+          localFiles.forEach(file => {
+            formData.append("files", file);
+          });
+        }
+
+        console.log('Sending log note to backend:', {
+          content: localNoteText,
+          taskId: resolvedParams.taskId,
+          filesCount: localFiles.length
+        });
+
+        const response = await fetch(`${API_BASE_URL}/log-notes/`, {
+          method: "POST",
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          console.error('Error response from server:', errorData);
+          throw new Error(errorData?.detail || 'Failed to add log note');
+        }
+
+        const responseData = await response.json();
+        console.log('Log note created successfully:', responseData);
+
+        // Clear input and hide log note box
+        setLocalNoteText("");
+        setLocalFiles([]);
+        setShowLogForm(false);
+
+        // Refresh activities and log notes
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] }),
+          queryClient.invalidateQueries({ queryKey: ['log-notes', resolvedParams.taskId] })
+        ]);
+
+        toast.success("Log note added successfully");
+      } catch (error) {
+        // Revert optimistic update on error
+        await queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] });
+        console.error('Error adding log note:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to add log note');
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="flex items-start gap-3 p-4 border-b">
+        <Avatar className="w-8 h-8">
+          <AvatarImage 
+            src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'} 
+            alt={useAuthStore.getState().user?.full_name || 'User'} 
+          />
+          <AvatarFallback>
+            {useAuthStore.getState().user?.full_name?.charAt(0) || 
+             useAuthStore.getState().user?.username?.charAt(0) || 
+             'U'}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 space-y-3">
+          <div className="relative">
+            <Textarea
+              value={localNoteText}
+              onChange={(e) => setLocalNoteText(e.target.value)}
+              placeholder="Log an internal note..."
+              className="min-h-[120px] resize-none focus-visible:ring-1 focus-visible:ring-offset-1"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                multiple
+                onChange={(e) => setLocalFiles(Array.from(e.target.files || []))}
+                className="hidden"
+                id="log-note-attachments"
+              />
+              <label
+                htmlFor="log-note-attachments"
+                className="cursor-pointer text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              >
+                <Paperclip className="h-4 w-4" />
+                Attach files
+              </label>
+              {localFiles.length > 0 && (
+                <span className="text-sm text-gray-500">
+                  {localFiles.length} file(s) selected
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button 
+                type="button" 
+                variant="ghost" 
+                onClick={() => setShowLogForm(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleSubmitNote}
+                disabled={!localNoteText.trim() || isSubmitting}
+                className="bg-purple-600 text-white hover:bg-purple-700"
+              >
+                {isSubmitting ? 'Logging...' : 'Log'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation with Stages and Actions */}
@@ -2175,6 +2501,12 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <h3 className="font-medium text-lg">Activity Feed</h3>
               </div>
 
+              {/* Add Log Note Input if showLogForm is true */}
+              {showLogForm && <LogNoteInput />}
+
+              {/* Add Comment Input if showCommentInput is true */}
+              {showCommentInput && <CommentInput />}
+
               {/* Activity Feed Content */}
               <div 
                 ref={activityFeedRef}
@@ -2231,6 +2563,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                             </Avatar>
                             <div className={`flex-1 min-w-0 rounded-lg p-3 ${
                               activity.activity_type === 'comment' ? 'bg-blue-50' :
+                              activity.activity_type === 'log_note' ? 'bg-purple-50' :
                               activity.description.toLowerCase().includes('stage') ? 'bg-purple-100' :
                               activity.description.toLowerCase().includes('status') ? 'bg-purple-100' :
                               activity.description.toLowerCase().includes('deadline') ? 'bg-amber-100' :
@@ -2249,124 +2582,32 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                 </span>
                               </div>
                               <div className="mt-1">
-                                {activity.activity_type === 'task_update' && (
-                                  <div className="text-sm">
-                                    {activity.description.includes('→') ? (
-                                      <div className="space-y-2">
-                                        {activity.description.toLowerCase().includes('status') ? (
-                                          <>
-                                            <div className="text-gray-500 text-xs whitespace-nowrap">
-                                              changed status from
-                                            </div>
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                              <span className={`px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${
-                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
-                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
-                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
-                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
-                                                activity.description.split('→')[0].split(':')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
-                                                'bg-gray-100 text-gray-800'
-                                              }`}>
-                                                {activity.description.split('→')[0].split(':')[1].trim()}
-                                              </span>
-                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
-                                              <span className={`px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${
-                                                activity.description.split('→')[1].trim().toLowerCase().includes('done') ? 'bg-green-100 text-green-800' :
-                                                activity.description.split('→')[1].trim().toLowerCase().includes('in progress') ? 'bg-blue-100 text-blue-800' :
-                                                activity.description.split('→')[1].trim().toLowerCase().includes('changes requested') ? 'bg-orange-100 text-orange-800' :
-                                                activity.description.split('→')[1].trim().toLowerCase().includes('approved') ? 'bg-green-100 text-green-800' :
-                                                activity.description.split('→')[1].trim().toLowerCase().includes('canceled') ? 'bg-red-100 text-red-800' :
-                                                'bg-gray-100 text-gray-800'
-                                              }`}>
-                                                {activity.description.split('→')[1].trim()}
-                                              </span>
-                                            </div>
-                                          </>
-                                        ) : activity.description.toLowerCase().includes('deadline') ? (
-                                          <>
-                                            <div className="text-gray-500 text-xs whitespace-nowrap">
-                                              changed deadline from
-                                            </div>
-                                            <div className="flex items-center gap-2 text-xs flex-wrap">
-                                              <span className="text-gray-700 whitespace-nowrap">
-                                                {(() => {
-                                                  try {
-                                                    const previousDate = activity.description.split('→')[0].split('Deadline:')[1].trim();
-                                                    return previousDate === 'None' ? 'Not set' : new Date(previousDate).toLocaleString('en-US', {
-                                                      year: '2-digit',
-                                                      month: 'numeric',
-                                                      day: 'numeric',
-                                                      hour: '2-digit',
-                                                      minute: '2-digit',
-                                                      hour12: true
-                                                    });
-                                                  } catch (e) {
-                                                    console.error('Error parsing old date:', e);
-                                                    return 'Invalid date';
-                                                  }
-                                                })()}
-                                              </span>
-                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
-                                              <span className="text-gray-700 whitespace-nowrap">
-                                                {(() => {
-                                                  try {
-                                                    const updatedDate = activity.description.split('→')[1].trim();
-                                                    return updatedDate === 'None' ? 'Not set' : new Date(updatedDate).toLocaleString('en-US', {
-                                                      year: '2-digit',
-                                                      month: 'numeric',
-                                                      day: 'numeric',
-                                                      hour: '2-digit',
-                                                      minute: '2-digit',
-                                                      hour12: true
-                                                    });
-                                                  } catch (e) {
-                                                    console.error('Error parsing new date:', e);
-                                                    return 'Invalid date';
-                                                  }
-                                                })()}
-                                              </span>
-                                            </div>
-                                          </>
-                                        ) : activity.description.toLowerCase().includes('title') ? (
-                                          <>
-                                            <div className="text-gray-500 text-xs whitespace-nowrap">
-                                              changed title from
-                                            </div>
-                                            <div className="flex items-center gap-2 text-xs flex-wrap">
-                                              <span className="text-gray-700">
-                                                {activity.description.split('→')[0].split(':')[1].trim()}
-                                              </span>
-                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
-                                              <span className="text-gray-700">
-                                                {activity.description.split('→')[1].trim()}
-                                              </span>
-                                            </div>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <div className="text-gray-500 text-xs whitespace-nowrap">
-                                              made changes to
-                                            </div>
-                                            <div className="flex items-center gap-2 text-xs flex-wrap">
-                                              <span className="text-gray-700">
-                                                {activity.description.split('→')[0]}
-                                              </span>
-                                              <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />
-                                              <span className="text-gray-700">
-                                                {activity.description.split('→')[1]}
-                                              </span>
-                                            </div>
-                                          </>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="text-gray-700 text-xs">
-                                        {activity.description}
+                                {activity.activity_type === 'log_note' ? (
+                                  <div className="text-sm text-gray-700">
+                                    {activity.description}
+                                    {activity.attachments && activity.attachments.length > 0 && (
+                                      <div className="mt-2 space-y-1">
+                                        {activity.attachments.map((attachment) => (
+                                          <div key={attachment.id} className="flex items-center gap-2 text-xs text-blue-600">
+                                            <Paperclip className="h-3 w-3" />
+                                            <a 
+                                              href={`${API_BASE_URL}/uploads/log_notes/${attachment.filename}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="hover:underline"
+                                            >
+                                              {attachment.original_filename}
+                                            </a>
+                                          </div>
+                                        ))}
                                       </div>
                                     )}
                                   </div>
-                                )}
-                                {activity.activity_type === 'comment' && (
+                                ) : activity.activity_type === 'comment' ? (
+                                  <div className="text-sm text-gray-700">
+                                    {activity.description}
+                                  </div>
+                                ) : (
                                   <div className="text-sm text-gray-700">
                                     {activity.description}
                                   </div>
@@ -2393,95 +2634,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
       {showLogForm && (
         <div className="mb-6">
-          <LogNoteForm
-            taskId={taskId}
-            onLogAdded={async () => {
-              setShowLogForm(false);
-              // Refresh the task and activities data
-              await Promise.all([
-                refetchTask(),
-                refetchActivities(),
-                queryClient.invalidateQueries({ queryKey: ['activities', taskId] })
-              ]);
-            }}
-          />
+          <LogNoteInput />
         </div>
       )}
-
-      <Card className="p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-5 w-5" />
-            <h2 className="text-xl font-semibold">Activity Feed</h2>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowLogForm(!showLogForm)}
-            className="flex items-center gap-2"
-          >
-            {showLogForm ? (
-              <>
-                <X className="h-4 w-4" />
-                <span>Close</span>
-              </>
-            ) : (
-              <>
-                <Pencil className="h-4 w-4" />
-                <span>Add Log Note</span>
-              </>
-            )}
-          </Button>
-        </div>
-
-        <div className="space-y-4">
-          {[...(logNotes || []), ...(task?.comments || [])].sort((a, b) => 
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          ).map((item: LogNote | Comment) => {
-            const isLogNote = 'attachments' in item;
-            return (
-              <div key={`${item.id}-${isLogNote ? 'log' : 'comment'}`} className="flex gap-3">
-                <Avatar className="h-10 w-10">
-                  <AvatarImage src={item.user?.profile_image_url || '/default-avatar.png'} />
-                  <AvatarFallback>{item.user?.full_name?.[0] || item.user?.username?.[0] || 'U'}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="font-medium">{item.user?.full_name || item.user?.username}</p>
-                    <p className="text-xs text-gray-500">
-                      {formatDate(item.created_at)}
-                    </p>
-                    {isLogNote && (
-                      <Badge variant="secondary" className="text-xs">
-                        Log Note
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="mt-1">
-                    {isLogNote ? (item as LogNote).content : (item as Comment).content}
-                  </p>
-                  {isLogNote && (item as LogNote).attachments?.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {(item as LogNote).attachments.map((attachment) => (
-                        <a
-                          key={attachment.id}
-                          href={`${API_BASE_URL}/uploads/log_notes/${attachment.filename}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
-                        >
-                          <Paperclip className="h-4 w-4" />
-                          {attachment.original_filename}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
     </div>
   );
 }
@@ -2492,10 +2647,26 @@ const LogNoteForm: React.FC<{ taskId: string; onLogAdded: () => void }> = ({ tas
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { token } = useAuthStore();
+  const queryClient = useQueryClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim()) return;
+
+    // Create optimistic log note
+    const optimisticLogNote = {
+      id: Date.now(),
+      activity_type: 'task_update' as const,
+      description: content,
+      created_at: new Date().toISOString(),
+      user: useAuthStore.getState().user,
+      uniqueId: `temp-log-${Date.now()}`
+    };
+
+    // Optimistically update the activities
+    queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
+      return [optimisticLogNote, ...old];
+    });
 
     setIsSubmitting(true);
     try {
@@ -2523,9 +2694,14 @@ const LogNoteForm: React.FC<{ taskId: string; onLogAdded: () => void }> = ({ tas
       setContent("");
       setFiles([]);
       
+      // Refresh activities
+      await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+      
       toast.success("Log note added successfully");
       onLogAdded();
     } catch (error) {
+      // Revert optimistic update on error
+      await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
       console.error('Error adding log note:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to add log note');
     } finally {
