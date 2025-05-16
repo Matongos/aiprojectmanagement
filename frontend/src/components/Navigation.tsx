@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Bell, MessageSquare, User, LogOut, Settings, Menu, X, ChevronRight, ChevronDown } from 'lucide-react';
 import {
@@ -14,6 +14,15 @@ import {
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, ReactNode } from 'react';
 import Image from 'next/image';
+import { cn } from "@/lib/utils";
+import {
+  NavigationMenu,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+  NavigationMenuTrigger,
+  NavigationMenuContent,
+} from "@/components/ui/navigation-menu";
 
 // Custom Link component that renders consistently between server and client
 interface LinkComponentProps {
@@ -31,7 +40,7 @@ const LinkComponent = ({ href, className, children }: LinkComponentProps) => {
 };
 
 interface NavigationItem {
-  href?: string;
+  href: string;
   label: string;
   disabled?: boolean;
 }
@@ -39,6 +48,7 @@ interface NavigationItem {
 export default function Navigation() {
   const { user, isAuthenticated, logout } = useAuthStore();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -60,7 +70,6 @@ export default function Navigation() {
     { href: '/dashboard', label: 'Dashboard' },
     { href: '/dashboard/projects', label: 'Projects' },
     { href: '/dashboard/tasks', label: 'Tasks' },
-    { label: 'Reports', disabled: true },
   ];
 
   const configurationItems: NavigationItem[] = [
@@ -129,27 +138,61 @@ export default function Navigation() {
             {/* Desktop Navigation */}
             {isAuthenticated && (
               <div className="hidden md:flex items-center space-x-1 flex-1 ml-8">
-                {navigationItems.map((item) => !item.disabled && item.href ? (
-                  <LinkComponent
-                    key={item.href}
-                    href={item.href}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-sm ${
-                      pathname === item.href || pathname?.startsWith(item.href + '/') 
-                        ? 'bg-blue-50 text-blue-700' 
-                        : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                    }`}
-                  >
-                    {item.label}
-                  </LinkComponent>
-                ) : (
-                  <span
-                    key={item.label}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-400 cursor-not-allowed rounded-sm"
-                    title="Coming soon"
-                  >
-                    {item.label}
-                  </span>
-                ))}
+                <NavigationMenu>
+                  <NavigationMenuList>
+                    {navigationItems.map((item) => (
+                      <NavigationMenuItem key={item.href}>
+                        <NavigationMenuLink asChild>
+                          <Link 
+                            href={item.href}
+                            className={cn(
+                              "px-4 py-2 hover:bg-accent hover:text-accent-foreground",
+                              pathname === item.href && "bg-accent text-accent-foreground"
+                            )}
+                          >
+                            {item.label}
+                          </Link>
+                        </NavigationMenuLink>
+                      </NavigationMenuItem>
+                    ))}
+
+                    <NavigationMenuItem>
+                      <NavigationMenuTrigger>Reports</NavigationMenuTrigger>
+                      <NavigationMenuContent>
+                        <div className="w-[200px] p-2">
+                          <NavigationMenuLink asChild>
+                            <Link 
+                              href="/dashboard/reports?type=projects"
+                              className={cn(
+                                "block px-4 py-2 hover:bg-accent hover:text-accent-foreground rounded-md",
+                                pathname === "/dashboard/reports" && searchParams?.get("type") === "projects" && "bg-accent text-accent-foreground"
+                              )}
+                              onClick={() => {
+                                router.push('/dashboard/reports?type=projects', { scroll: false });
+                              }}
+                            >
+                              Project Reports
+                            </Link>
+                          </NavigationMenuLink>
+                          <NavigationMenuLink asChild>
+                            <Link 
+                              href="/dashboard/reports?type=tasks"
+                              className={cn(
+                                "block px-4 py-2 hover:bg-accent hover:text-accent-foreground rounded-md",
+                                pathname === "/dashboard/reports" && searchParams?.get("type") === "tasks" && "bg-accent text-accent-foreground"
+                              )}
+                              onClick={() => {
+                                router.push('/dashboard/reports?type=tasks', { scroll: false });
+                              }}
+                            >
+                              Task Reports
+                            </Link>
+                          </NavigationMenuLink>
+                        </div>
+                      </NavigationMenuContent>
+                    </NavigationMenuItem>
+                  </NavigationMenuList>
+                </NavigationMenu>
               </div>
             )}
 

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, and_, or_
 from datetime import datetime, timedelta
 from models.task import Task
-from crud.task import task
+from schemas.task import TaskState
 
 class TaskAnalytics:
     @staticmethod
@@ -25,7 +25,7 @@ class TaskAnalytics:
             
         completed_count = db.query(Task).filter(
             Task.project_id == project_id,
-            Task.status == "done"
+            Task.state == TaskState.DONE
         ).count()
         
         completion_rate = (completed_count / total_count) * 100.0
@@ -45,12 +45,12 @@ class TaskAnalytics:
         Returns a list of dictionaries with status and count.
         """
         result = db.query(
-            Task.status, 
+            Task.state, 
             func.count(Task.id).label("count")
         ).filter(
             Task.project_id == project_id
         ).group_by(
-            Task.status
+            Task.state
         ).all()
         
         return [{"status": status, "count": count} for status, count in result]
@@ -68,25 +68,25 @@ class TaskAnalytics:
         # Tasks completed in the period
         completed_tasks = db.query(Task).filter(
             Task.assigned_to == user_id,
-            Task.status == "done",
-            Task.completed_at >= start_date
+            Task.state == TaskState.DONE,
+            Task.end_date >= start_date
         ).all()
         
         completed_count = len(completed_tasks)
         
-        # Calculate average completion time for tasks with start and completion dates
+        # Calculate average completion time for tasks with start and end dates
         completion_times = []
         for task in completed_tasks:
-            if task.start_date and task.completed_at:
-                time_diff = task.completed_at - task.start_date
+            if task.start_date and task.end_date:
+                time_diff = task.end_date - task.start_date
                 completion_times.append(time_diff.total_seconds() / 3600)  # hours
         
         avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
         
         # Tasks that went over budget
         over_budget_tasks = sum(1 for task in completed_tasks 
-                               if task.estimated_hours and task.actual_hours 
-                               and task.actual_hours > task.estimated_hours)
+                               if task.planned_hours and task.progress 
+                               and (task.progress / 100.0) * task.planned_hours > task.planned_hours)
         
         return {
             "completed_tasks": completed_count,
@@ -162,5 +162,121 @@ class TaskAnalytics:
                 'tasks_by_priority': {},
                 'overdue_tasks': 0
             }
+
+    @staticmethod
+    def get_task_analytics_summary(db: Session) -> Dict[str, Any]:
+        """Get overall task analytics summary."""
+        try:
+            # Get total tasks
+            total_tasks = db.query(Task).count()
+            
+            # Get tasks by status
+            tasks_by_status = db.query(
+                Task.state,
+                func.count(Task.id).label('count')
+            ).group_by(Task.state).all()
+            
+            # Get overdue tasks
+            overdue_tasks = db.query(Task).filter(
+                and_(
+                    Task.deadline < func.now(),
+                    Task.state != TaskState.DONE
+                )
+            ).count()
+            
+            # Get average completion time
+            completed_tasks = db.query(Task).filter(
+                and_(
+                    Task.state == TaskState.DONE,
+                    Task.start_date.isnot(None),
+                    Task.end_date.isnot(None)
+                )
+            ).all()
+            
+            completion_times = []
+            for task in completed_tasks:
+                time_diff = task.end_date - task.start_date
+                completion_times.append(time_diff.total_seconds() / 3600)  # hours
+            
+            avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
+            
+            return {
+                'total_tasks': total_tasks,
+                'tasks_by_status': {
+                    str(status): count for status, count in tasks_by_status
+                },
+                'overdue_tasks': overdue_tasks,
+                'overdue_percentage': round((overdue_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0,
+                'avg_completion_time_hours': round(avg_completion_time, 2)
+            }
+            
+        except Exception as e:
+            print(f"Error getting task analytics summary: {str(e)}")
+            return {
+                'total_tasks': 0,
+                'tasks_by_status': {},
+                'overdue_tasks': 0,
+                'overdue_percentage': 0,
+                'avg_completion_time_hours': 0
+            }
+
+    @staticmethod
+    def get_task_trend_data(db: Session, days: int = 30) -> List[Dict[str, Any]]:
+        """Get task creation and completion trend data for the specified number of days."""
+        try:
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=days)
+            
+            # Get daily task creation counts
+            created_tasks = db.query(
+                func.date(Task.created_at).label('date'),
+                func.count(Task.id).label('count')
+            ).filter(
+                Task.created_at >= start_date
+            ).group_by(
+                func.date(Task.created_at)
+            ).all()
+            
+            # Get daily task completion counts
+            completed_tasks = db.query(
+                func.date(Task.end_date).label('date'),
+                func.count(Task.id).label('count')
+            ).filter(
+                and_(
+                    Task.end_date >= start_date,
+                    Task.state == TaskState.DONE
+                )
+            ).group_by(
+                func.date(Task.end_date)
+            ).all()
+            
+            # Create a dictionary for easy lookup
+            trend_data = {}
+            current_date = start_date
+            while current_date <= end_date:
+                date_str = current_date.date().isoformat()
+                trend_data[date_str] = {
+                    'date': date_str,
+                    'created': 0,
+                    'completed': 0
+                }
+                current_date += timedelta(days=1)
+            
+            # Fill in actual counts
+            for date, count in created_tasks:
+                date_str = date.isoformat()
+                if date_str in trend_data:
+                    trend_data[date_str]['created'] = count
+            
+            for date, count in completed_tasks:
+                date_str = date.isoformat()
+                if date_str in trend_data:
+                    trend_data[date_str]['completed'] = count
+            
+            return list(trend_data.values())
+            
+        except Exception as e:
+            print(f"Error getting task trend data: {str(e)}")
+            return []
 
 task_analytics = TaskAnalytics() 

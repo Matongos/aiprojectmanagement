@@ -214,4 +214,29 @@ class TaskStageWithTasks(TaskStage):
     tasks: List[TaskResponse] = []
 
     class Config:
+        from_attributes = True
+
+class TasksByProject(BaseModel):
+    project_name: str
+    task_count: int
+
+class TasksByTag(BaseModel):
+    tag_name: str
+    task_count: int
+
+class TaskAnalytics(BaseModel):
+    allocated_time: float
+    days_to_deadline: float
+    hours_spent: float
+    progress: float
+    remaining_hours: float
+    remaining_hours_percentage: float
+    total_hours: float
+    working_days_to_assign: float
+    working_hours_to_assign: float
+    working_hours_to_close: float
+    tasks_by_project: List[TasksByProject]
+    tasks_by_tag: List[TasksByTag]
+
+    class Config:
         from_attributes = True 

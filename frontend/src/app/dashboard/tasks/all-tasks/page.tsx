@@ -8,6 +8,7 @@ import { API_BASE_URL } from "@/lib/constants";
 import { Card } from "@/components/ui/card";
 import axios from 'axios';
 import ApiDebugger from './debug-api';
+import { Button } from "@/components/ui/button";
 
 interface Task {
   id: number;
@@ -103,6 +104,9 @@ function TaskBoardComponent() {
   // Handle drag start
   const handleDragStart = (e: React.DragEvent, task: Task) => {
     e.stopPropagation();
+    e.preventDefault();
+    
+    // Set draggable properties
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/json', JSON.stringify(task));
     e.dataTransfer.setData('text/plain', task.id.toString());
@@ -112,22 +116,28 @@ function TaskBoardComponent() {
     dragTaskRef.current = task;
     
     // Create a drag image
-    const dragImage = document.createElement('div');
+    const taskCard = e.currentTarget as HTMLElement;
+    const dragImage = taskCard.cloneNode(true) as HTMLElement;
     dragImage.classList.add('hidden-drag-image');
-    dragImage.innerHTML = `<div class="p-3 bg-white shadow-lg rounded-md">${task.name}</div>`;
+    dragImage.style.width = `${taskCard.offsetWidth}px`;
     document.body.appendChild(dragImage);
     
-    // Add the drag image
+    // Add the drag image with offset
     e.dataTransfer.setDragImage(dragImage, 20, 20);
     
     // Remove the element after drag starts
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       document.body.removeChild(dragImage);
-    }, 0);
+    });
 
     // Show visual feedback
-    const taskElement = e.currentTarget as HTMLElement;
-    taskElement.classList.add('task-dragging');
+    taskCard.classList.add('task-dragging');
+    
+    // Prevent text selection
+    document.body.style.userSelect = 'none';
+    document.body.style.webkitUserSelect = 'none';
+    document.body.style.mozUserSelect = 'none';
+    document.body.style.msUserSelect = 'none';
   };
 
   // Handle drag over
@@ -152,71 +162,40 @@ function TaskBoardComponent() {
   const handleDrop = async (e: React.DragEvent, targetStageId: number) => {
     e.preventDefault();
     
-    // Reset the active drop target
-    setActiveDropTarget(null);
-    
     // Get the task ID from the drag data
     const taskId = parseInt(e.dataTransfer.getData('text/plain'));
+    if (!taskId || !draggedTask) return;
     
-    // Check if we have a valid task to move
-    if (!dragTaskRef.current || dragTaskRef.current.id !== taskId) {
-      return;
-    }
+    // Don't do anything if dropping in the same stage
+    if (draggedTask.stage_id === targetStageId) return;
     
-    // Check if the task is being moved to a different stage
-    if (dragTaskRef.current.stage_id === targetStageId) {
-      return;
-    }
+    // Update local state first
+    setStages(stages.map(stage => {
+      if (stage.id === draggedTask.stage_id) {
+        // Remove task from source stage
+        return {
+          ...stage,
+          tasks: stage.tasks.filter(t => t.id !== taskId)
+        };
+      }
+      if (stage.id === targetStageId) {
+        // Add task to target stage
+        return {
+          ...stage,
+          tasks: [...stage.tasks, { ...draggedTask, stage_id: targetStageId }]
+        };
+      }
+      return stage;
+    }));
     
-    // Find source and target stages
-    const sourceStage = stages.find(s => s.id === dragTaskRef.current!.stage_id);
-    const targetStage = stages.find(s => s.id === targetStageId);
-    
-    if (!sourceStage || !targetStage) {
-      return;
-    }
-    
-    // Prepare updated stages
-    const updatedStages = [...stages];
-    
-    // Find source stage index and task index
-    const sourceStageIndex = updatedStages.findIndex(s => s.id === sourceStage.id);
-    const taskIndex = updatedStages[sourceStageIndex].tasks.findIndex(t => t.id === taskId);
-    
-    if (taskIndex === -1) {
-      return;
-    }
-    
-    // Find target stage index
-    const targetStageIndex = updatedStages.findIndex(s => s.id === targetStage.id);
-    
-    // Remove task from source stage
-    const [movedTask] = updatedStages[sourceStageIndex].tasks.splice(taskIndex, 1);
-    
-    // Update task stage_id
-    movedTask.stage_id = targetStageId;
-    
-    // Add task to target stage
-    updatedStages[targetStageIndex].tasks.push(movedTask);
-    
-    // Update state
-    setStages(updatedStages);
-    
-    // Reset dragged task
+    // Reset drag state
     setDraggedTask(null);
-    dragTaskRef.current = null;
+    setActiveDropTarget(null);
     
-    // Send update to backend
+    // Update backend
     try {
       const token = useAuthStore.getState().token;
-      console.log('Sending task update:', {
-        task_id: taskId,
-        new_stage_id: targetStageId
-      });
-      
-      await axios.put(`${API_BASE_URL}/tasks/${taskId}/move-stage`, {
-        new_stage_id: targetStageId
-      }, {
+      await axios.post(`${API_BASE_URL}/stages/${targetStageId}/tasks/${taskId}`, {}, {
         headers: { 
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -251,6 +230,12 @@ function TaskBoardComponent() {
         document.body.removeChild(el);
       }
     });
+    
+    // Restore text selection
+    document.body.style.userSelect = '';
+    document.body.style.webkitUserSelect = '';
+    document.body.style.mozUserSelect = '';
+    document.body.style.msUserSelect = '';
   };
 
   // Get task priority color
@@ -291,17 +276,17 @@ function TaskBoardComponent() {
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
+      <div className="mb-4 flex justify-between items-center">
         <h1 className="text-2xl font-bold">Task Board</h1>
-        <button 
+        <Button
+          variant="outline"
           onClick={() => setShowDebugger(!showDebugger)}
-          className="text-sm text-blue-500 hover:underline"
         >
-          {showDebugger ? 'Hide Debugger' : 'Debug API'}
-        </button>
+          {showDebugger ? 'Hide Debugger' : 'Show Debugger'}
+        </Button>
       </div>
-      
-      {showDebugger && <div className="mb-6"><ApiDebugger /></div>}
+
+      {showDebugger && <ApiDebugger />}
       
       <style jsx global>{`
         .hidden-drag-image {
@@ -317,6 +302,10 @@ function TaskBoardComponent() {
           min-height: calc(100vh - 200px);
           width: 100%;
           overflow-x: auto;
+          user-select: none;
+          -webkit-user-select: none;
+          -moz-user-select: none;
+          -ms-user-select: none;
         }
         
         .stage-column {
@@ -336,6 +325,7 @@ function TaskBoardComponent() {
           border-top-right-radius: 0.5rem;
           border-bottom: 1px solid #e5e7eb;
           font-weight: 600;
+          user-select: none;
         }
         
         .stage-content {
@@ -348,50 +338,36 @@ function TaskBoardComponent() {
         .stage-active {
           background-color: #e0f2fe;
           border: 2px dashed #3b82f6;
-          transition: all 0.2s ease;
         }
         
         .task-card {
+          background: white;
+          padding: 1rem;
           margin-bottom: 0.5rem;
-          cursor: move !important;
-          cursor: grab !important;
+          border-radius: 0.375rem;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          cursor: grab;
           user-select: none;
-          transition: transform 0.2s, box-shadow 0.2s;
-          -webkit-user-drag: element;
+          -webkit-user-select: none;
+          -moz-user-select: none;
+          -ms-user-select: none;
           touch-action: none;
         }
         
-        .task-card:active {
-          cursor: grabbing !important;
+        .task-card:hover {
+          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         
-        .task-card:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        .task-card:active {
+          cursor: grabbing;
         }
         
         .task-dragging {
           opacity: 0.5;
-          cursor: grabbing !important;
-        }
-        
-        /* Prevent text selection during drag operations */
-        * {
-          -webkit-touch-callout: none;
-          -webkit-user-select: none;
-          -khtml-user-select: none;
-          -moz-user-select: none;
-          -ms-user-select: none;
-          user-select: none;
-        }
-        
-        /* Restore text selection for specific elements */
-        input, textarea, [contenteditable=true] {
-          -webkit-user-select: text;
-          -khtml-user-select: text;
-          -moz-user-select: text;
-          -ms-user-select: text;
-          user-select: text;
+          cursor: grabbing;
+          box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+          transform: scale(1.02);
+          transition: all 0.2s ease;
         }
       `}</style>
       
@@ -411,15 +387,22 @@ function TaskBoardComponent() {
               onDragOver={(e) => handleDragOver(e, stage.id)}
               onDragLeave={handleDragLeave}
               onDrop={(e) => handleDrop(e, stage.id)}
-              data-stage-id={stage.id}
             >
               {stage.tasks.map((task) => (
-                <Card 
+                <div 
                   key={task.id}
-                  className={`task-card p-3 shadow-sm ${draggedTask?.id === task.id ? 'task-dragging' : ''}`}
-                  draggable={true}
+                  className={`task-card ${draggedTask?.id === task.id ? 'task-dragging' : ''}`}
+                  draggable="true"
                   onDragStart={(e) => handleDragStart(e, task)}
                   onDragEnd={handleDragEnd}
+                  onMouseDown={(e) => {
+                    const target = e.currentTarget;
+                    target.style.cursor = 'grabbing';
+                  }}
+                  onMouseUp={(e) => {
+                    const target = e.currentTarget;
+                    target.style.cursor = 'grab';
+                  }}
                 >
                   <h3 className="font-medium">{task.name}</h3>
                   <p className="text-sm text-gray-600 truncate">
@@ -435,7 +418,7 @@ function TaskBoardComponent() {
                       </span>
                     )}
                   </div>
-                </Card>
+                </div>
               ))}
               
               {stage.tasks.length === 0 && (
