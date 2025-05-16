@@ -1,10 +1,11 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float, select
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float, select, Enum
 from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
 from .base import Base
 from .milestone import Milestone  # Import Milestone from its dedicated module
 from .task import Task  # Import Task model
 from .tag import Tag, project_tag  # Import Tag model and project_tag table
+import enum
 
 # Association table for project tags
 project_tag = Table(
@@ -14,6 +15,12 @@ project_tag = Table(
     Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True),
     extend_existing=True
 )
+
+class ProjectStage(str, enum.Enum):
+    TODO = "to_do"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
 
 class ProjectMember(Base):
     __tablename__ = "project_members"
@@ -30,6 +37,15 @@ class ProjectMember(Base):
     def __repr__(self):
         return f"<ProjectMember {self.project_id}:{self.user_id}>"
 
+class StageDefinition(Base):
+    __tablename__ = "stage_definitions"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), nullable=False)
+    description = Column(String(255))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = {'extend_existing': True}
@@ -39,6 +55,7 @@ class Project(Base):
     description = Column(Text, nullable=True)
     key = Column(String, unique=True, index=True)
     status = Column(String, nullable=False, default="active")
+    stage_id = Column(Integer, ForeignKey("stage_definitions.id"), nullable=True)
     privacy_level = Column(String, nullable=False, default="private")
     start_date = Column(DateTime(timezone=True), nullable=True)
     end_date = Column(DateTime(timezone=True), nullable=True)
@@ -65,6 +82,7 @@ class Project(Base):
     tags = relationship("Tag", secondary=project_tag, back_populates="projects")
     activities = relationship("Activity", back_populates="project", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
+    stage = relationship("StageDefinition")
 
     # Add task_count as a column property
     task_count = column_property(

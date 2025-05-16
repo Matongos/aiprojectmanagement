@@ -13,6 +13,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Plus, Star, Calendar, MoreVertical, Search, FileText, LineChart, Share2, Settings, ListTodo, Milestone, BarChart3, Eye } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { useRouter } from "next/navigation";
@@ -20,11 +26,15 @@ import AuthWrapper from "@/components/AuthWrapper";
 import { API_BASE_URL } from "@/lib/constants";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 
+type ProjectStatus = 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
+type ProjectStage = 'to_do' | 'in_progress' | 'done' | 'cancelled' | null;
+
 interface Project {
   id: number;
   name: string;
   description: string;
-  status: 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
+  status: ProjectStatus;
+  stage: ProjectStage;
   created_at: string;
   start_date: string | null;
   end_date: string | null;
@@ -36,8 +46,6 @@ interface Project {
   has_user_tasks?: boolean;
 }
 
-type ProjectStatus = 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
-
 const statusConfig: Record<ProjectStatus | 'default', { label: string; color: string; description: string }> = {
   on_track: { label: 'On Track', color: 'bg-green-500', description: 'Project is progressing as planned' },
   at_risk: { label: 'At Risk', color: 'bg-yellow-500', description: 'Project might face some issues' },
@@ -45,6 +53,13 @@ const statusConfig: Record<ProjectStatus | 'default', { label: string; color: st
   on_hold: { label: 'On Hold', color: 'bg-gray-500', description: 'Project is temporarily paused' },
   done: { label: 'Done', color: 'bg-blue-500', description: 'Project is completed' },
   default: { label: 'Unknown', color: 'bg-gray-300', description: 'Status not set' }
+};
+
+const stageConfig: Record<NonNullable<ProjectStage>, { label: string; color: string }> = {
+  'to_do': { label: 'To Do', color: 'bg-gray-500' },
+  'in_progress': { label: 'In Progress', color: 'bg-blue-500' },
+  'done': { label: 'Done', color: 'bg-green-500' },
+  'cancelled': { label: 'Cancelled', color: 'bg-red-500' }
 };
 
 export default function ProjectsPage() {
@@ -503,8 +518,33 @@ function ProjectsContent() {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color}`} />
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <div className={`w-4 h-4 rounded-full ${statusConfig[project.status]?.color || statusConfig.default.color} transition-all duration-200 hover:ring-2 hover:ring-offset-2 hover:ring-${(statusConfig[project.status]?.color || statusConfig.default.color).replace('bg-', '')}`} />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Status: {statusConfig[project.status]?.label || statusConfig.default.label}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    {project.stage && (
+                      <div className="flex items-center gap-2">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <div className={`w-4 h-4 rounded-full ${stageConfig[project.stage].color} transition-all duration-200 hover:ring-2 hover:ring-offset-2 hover:ring-${stageConfig[project.stage].color.replace('bg-', '')}`} />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Stage: {stageConfig[project.stage].label}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                    )}
                     <span className={`text-sm ${projectAccess ? 'text-gray-600' : 'text-gray-400'}`}>
                       {project.task_count || 0} Tasks
                     </span>

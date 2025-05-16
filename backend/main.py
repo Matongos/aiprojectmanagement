@@ -38,11 +38,12 @@ app.add_middleware(
         "http://localhost:8003",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8003",
+        "http://localhost:8000"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["Content-Disposition", "Content-Type"]  # Expose necessary headers for file download
 )
 
 # Mount static files

@@ -18,15 +18,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+type ProjectStage = 1 | 2 | 3 | 4 | null;
 
 interface Project {
   id: number;
   name: string;
   description: string;
   status: 'on_track' | 'at_risk' | 'off_track' | 'on_hold' | 'done';
-  created_at: string;
-  start_date: string;
-  end_date: string;
+  stage_id: number | null;
+  privacy_level: string;
+  start_date: string | null;
+  end_date: string | null;
   customer: string;
   tags: string[];
   allocated_hours: string;
@@ -41,6 +50,7 @@ interface EditedProject {
   name?: string;
   description?: string;
   status?: string;
+  stage_id?: number | null;
   customer?: string;
   start_date?: string;
   end_date?: string;
@@ -49,12 +59,41 @@ interface EditedProject {
   tags?: string[];
 }
 
+interface ProjectUpdate {
+  name?: string;
+  description?: string;
+  status?: string;
+  stage?: ProjectStage;
+  start_date?: string;
+  end_date?: string;
+  project_manager_id?: number;
+}
+
 const statusConfig = {
   on_track: { label: 'On Track', color: 'bg-green-500', description: 'Project is progressing as planned' },
   at_risk: { label: 'At Risk', color: 'bg-yellow-500', description: 'Project might face some issues' },
   off_track: { label: 'Off Track', color: 'bg-red-500', description: 'Project is behind schedule' },
   on_hold: { label: 'On Hold', color: 'bg-gray-500', description: 'Project is temporarily paused' },
   done: { label: 'Done', color: 'bg-blue-500', description: 'Project is completed' }
+};
+
+const stageConfig: Record<NonNullable<ProjectStage>, { label: string; color: string }> = {
+  1: { 
+    label: 'To Do', 
+    color: 'bg-blue-600'
+  },
+  2: { 
+    label: 'In Progress', 
+    color: 'bg-blue-600'
+  },
+  3: { 
+    label: 'Done', 
+    color: 'bg-blue-600'
+  },
+  4: { 
+    label: 'Cancelled', 
+    color: 'bg-blue-600'
+  }
 };
 
 const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
@@ -69,9 +108,9 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
   // Fetch project managers
   useEffect(() => {
     const fetchProjectManagers = async () => {
-      if (!token) return;
+      if (!token || !resolvedParams?.id) return;
       try {
-        const response = await fetch(`${API_BASE_URL}/users/project-managers`, {
+        const response = await fetch(`${API_BASE_URL}/projects/${resolvedParams.id}/members`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -86,7 +125,7 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
       }
     };
     fetchProjectManagers();
-  }, [token]);
+  }, [token, resolvedParams?.id]);
 
   useEffect(() => {
     const fetchProjectData = async () => {
@@ -106,11 +145,13 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
         }
 
         const data = await response.json();
+        console.log('Project data:', data); // Log project data to see the stage
         setProject(data);
         setEditedProject({
           name: data.name || '',
           description: data.description || '',
           status: data.status || 'on_track',
+          stage_id: data.stage_id,
           customer: data.customer || '',
           start_date: data.start_date || '',
           end_date: data.end_date || '',
@@ -135,17 +176,27 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
         throw new Error("No authentication token found");
       }
 
+      // Create update object with only the changed fields
+      const updateData: ProjectUpdate = {};
+      if (editedProject.name) updateData.name = editedProject.name;
+      if (editedProject.description) updateData.description = editedProject.description;
+      if (editedProject.status) updateData.status = editedProject.status;
+      if (editedProject.start_date) updateData.start_date = editedProject.start_date;
+      if (editedProject.end_date) updateData.end_date = editedProject.end_date;
+      if (editedProject.project_manager_id) updateData.project_manager_id = editedProject.project_manager_id;
+
       const response = await fetch(`${API_BASE_URL}/projects/${resolvedParams?.id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(editedProject)
+        body: JSON.stringify(updateData)
       });
 
       if (!response.ok) {
-        throw new Error('Failed to update project');
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.detail || 'Failed to update project');
       }
 
       const updatedProject = await response.json();
@@ -154,7 +205,64 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
       toast.success('Project updated successfully');
     } catch (error) {
       console.error('Error updating project:', error);
-      toast.error('Failed to update project');
+      toast.error(error instanceof Error ? error.message : 'Failed to update project');
+    }
+  };
+
+  // Add handleStageChange function
+  const handleStageChange = async (newStage: ProjectStage | null) => {
+    try {
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      if (!project) {
+        throw new Error("No project found");
+      }
+
+      // Create optimistic update
+      const updatedProject: Project = {
+        ...project,
+        stage_id: newStage
+      };
+      setProject(updatedProject);
+
+      // Send the numeric stage ID directly
+      const response = await fetch(`${API_BASE_URL}/projects/${resolvedParams.id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          stage_id: newStage,
+          name: project.name,
+          description: project.description
+        })
+      });
+
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        // Revert optimistic update on error
+        setProject(project);
+        throw new Error(responseData?.detail || 'Failed to update project stage');
+      }
+
+      // Update the project with the server response
+      setProject(responseData);
+
+      // Show success message
+      toast.success(newStage 
+        ? `Project moved to "${stageConfig[newStage].label}" stage`
+        : 'Project stage cleared'
+      );
+    } catch (error) {
+      console.error('Error updating project stage:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update project stage');
+      
+      // Revert optimistic update on error
+      setProject(project);
     }
   };
 
@@ -163,6 +271,46 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
 
   return (
     <div className="container mx-auto py-6 px-4">
+      {/* Project Stages Header */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-700">Project Stage</h2>
+          {project?.stage_id && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleStageChange(null)}
+              className="hover:bg-gray-100"
+            >
+              Clear Stage
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {Object.entries(stageConfig).map(([id, { label }]) => {
+            const stageId = parseInt(id) as ProjectStage;
+            const isCurrentStage = project?.stage_id === stageId;
+            return (
+              <Button
+                key={id}
+                variant={isCurrentStage ? "default" : "outline"}
+                className={`
+                  min-w-[120px] justify-center transition-all duration-200
+                  ${isCurrentStage 
+                    ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                    : 'hover:bg-gray-50'
+                  }
+                `}
+                onClick={() => project && handleStageChange(stageId)}
+                disabled={!project}
+              >
+                {label}
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
       <Card className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
@@ -196,7 +344,7 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
                     {Object.entries(statusConfig).map(([key, { label, description }]) => (
                       <SelectItem key={key} value={key}>
                         <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${statusConfig[key as keyof typeof statusConfig].color}`} />
+                          <div className={`w-4 h-4 rounded-full ${statusConfig[key as keyof typeof statusConfig].color}`} />
                           <div>
                             <div className="font-medium">{label}</div>
                             <div className="text-xs text-gray-500">{description}</div>
@@ -208,7 +356,16 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
                 </Select>
               ) : (
                 <div className="flex items-center gap-2">
-                  <div className={`w-3 h-3 rounded-full ${statusConfig[project.status]?.color}`} />
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <div className={`w-6 h-6 rounded-full ${statusConfig[project.status]?.color} transition-all duration-200 hover:ring-2 hover:ring-offset-2 hover:ring-${statusConfig[project.status]?.color.replace('bg-', '')}`} />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{statusConfig[project.status]?.label}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="text-sm font-medium">{statusConfig[project.status]?.label}</span>
                 </div>
               )}
@@ -320,7 +477,7 @@ const ProjectView = ({ params }: { params: Promise<{ id: string }> }) => {
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4 text-gray-500" />
                   <span>
-                    {new Date(project.start_date).toLocaleDateString()} — {new Date(project.end_date).toLocaleDateString()}
+                    {new Date(project.start_date || '').toLocaleDateString()} — {new Date(project.end_date || '').toLocaleDateString()}
                   </span>
                 </div>
               )}

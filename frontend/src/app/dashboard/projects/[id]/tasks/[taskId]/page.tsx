@@ -296,7 +296,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const { data: stagesData, isLoading: isLoadingStages, error: stagesError } = useQuery({
     queryKey: ['stages', id],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/stages/project/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/projects/${id}/stages`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',

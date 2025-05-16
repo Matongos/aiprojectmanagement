@@ -23,7 +23,13 @@ import {
   Pie,
   Cell
 } from "recharts";
-import { Download, Filter, BarChart2, LineChart as LineChartIcon, PieChart as PieChartIcon } from "lucide-react";
+import { Download, Filter } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface Project {
   id: number;
@@ -76,8 +82,6 @@ interface TaskMetric {
   key: keyof TaskAnalytics;
 }
 
-type ChartType = 'bar' | 'line' | 'pie';
-
 export default function ReportsPage() {
   const { token } = useAuthStore();
   const router = useRouter();
@@ -95,8 +99,6 @@ export default function ReportsPage() {
   const [taskTrend, setTaskTrend] = useState<any[]>([]);
   const [taskAnalytics, setTaskAnalytics] = useState<TaskAnalytics | null>(null);
   const [selectedMetric, setSelectedMetric] = useState<keyof TaskAnalytics>("hours_spent");
-  const [chartType, setChartType] = useState<ChartType>('bar');
-  const [stackedView, setStackedView] = useState(false);
 
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
@@ -207,81 +209,48 @@ export default function ReportsPage() {
     }
   };
 
-  const handleExport = async () => {
-    // TODO: Implement export functionality
-    toast.success('Report exported successfully');
+  const handleExport = async (format: 'csv' | 'pdf') => {
+    try {
+      const projectParam = reportType === "projects" && selectedProject ? `?project_id=${selectedProject}` : '';
+      const response = await fetch(
+        `${API_BASE_URL}/analytics/export/${reportType}/${format}${projectParam}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to export report');
+      }
+
+      // Get filename from Content-Disposition header or use default
+      const contentDisposition = response.headers.get('Content-Disposition');
+      const filenameMatch = contentDisposition?.match(/filename=(.+)/);
+      const filename = filenameMatch ? filenameMatch[1] : `${reportType}_report.${format === 'csv' ? 'xlsx' : 'pdf'}`;
+
+      // Create blob and trigger download
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast.success('Report exported successfully!');
+    } catch (error) {
+      console.error('Error exporting report:', error);
+      toast.error('Failed to export report');
+    }
   };
 
   const handleReportTypeChange = (value: "projects" | "tasks") => {
     setReportType(value);
     router.push(`/dashboard/reports?type=${value}`, { scroll: false });
-  };
-
-  const renderChart = (data: any[], type: ChartType) => {
-    switch (type) {
-      case 'line':
-        return (
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="project_name" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            {Object.keys(data[0] || {})
-              .filter(key => key !== 'project_name' && key !== 'name')
-              .map((key, index) => (
-                <Line
-                  key={key}
-                  type="monotone"
-                  dataKey={key}
-                  name={key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-                  stroke={COLORS[index % COLORS.length]}
-                />
-              ))}
-          </LineChart>
-        );
-      case 'pie':
-        return (
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="value"
-              nameKey="name"
-              cx="50%"
-              cy="50%"
-              outerRadius={80}
-              label
-            >
-              {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip />
-            <Legend />
-          </PieChart>
-        );
-      default:
-        return (
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="project_name" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            {Object.keys(data[0] || {})
-              .filter(key => key !== 'project_name' && key !== 'name')
-              .map((key, index) => (
-                <Bar
-                  key={key}
-                  dataKey={key}
-                  name={key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-                  fill={COLORS[index % COLORS.length]}
-                  stackId={stackedView ? "stack" : undefined}
-                />
-              ))}
-          </BarChart>
-        );
-    }
   };
 
   if (loading) {
@@ -465,76 +434,22 @@ export default function ReportsPage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Task Analysis</CardTitle>
-            <div className="flex items-center space-x-2">
-              <Select value={selectedMetric} onValueChange={(value) => setSelectedMetric(value as keyof TaskAnalytics)}>
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Select metric" />
-                </SelectTrigger>
-                <SelectContent>
-                  {taskMetrics.map((metric) => (
-                    <SelectItem key={metric.value} value={metric.key}>
-                      {metric.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <div className="flex items-center space-x-1 border rounded-md">
-                <Button
-                  variant={chartType === 'bar' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setChartType('bar')}
-                  className="px-2 py-1"
-                >
-                  <BarChart2 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={chartType === 'line' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setChartType('line')}
-                  className="px-2 py-1"
-                >
-                  <LineChartIcon className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={chartType === 'pie' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setChartType('pie')}
-                  className="px-2 py-1"
-                >
-                  <PieChartIcon className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {chartType === 'bar' && (
-                <Button
-                  variant={stackedView ? 'secondary' : 'outline'}
-                  size="sm"
-                  onClick={() => setStackedView(!stackedView)}
-                >
-                  {stackedView ? 'Stacked' : 'Grouped'}
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[400px]">
-              <ResponsiveContainer width="100%" height="100%">
-                {renderChart(taskAnalytics?.tasks_by_project || [], chartType)}
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Tasks by Project Status</CardTitle>
+            <CardTitle>Task Metrics Analysis</CardTitle>
+            <Select value={selectedMetric} onValueChange={(value) => setSelectedMetric(value as keyof TaskAnalytics)}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Select metric" />
+              </SelectTrigger>
+              <SelectContent>
+                {taskMetrics.map((metric) => (
+                  <SelectItem key={metric.value} value={metric.key}>
+                    {metric.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
@@ -545,7 +460,7 @@ export default function ReportsPage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="task_count" name="Tasks" fill="#8884d8" />
+                  <Bar dataKey="task_count" name={taskMetrics.find(m => m.key === selectedMetric)?.label} fill="#8884d8" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -554,22 +469,22 @@ export default function ReportsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Task Distribution by Tag</CardTitle>
+            <CardTitle>Tasks by Project</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={taskAnalytics?.tasks_by_tag || []}
+                    data={taskAnalytics?.tasks_by_project || []}
                     dataKey="task_count"
-                    nameKey="tag_name"
+                    nameKey="project_name"
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
                     label
                   >
-                    {(taskAnalytics?.tasks_by_tag || []).map((entry, index) => (
+                    {(taskAnalytics?.tasks_by_project || []).map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
@@ -585,7 +500,7 @@ export default function ReportsPage() {
       <div className="grid grid-cols-1 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Task Progress Timeline</CardTitle>
+            <CardTitle>Task Metrics Trend</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
@@ -596,10 +511,63 @@ export default function ReportsPage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="completed" name="Completed Tasks" stroke="#82ca9d" />
-                  <Line type="monotone" dataKey="in_progress" name="In Progress" stroke="#8884d8" />
-                  <Line type="monotone" dataKey="overdue" name="Overdue" stroke="#ff7300" />
+                  <Line type="monotone" dataKey={selectedMetric} name={taskMetrics.find(m => m.key === selectedMetric)?.label} stroke="#8884d8" />
                 </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Tasks by Tag</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={taskAnalytics?.tasks_by_tag || []}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="tag_name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="task_count" name="Tasks" fill="#82ca9d" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Time Allocation Overview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={[
+                      { name: 'Hours Spent', value: taskAnalytics?.hours_spent || 0 },
+                      { name: 'Remaining Hours', value: taskAnalytics?.remaining_hours || 0 },
+                      { name: 'Hours to Assign', value: taskAnalytics?.working_hours_to_assign || 0 },
+                    ]}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    label
+                  >
+                    {[0, 1, 2].map((index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
@@ -638,10 +606,22 @@ export default function ReportsPage() {
             </Select>
           )}
 
-          <Button variant="outline" onClick={handleExport}>
-            <Download className="h-4 w-4 mr-2" />
-            Export Report
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Download className="h-4 w-4 mr-2" />
+                Export Report
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={() => handleExport('csv')}>
+                Export as CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('pdf')}>
+                Export as PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
