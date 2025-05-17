@@ -5,7 +5,7 @@ from .task import TaskResponse
 
 class TaskStageBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    sequence: int = Field(default=1, ge=1)
+    sequence: int = Field(default=1, ge=0)
     description: Optional[str] = None
     fold: bool = Field(default=False, description="Whether stage is folded in Kanban view")
     is_active: bool = Field(default=True)

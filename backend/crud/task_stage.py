@@ -50,7 +50,7 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
         )
         
         # Set the sequence to be one more than the highest, or 1 if no stages exist
-        sequence = (last_stage.sequence + 1) if last_stage else 1
+        sequence = max(1, (last_stage.sequence + 1) if last_stage else 1)
         
         db_obj = TaskStage(
             name=obj_in.name,

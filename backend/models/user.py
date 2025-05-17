@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from .base import Base
+from .message import Message
 
 class User(Base):
     __tablename__ = "users"
@@ -38,6 +39,10 @@ class User(Base):
     activities = relationship("Activity", back_populates="user")
     log_notes = relationship("LogNote", back_populates="user")
     log_note_attachments = relationship("LogNoteAttachment", back_populates="user")
+    
+    # Message relationships
+    sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")
+    received_messages = relationship("Message", foreign_keys="Message.recipient_id", back_populates="recipient")
 
     def __repr__(self):
         return f"<User {self.username}>" 

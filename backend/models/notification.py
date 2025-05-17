@@ -1,7 +1,23 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from enum import Enum
 from .base import Base
+
+
+class NotificationType(str, Enum):
+    """Enum for notification types."""
+    TASK_ASSIGNMENT = "task_assignment"
+    TASK_UPDATE = "task_update"
+    TASK_COMMENT = "task_comment"
+    TASK_MENTION = "task_mention"
+    MESSAGE = "message"
+    PROJECT_UPDATE = "project_update"
+    MILESTONE_UPDATE = "milestone_update"
+    SYSTEM = "system"
+    DEADLINE_REMINDER = "deadline_reminder"
+    LOG_NOTE = "log_note"
+
 
 class Notification(Base):
     __tablename__ = "notifications"
@@ -10,7 +26,7 @@ class Notification(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
-    type = Column(String(50), nullable=False)  # e.g., 'task_assignment', 'mention', etc.
+    notification_type = Column(String(50), nullable=False)  # Using values from NotificationType enum
     is_read = Column(Boolean, default=False)
     
     # Reference info (e.g., task_id if notification is about a task)

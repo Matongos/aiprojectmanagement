@@ -337,7 +337,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       const newStage = {
         name: 'New Stage',
         description: '',
-        sequence: project?.stages.length + 1,
+        sequence: Math.max(1, project?.stages?.length + 1 || 1),
         project_id: parseInt(projectId),
         is_active: true,
         fold: false
@@ -503,7 +503,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
         body: JSON.stringify({
           name: newStageName.trim(),
           description: '',
-          sequence: stages.length,
+          sequence: Math.max(1, stages.length + 1),
           project_id: Number(projectId),
           is_active: true
         })

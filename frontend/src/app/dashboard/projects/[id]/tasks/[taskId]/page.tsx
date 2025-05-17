@@ -108,7 +108,12 @@ interface Activity {
   activity_type: ActivityType;
   description: string;
   created_at: string;
-  user: ActivityUser;
+  user: {
+    id: number;
+    username: string;
+    full_name: string;
+    profile_image_url: string | null;
+  };
   user_id?: number;
   uniqueId?: string;
   attachments?: Array<{
@@ -296,7 +301,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const { data: stagesData, isLoading: isLoadingStages, error: stagesError } = useQuery({
     queryKey: ['stages', id],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/projects/${id}/stages`, {
+      const response = await fetch(`${API_BASE_URL}/stages/project/${id}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -342,6 +347,26 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     staleTime: 0 // Consider data stale immediately
   });
 
+  // Add log notes query
+  const { data: logNotesData, isLoading: isLoadingLogNotes } = useQuery({
+    queryKey: ['log-notes', resolvedParams.taskId],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams.taskId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Failed to fetch log notes');
+      return response.json();
+    },
+    enabled: !!token && !!resolvedParams.taskId,
+    refetchInterval: 5000, // Refetch every 5 seconds
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+  });
+
   // Derived state
   const users = usersData || [];
   const milestones = milestonesData || [];
@@ -375,7 +400,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     is_completed: false,
     is_active: true
   });
-  const [logNotes, setLogNotes] = useState<LogNote[]>([]);
   const [showLogForm, setShowLogForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -614,7 +638,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Update the groupedActivities calculation
   const groupedActivities = useMemo(() => {
-    if (!taskActivities || !comments || !activitiesData) return {};
+    if (!taskActivities || !comments || !logNotesData) return {};
     
     // Combine activities, comments, and log notes into a single array with unique keys
     const allItems = [
@@ -634,23 +658,16 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         activity_type: 'comment',
         description: comment.content,
         created_at: comment.created_at,
-        user: {
-          id: comment.user.id,
-          username: comment.user.username,
-          full_name: comment.user.full_name,
-          profile_image_url: comment.user.profile_image_url
-        }
+        user: comment.user
       })),
-      ...(activitiesData || []).filter((activity: Activity) => activity.activity_type === 'log_note').map((logNote: Activity) => ({
-        ...logNote,
+      ...(logNotesData || []).map((logNote: any): Activity => ({
+        id: logNote.id,
         uniqueId: `log-${logNote.id}`,
         activity_type: 'log_note',
-        user: logNote.user || {
-          id: logNote.user_id || 0,
-          username: 'Unknown',
-          full_name: 'Unknown User',
-          profile_image_url: null
-        }
+        description: logNote.content,
+        created_at: logNote.created_at,
+        user: logNote.user,
+        attachments: logNote.attachments
       }))
     ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -663,7 +680,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       groups[date].push(item);
       return groups;
     }, {});
-  }, [taskActivities, comments, activitiesData]);
+  }, [taskActivities, comments, logNotesData]);
 
   // Update effects to use task state instead of taskDetails
   useEffect(() => {
@@ -2598,15 +2615,15 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                             >
                                               {attachment.original_filename}
                                             </a>
-                                          </div>
+                                            </div>
                                         ))}
+                                            </div>
+                                        )}
                                       </div>
-                                    )}
-                                  </div>
                                 ) : activity.activity_type === 'comment' ? (
                                   <div className="text-sm text-gray-700">
-                                    {activity.description}
-                                  </div>
+                                        {activity.description}
+                                      </div>
                                 ) : (
                                   <div className="text-sm text-gray-700">
                                     {activity.description}

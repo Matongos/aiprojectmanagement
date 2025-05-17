@@ -8,6 +8,8 @@ import requests
 from pathlib import Path
 import jinja2
 from config import settings
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+import aiosmtplib
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -21,6 +23,22 @@ TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
 template_loader = jinja2.FileSystemLoader(searchpath=str(TEMPLATE_DIR))
 template_env = jinja2.Environment(loader=template_loader)
 
+# Email configuration
+conf = ConnectionConfig(
+    MAIL_USERNAME=settings.MAIL_USERNAME,
+    MAIL_PASSWORD=settings.MAIL_PASSWORD,
+    MAIL_FROM=settings.MAIL_FROM,
+    MAIL_PORT=settings.MAIL_PORT,
+    MAIL_SERVER=settings.MAIL_SERVER,
+    MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
+    USE_CREDENTIALS=True,
+    VALIDATE_CERTS=True
+)
+
+# Initialize FastMail
+fastmail = FastMail(conf)
 
 class EmailService:
     """Service for sending emails."""
@@ -230,4 +248,29 @@ class EmailService:
         # Replace multiple newlines with double newline
         text = re.sub(r'\n+', '\n\n', text)
         
-        return text.strip() 
+        return text.strip()
+
+async def send_email_notification(
+    recipient_email: str,
+    subject: str,
+    content: str,
+    cc: List[str] = None,
+    attachments: List[str] = None
+) -> bool:
+    """Send an email notification."""
+    try:
+        # Create message schema
+        message = MessageSchema(
+            subject=subject,
+            recipients=[recipient_email],
+            body=content,
+            cc=cc or [],
+            subtype="plain"
+        )
+
+        # Send email
+        await fastmail.send_message(message)
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {str(e)}")
+        return False 

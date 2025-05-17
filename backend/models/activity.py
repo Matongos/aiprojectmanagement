@@ -1,8 +1,18 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from enum import Enum
 
 from .base import Base
+
+
+class ActivityType(str, Enum):
+    """Enum for activity types."""
+    TASK_UPDATE = "task_update"
+    COMMENT = "comment"
+    LOG_NOTE = "log_note"
+    MESSAGE = "message"
+    SYSTEM_NOTIFICATION = "system_notification"
 
 
 class Activity(Base):

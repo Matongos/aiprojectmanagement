@@ -16,6 +16,15 @@ task_dependencies = Table(
     extend_existing=True
 )
 
+# Association table for task followers
+task_followers = Table(
+    'task_followers',
+    Base.metadata,
+    Column('task_id', Integer, ForeignKey('tasks.id', ondelete='CASCADE'), primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    extend_existing=True
+)
+
 class Task(Base):
     """Task model for project management"""
     __tablename__ = "tasks"
@@ -71,6 +80,14 @@ class Task(Base):
     subtasks = relationship("Task", back_populates="parent", remote_side=[parent_id])
     tags = relationship("Tag", secondary=task_tag, back_populates="tasks")
     log_notes = relationship("LogNote", back_populates="task", cascade="all, delete-orphan")
+    messages = relationship("Message", back_populates="task", cascade="all, delete-orphan")
+    
+    # Followers relationship
+    followers = relationship(
+        "User",
+        secondary=task_followers,
+        backref="followed_tasks"
+    )
 
     # Many-to-many relationship for task dependencies
     depends_on = relationship(
@@ -127,4 +144,22 @@ class Task(Base):
                 .order_by(TaskStage.sequence.desc())
                 .first()
             )
-        return None 
+        return None
+
+    def add_follower(self, user_id: int, db: Session) -> bool:
+        """Add a follower to the task"""
+        from models.user import User
+        user = db.query(User).get(user_id)
+        if user and user not in self.followers:
+            self.followers.append(user)
+            return True
+        return False
+
+    def remove_follower(self, user_id: int, db: Session) -> bool:
+        """Remove a follower from the task"""
+        from models.user import User
+        user = db.query(User).get(user_id)
+        if user and user in self.followers:
+            self.followers.remove(user)
+            return True
+        return False 
