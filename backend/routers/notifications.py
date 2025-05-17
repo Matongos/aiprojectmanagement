@@ -86,36 +86,32 @@ async def create_notification(
     return crud.create_notification(db, notification)
 
 
-@router.put("/{notification_id}/read", response_model=NotificationSchema)
-async def mark_notification_as_read(
+@router.put("/{notification_id}/read", response_model=dict)
+async def mark_notification_read(
     notification_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Mark a specific notification as read.
-    """
-    db_notification = crud.get_notification(db, notification_id)
-    if db_notification is None:
+    """Mark a specific notification as read."""
+    notification = crud.get_notification(db, notification_id)
+    if not notification:
         raise HTTPException(status_code=404, detail="Notification not found")
     
-    # Check if the user is authorized to update this notification
-    if db_notification.user_id != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to update this notification")
+    if notification.user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to access this notification")
     
-    return crud.mark_as_read(db, notification_id)
+    crud.mark_notification_read(db, notification_id)
+    return {"message": "Notification marked as read"}
 
 
 @router.put("/mark-all-read", response_model=dict)
-async def mark_all_notifications_as_read(
+async def mark_all_notifications_read(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Mark all notifications for the current user as read.
-    """
-    updated_count = crud.mark_all_as_read(db, current_user["id"])
-    return {"message": f"Marked {updated_count} notifications as read"}
+    """Mark all notifications as read for the current user."""
+    crud.mark_all_notifications_read(db, current_user["id"])
+    return {"message": "All notifications marked as read"}
 
 
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)

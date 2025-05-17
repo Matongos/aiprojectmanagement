@@ -1290,3 +1290,61 @@ async def update_task_tags(
         activity.create_activity(db, activity_data)
     
     return task 
+
+@router.post("/{task_id}/follow")
+async def follow_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Follow a task."""
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user in task.followers:
+        raise HTTPException(status_code=400, detail="Already following this task")
+
+    task.followers.append(user)
+    db.commit()
+
+    # Notify task owner
+    if task.created_by != current_user["id"]:
+        notification_service.create_notification(
+            db=db,
+            user_id=task.created_by,
+            title="New Task Follower",
+            content=f"{user.full_name} started following your task '{task.title}'",
+            notification_type="task_follow",
+            reference_type="task",
+            reference_id=task_id
+        )
+
+    return {"message": "Successfully followed task"}
+
+@router.delete("/{task_id}/unfollow")
+async def unfollow_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Unfollow a task."""
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user not in task.followers:
+        raise HTTPException(status_code=400, detail="Not following this task")
+
+    task.followers.remove(user)
+    db.commit()
+
+    return {"message": "Successfully unfollowed task"}

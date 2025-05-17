@@ -22,13 +22,6 @@ class Settings(BaseSettings):
     
     # Email settings
     EMAILS_ENABLED: bool = True
-    SMTP_TLS: bool = True
-    SMTP_PORT: Optional[int] = 587
-    SMTP_HOST: Optional[str] = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    SMTP_USER: Optional[str] = os.getenv("SMTP_USER", "")
-    SMTP_PASSWORD: Optional[str] = os.getenv("SMTP_PASSWORD", "")
-    EMAILS_FROM_EMAIL: Optional[str] = os.getenv("EMAILS_FROM_EMAIL", "noreply@aiprojectmanagement.com")
-    EMAILS_FROM_NAME: Optional[str] = os.getenv("EMAILS_FROM_NAME", "AI Project Management")
     
     # If using a service like Resend
     EMAIL_SERVICE: str = os.getenv("EMAIL_SERVICE", "smtp")  # smtp or resend

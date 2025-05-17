@@ -4,6 +4,8 @@ from sqlalchemy.sql import func
 
 from .base import Base
 from .message import Message
+from .task import task_followers
+from .project import project_followers
 
 class User(Base):
     __tablename__ = "users"
@@ -43,6 +45,12 @@ class User(Base):
     # Message relationships
     sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")
     received_messages = relationship("Message", foreign_keys="Message.recipient_id", back_populates="recipient")
+
+    # Task relationships
+    followed_tasks = relationship("Task", secondary=task_followers, back_populates="followers")
+
+    # Project relationships
+    followed_projects = relationship("Project", secondary=project_followers, back_populates="followers")
 
     def __repr__(self):
         return f"<User {self.username}>" 

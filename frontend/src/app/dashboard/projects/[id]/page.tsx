@@ -26,7 +26,8 @@ import {
   Trash2,
   FolderOpen,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  Users
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { use } from "react";
@@ -52,6 +53,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -146,6 +148,13 @@ interface Milestone {
   name: string;
 }
 
+interface Follower {
+  id: number;
+  name: string;
+  email: string;
+  profile_image_url: string | null;
+}
+
 const styles = `
   .writing-mode-vertical {
     writing-mode: vertical-rl;
@@ -214,6 +223,11 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [selectedMilestone, setSelectedMilestone] = useState<number | null>(null);
   const [deadline, setDeadline] = useState<string | null>(null);
+  const [isFollowersDialogOpen, setIsFollowersDialogOpen] = useState(false);
+  const [followers, setFollowers] = useState<Follower[]>([]);
+  const [isLoadingFollowers, setIsLoadingFollowers] = useState(false);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [followerCount, setFollowerCount] = useState(0);
 
   useEffect(() => {
     const fetchProjectAndStages = async () => {
@@ -799,6 +813,38 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     setStageToDelete(stageId);
   };
 
+  const fetchFollowers = async () => {
+    if (!projectId) return;
+    
+    try {
+      setIsLoadingFollowers(true);
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch followers');
+      }
+      
+      const data = await response.json();
+      setFollowers(data);
+    } catch (error) {
+      console.error('Error fetching followers:', error);
+      toast.error('Failed to load followers');
+    } finally {
+      setIsLoadingFollowers(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isFollowersDialogOpen) {
+      fetchFollowers();
+    }
+  }, [isFollowersDialogOpen, projectId, token]);
+
   useEffect(() => {
     // Add the styles to the document
     const styleSheet = document.createElement("style");
@@ -810,6 +856,54 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       document.head.removeChild(styleSheet);
     };
   }, []);
+
+  const fetchFollowerInfo = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers/info`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch follower info');
+      }
+
+      const data = await response.json();
+      setIsFollowing(data.is_following);
+      setFollowerCount(data.follower_count);
+    } catch (error) {
+      console.error('Error fetching follower info:', error);
+    }
+  };
+
+  const handleFollowToggle = async () => {
+    try {
+      const method = isFollowing ? 'DELETE' : 'POST';
+      const endpoint = isFollowing ? 'unfollow' : 'follow';
+
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/${endpoint}`, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${isFollowing ? 'unfollow' : 'follow'} project`);
+      }
+
+      await fetchFollowerInfo();
+    } catch (error) {
+      console.error('Error toggling follow status:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchFollowerInfo();
+  }, [projectId]);
 
   if (loading) return <div className="p-4">Loading...</div>;
   if (!project) return <div className="p-4">Project not found</div>;
@@ -933,6 +1027,91 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     </Dialog>
   );
 
+  // Followers Dialog
+  const FollowersDialog = () => (
+    <Dialog open={isFollowersDialogOpen} onOpenChange={setIsFollowersDialogOpen}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Project Followers</DialogTitle>
+          <DialogDescription>
+            Followers receive notifications and emails about project updates.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="py-4">
+          {isLoadingFollowers ? (
+            <div className="space-y-2">
+              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
+              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
+              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
+            </div>
+          ) : followers.length === 0 ? (
+            <div className="text-center py-4 text-gray-500">
+              No followers yet
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {followers.map((follower) => (
+                <div
+                  key={follower.id}
+                  className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50"
+                >
+                  <div className="flex items-center gap-2">
+                    <Avatar>
+                      <AvatarImage src={follower.profile_image_url || DEFAULT_AVATAR_URL} />
+                      <AvatarFallback>{follower.name[0]}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">{follower.name}</p>
+                      <p className="text-xs text-gray-500">{follower.email}</p>
+                    </div>
+                  </div>
+                  {user?.id !== follower.id && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={async () => {
+                        try {
+                          const response = await fetch(
+                            `${API_BASE_URL}/projects/${projectId}/followers/${follower.id}`,
+                            {
+                              method: 'DELETE',
+                              headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                              }
+                            }
+                          );
+
+                          if (!response.ok) {
+                            throw new Error('Failed to remove follower');
+                          }
+
+                          setFollowers(prev => prev.filter(f => f.id !== follower.id));
+                          toast.success('Follower removed successfully');
+                        } catch (error) {
+                          console.error('Error removing follower:', error);
+                          toast.error('Failed to remove follower');
+                        }
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setIsFollowersDialogOpen(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="container mx-auto p-4">
       {/* Project Header */}
@@ -949,6 +1128,14 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
           }`}>
             {project.status.replace('_', ' ').charAt(0).toUpperCase() + project.status.slice(1)}
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsFollowersDialogOpen(true)}
+          >
+            <Users className="h-4 w-4 mr-1" />
+            <span>Followers</span>
+          </Button>
         </div>
 
         <div className="flex items-center gap-4">
@@ -1384,6 +1571,9 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Followers Dialog */}
+      <FollowersDialog />
     </div>
   );
 } 

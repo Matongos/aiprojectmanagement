@@ -31,10 +31,10 @@ conf = ConnectionConfig(
     MAIL_PORT=settings.MAIL_PORT,
     MAIL_SERVER=settings.MAIL_SERVER,
     MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True,
-    VALIDATE_CERTS=True
+    MAIL_STARTTLS=settings.MAIL_STARTTLS,
+    MAIL_SSL_TLS=settings.MAIL_SSL_TLS,
+    USE_CREDENTIALS=settings.USE_CREDENTIALS,
+    VALIDATE_CERTS=settings.VALIDATE_CERTS
 )
 
 # Initialize FastMail
@@ -43,6 +43,13 @@ fastmail = FastMail(conf)
 class EmailService:
     """Service for sending emails."""
     
+    def __init__(self):
+        self.smtp_server = settings.MAIL_SERVER
+        self.smtp_port = settings.MAIL_PORT
+        self.smtp_username = settings.MAIL_USERNAME
+        self.smtp_password = settings.MAIL_PASSWORD
+        self.from_email = settings.MAIL_FROM
+
     @classmethod
     def send_email(
         cls,
@@ -94,7 +101,7 @@ class EmailService:
         try:
             message = MIMEMultipart("alternative")
             message["Subject"] = subject
-            message["From"] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+            message["From"] = f"{settings.MAIL_FROM_NAME} <{settings.MAIL_FROM}>"
             message["To"] = email_to
             
             if cc:
@@ -110,18 +117,18 @@ class EmailService:
             message.attach(part2)
             
             # Connect to server and send
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-                if settings.SMTP_TLS:
+            with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
+                if settings.MAIL_STARTTLS:
                     server.starttls()
-                if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                if settings.MAIL_USERNAME and settings.MAIL_PASSWORD:
+                    server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
                     
                 recipients = [email_to]
                 if cc:
                     recipients.extend(cc)
                 
                 server.sendmail(
-                    settings.EMAILS_FROM_EMAIL,
+                    settings.MAIL_FROM,
                     recipients,
                     message.as_string()
                 )
@@ -155,7 +162,7 @@ class EmailService:
             }
             
             payload = {
-                "from": f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>",
+                "from": f"{settings.MAIL_FROM_NAME} <{settings.MAIL_FROM}>",
                 "to": [email_to] if isinstance(email_to, str) else email_to,
                 "subject": subject,
                 "html": html_content,
@@ -227,7 +234,7 @@ class EmailService:
             )
             
         except Exception as e:
-            logger.error(f"Failed to render template and send email: {str(e)}")
+            logger.error(f"Failed to send template email: {str(e)}")
             return False
     
     @staticmethod
@@ -249,6 +256,42 @@ class EmailService:
         text = re.sub(r'\n+', '\n\n', text)
         
         return text.strip()
+
+    def send_notification_email(
+        self,
+        to_email: str,
+        subject: str,
+        content: str,
+        html_content: Optional[str] = None
+    ) -> bool:
+        """Send a notification email to a user."""
+        try:
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = self.from_email
+            msg['To'] = to_email
+
+            # Plain text version
+            text_part = MIMEText(content, 'plain')
+            msg.attach(text_part)
+
+            # HTML version (if provided)
+            if html_content:
+                html_part = MIMEText(html_content, 'html')
+                msg.attach(html_part)
+
+            # Connect to SMTP server and send email
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.smtp_username, self.smtp_password)
+                server.send_message(msg)
+
+            logger.info(f"Successfully sent notification email to {to_email}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send notification email: {str(e)}")
+            return False
 
 async def send_email_notification(
     recipient_email: str,

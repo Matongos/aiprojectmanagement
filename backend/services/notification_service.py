@@ -9,6 +9,10 @@ from schemas.notification import NotificationCreate
 from services.email_service import EmailService
 from config import settings
 from services import user_service
+from models.notification import Notification
+from models.user import User
+from models.project import Project
+from models.task import Task
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -16,6 +20,9 @@ logger = logging.getLogger(__name__)
 class NotificationService:
     """Service for managing notifications."""
     
+    def __init__(self):
+        self.email_service = EmailService()
+
     @staticmethod
     def create_notification(db: Session, notification_data: Dict[str, Any]):
         """
@@ -410,3 +417,67 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to send email notification: {str(e)}")
             return False 
+
+    def notify_project_followers(
+        self,
+        db: Session,
+        project_id: int,
+        title: str,
+        content: str,
+        notification_type: str,
+        exclude_user_id: Optional[int] = None
+    ) -> List[Notification]:
+        """Notify all followers of a project."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            return []
+
+        notifications = []
+        for follower in project.followers:
+            if exclude_user_id and follower.id == exclude_user_id:
+                continue
+
+            notification = self.create_notification(
+                db=db,
+                user_id=follower.id,
+                title=title,
+                content=content,
+                notification_type=notification_type,
+                reference_type="project",
+                reference_id=project_id
+            )
+            notifications.append(notification)
+
+        return notifications
+
+    def notify_task_followers(
+        self,
+        db: Session,
+        task_id: int,
+        title: str,
+        content: str,
+        notification_type: str,
+        exclude_user_id: Optional[int] = None
+    ) -> List[Notification]:
+        """Notify all followers of a task."""
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            return []
+
+        notifications = []
+        for follower in task.followers:
+            if exclude_user_id and follower.id == exclude_user_id:
+                continue
+
+            notification = self.create_notification(
+                db=db,
+                user_id=follower.id,
+                title=title,
+                content=content,
+                notification_type=notification_type,
+                reference_type="task",
+                reference_id=task_id
+            )
+            notifications.append(notification)
+
+        return notifications 

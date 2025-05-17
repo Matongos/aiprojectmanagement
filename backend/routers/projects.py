@@ -22,8 +22,11 @@ from schemas.tag import Tag as TagSchema
 from crud.tag import tag as tag_crud
 from crud import activity
 from schemas.activity import ActivityCreate
+from services.notification_service import NotificationService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+notification_service = NotificationService()
 
 # Helper function to check if a user has assigned tasks in a project
 def user_has_project_tasks(db: Session, project_id: int, user_id: int) -> bool:
@@ -581,4 +584,62 @@ async def update_project_tags(
             )
         )
     
-    return project 
+    return project
+
+@router.post("/{project_id}/follow")
+async def follow_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Follow a project."""
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user in project.followers:
+        raise HTTPException(status_code=400, detail="Already following this project")
+
+    project.followers.append(user)
+    db.commit()
+
+    # Notify project owner
+    if project.created_by != current_user["id"]:
+        notification_service.create_notification(
+            db=db,
+            user_id=project.created_by,
+            title="New Project Follower",
+            content=f"{user.full_name} started following your project '{project.name}'",
+            notification_type="project_follow",
+            reference_type="project",
+            reference_id=project_id
+        )
+
+    return {"message": "Successfully followed project"}
+
+@router.delete("/{project_id}/unfollow")
+async def unfollow_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Unfollow a project."""
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user not in project.followers:
+        raise HTTPException(status_code=400, detail="Not following this project")
+
+    project.followers.remove(user)
+    db.commit()
+
+    return {"message": "Successfully unfollowed project"} 

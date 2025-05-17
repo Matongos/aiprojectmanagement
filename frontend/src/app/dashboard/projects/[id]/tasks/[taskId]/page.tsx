@@ -4,7 +4,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, ChevronUp } from "lucide-react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, ChevronUp, Users } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -101,7 +101,7 @@ interface Task {
   comments: Comment[];
 }
 
-type ActivityType = 'task_update' | 'comment' | 'log_note';
+type ActivityType = 'task_update' | 'comment' | 'log_note' | 'message';
 
 interface Activity {
   id: number;
@@ -196,14 +196,11 @@ interface TaskStage {
 interface BaseActivityItem {
   id: number;
   created_at: string;
-  user: User;
+  user: ActivityUser;
 }
 
 interface LogNote extends BaseActivityItem {
-  id: number;
   content: string;
-  created_at: string;
-  user: User;
   attachments: Array<{
     id: number;
     filename: string;
@@ -213,11 +210,20 @@ interface LogNote extends BaseActivityItem {
 }
 
 interface ActivityItem extends BaseActivityItem {
-  activity_type: 'task_update' | 'comment';
+  activity_type: 'task_update' | 'comment' | 'message';
   description: string;
 }
 
 type FeedItem = LogNote | ActivityItem;
+
+// Add Message interface
+interface Message {
+  id: number;
+  content: string;
+  created_at: string;
+  sender: User;
+  task_id: number;
+}
 
 export default function TaskDetails({ params }: TaskDetailsProps) {
   const router = useRouter();
@@ -235,14 +241,17 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Add state for log note form
   const [content, setContent] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Change showMessageDialog to showMessageInput
+  const [showMessageInput, setShowMessageInput] = useState(false);
+  const [messageText, setMessageText] = useState("");
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
 
   // Task query with loading and error states
   const { 
     isLoading: isLoadingTask, 
     error: taskError,
-    refetch: refetchTask 
+    refetch: refetchTask
   } = useQuery({
     queryKey: ['task', taskId],
     queryFn: async () => {
@@ -325,8 +334,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // Activities query with loading state
   const { 
     data: activitiesData, 
-    isLoading: isLoadingActivities,
-    refetch: refetchActivities 
+    isLoading: isLoadingActivities
   } = useQuery({
     queryKey: ['activities', resolvedParams.taskId],
     queryFn: async () => {
@@ -359,7 +367,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         credentials: 'include',
       });
       if (!response.ok) throw new Error('Failed to fetch log notes');
-      return response.json();
+      const data = await response.json();
+      return data;
     },
     enabled: !!token && !!resolvedParams.taskId,
     refetchInterval: 5000, // Refetch every 5 seconds
@@ -752,7 +761,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
-      <Button variant="outline" size="sm" className="whitespace-nowrap">Send message</Button>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="whitespace-nowrap"
+        onClick={() => setShowMessageInput(prev => !prev)}
+      >
+        Send message
+      </Button>
       <Button 
         variant="outline" 
         size="sm" 
@@ -762,7 +778,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         <Pencil className="w-4 h-4" />
         Log note
       </Button>
-      <Button variant="outline" size="sm" className="whitespace-nowrap">Activities</Button>
       <Button 
         variant="outline" 
         size="sm" 
@@ -771,6 +786,22 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       >
         <MessageSquare className="w-4 h-4" />
         Comments
+      </Button>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="flex items-center gap-2 whitespace-nowrap"
+      >
+        <Paperclip className="w-4 h-4" />
+        <span>0</span>
+      </Button>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="flex items-center gap-2 whitespace-nowrap"
+      >
+        <Users className="w-4 h-4" />
+        <span>0</span>
       </Button>
     </div>
   );
@@ -1160,7 +1191,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         body: JSON.stringify({
           content: commentText,
           task_id: Number(taskId),
-          parent_id: null
+          parent_id: null,
+          notification_type: 'task_comment' // Add the correct notification type
         }),
       });
 
@@ -1245,7 +1277,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       toast.success('Tag added successfully');
 
       // Refresh task details to get the updated tags
-      await refetch();
+      await refetchTask();
     } catch (error) {
       console.error('Error adding tag:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to add tag');
@@ -1277,7 +1309,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       toast.success('Tag removed successfully');
 
       // Refresh task details
-      await refetch();
+      await refetchTask();
     } catch (error) {
       console.error('Error removing tag:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to remove tag');
@@ -1344,6 +1376,183 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       console.error('Error creating tag:', error);
       toast.error('Failed to create tag');
     }
+  };
+
+  // Add handleSendMessage function
+  const handleSendMessage = async () => {
+    if (!messageText.trim() || isSendingMessage) return;
+
+    // Create optimistic message
+    const optimisticMessage = {
+      id: Date.now(),
+      activity_type: 'message' as const,
+      description: messageText,
+      created_at: new Date().toISOString(),
+      user: useAuthStore.getState().user,
+      uniqueId: `temp-message-${Date.now()}`
+    };
+
+    // Optimistically update the activities
+    queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
+      return [optimisticMessage, ...old];
+    });
+
+    setIsSendingMessage(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: messageText,
+          task_id: Number(taskId),
+          message_type: 'task_message'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.detail || 'Failed to send message');
+      }
+
+      // Clear input and close dialog
+      setMessageText('');
+      setShowMessageInput(false);
+
+      // Refresh activities
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['messages', taskId] })
+      ]);
+
+      toast.success('Message sent successfully');
+    } catch (error) {
+      // Revert optimistic update on error
+      await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+      console.error('Error sending message:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to send message');
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  // Add MessageInput component similar to CommentInput
+  const MessageInput = () => {
+    const [localMessageText, setLocalMessageText] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleSubmitMessage = async () => {
+      if (!localMessageText.trim() || isSubmitting) return;
+
+      setIsSubmitting(true);
+      try {
+        // Create optimistic message
+        const optimisticMessage = {
+          id: Date.now(),
+          activity_type: 'message' as const,
+          description: localMessageText,
+          created_at: new Date().toISOString(),
+          user: useAuthStore.getState().user,
+          uniqueId: `temp-message-${Date.now()}`
+        };
+
+        // Optimistically update the activities
+        queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
+          return [optimisticMessage, ...old];
+        });
+
+        const response = await fetch(`${API_BASE_URL}/messages/`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: localMessageText,
+            task_id: Number(taskId),
+            message_type: 'task_message'
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          throw new Error(errorData?.detail || 'Failed to send message');
+        }
+
+        // Clear input and hide message box
+        setLocalMessageText("");
+        setShowMessageInput(false);
+
+        // Refresh activities
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
+          queryClient.invalidateQueries({ queryKey: ['messages', taskId] })
+        ]);
+
+        toast.success('Message sent successfully');
+      } catch (error) {
+        // Revert optimistic update on error
+        await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+        console.error('Error sending message:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to send message');
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="flex items-start gap-3 p-4 border-b">
+        <Avatar className="w-8 h-8">
+          <AvatarImage 
+            src={useAuthStore.getState().user?.profile_image_url || '/default-avatar.png'} 
+            alt={useAuthStore.getState().user?.full_name || 'User'} 
+          />
+          <AvatarFallback>
+            {useAuthStore.getState().user?.full_name?.charAt(0) || 
+             useAuthStore.getState().user?.username?.charAt(0) || 
+             'U'}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 space-y-2">
+          <div className="relative">
+            <Textarea
+              value={localMessageText}
+              onChange={(e) => setLocalMessageText(e.target.value)}
+              placeholder="Type your message..."
+              className="min-h-[80px] pr-24 resize-none focus-visible:ring-1 focus-visible:ring-offset-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmitMessage();
+                }
+              }}
+            />
+            <div className="absolute bottom-2 right-2 flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowMessageInput(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSubmitMessage}
+                disabled={!localMessageText.trim() || isSubmitting}
+                className="bg-blue-600 text-white hover:bg-blue-700"
+              >
+                {isSubmitting ? 'Sending...' : 'Send'}
+              </Button>
+            </div>
+          </div>
+          <div className="text-xs text-gray-500">
+            Press Enter to send, Shift + Enter for new line
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Loading states
@@ -1881,6 +2090,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const CommentInput = () => {
     const [localCommentText, setLocalCommentText] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const queryClient = useQueryClient();
 
     const handleSubmitComment = async () => {
       if (!localCommentText.trim() || isSubmitting) return;
@@ -1902,6 +2112,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           return [optimisticComment, ...old];
         });
 
+        // Send only the required fields for a comment
+        const commentData = {
+          content: localCommentText,
+          task_id: Number(taskId),
+          parent_id: null,
+          create_notification: false // Explicitly tell backend not to create notification
+        };
+
         const response = await fetch(`${API_BASE_URL}/comments/`, {
           method: 'POST',
           headers: {
@@ -1909,11 +2127,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
           },
-          body: JSON.stringify({
-            content: localCommentText,
-            task_id: Number(taskId),
-            parent_id: null
-          }),
+          body: JSON.stringify(commentData),
         });
 
         if (!response.ok) {
@@ -2016,7 +2230,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           user: useAuthStore.getState().user,
           uniqueId: `temp-log-${Date.now()}`,
           attachments: localFiles.map((file, index) => ({
-            id: -index - 1, // Temporary negative IDs for optimistic updates
+            id: -index - 1,
             filename: file.name,
             original_filename: file.name,
             content_type: file.type
@@ -2038,12 +2252,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           });
         }
 
-        console.log('Sending log note to backend:', {
-          content: localNoteText,
-          taskId: resolvedParams.taskId,
-          filesCount: localFiles.length
-        });
-
         const response = await fetch(`${API_BASE_URL}/log-notes/`, {
           method: "POST",
           headers: {
@@ -2054,12 +2262,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => null);
-          console.error('Error response from server:', errorData);
           throw new Error(errorData?.detail || 'Failed to add log note');
         }
-
-        const responseData = await response.json();
-        console.log('Log note created successfully:', responseData);
 
         // Clear input and hide log note box
         setLocalNoteText("");
@@ -2518,11 +2722,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <h3 className="font-medium text-lg">Activity Feed</h3>
               </div>
 
-              {/* Add Log Note Input if showLogForm is true */}
-              {showLogForm && <LogNoteInput />}
+              {/* Add Message Input if showMessageInput is true */}
+              {showMessageInput && <MessageInput />}
 
               {/* Add Comment Input if showCommentInput is true */}
               {showCommentInput && <CommentInput />}
+
+              {/* Add Log Note Input if showLogForm is true */}
+              {showLogForm && <LogNoteInput />}
 
               {/* Activity Feed Content */}
               <div 
@@ -2648,12 +2855,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       <CreateMilestoneDialog />
       <AssigneeDialog />
       <TagDialog />
-
-      {showLogForm && (
-        <div className="mb-6">
-          <LogNoteInput />
-        </div>
-      )}
     </div>
   );
 }

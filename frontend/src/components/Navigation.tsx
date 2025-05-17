@@ -23,6 +23,7 @@ import {
   NavigationMenuTrigger,
   NavigationMenuContent,
 } from "@/components/ui/navigation-menu";
+import { NotificationCount } from '@/components/NotificationCount';
 
 // Custom Link component that renders consistently between server and client
 interface LinkComponentProps {
@@ -202,9 +203,7 @@ export default function Navigation() {
                 <>
                   {/* Desktop Profile */}
                   <div className="hidden md:flex items-center space-x-4">
-                    <button className="text-gray-600 hover:text-gray-900 p-1 rounded-sm hover:bg-gray-100">
-                      <Bell className="h-5 w-5" />
-                    </button>
+                    <NotificationCount />
                     
                     <button className="text-gray-600 hover:text-gray-900 p-1 rounded-sm hover:bg-gray-100">
                       <MessageSquare className="h-5 w-5" />
