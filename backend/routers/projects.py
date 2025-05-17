@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from models.projects import Project as ProjectModel, ProjectMember
+from models.project import Project as ProjectModel, ProjectMember
 from models.task_stage import TaskStage
 from schemas.project import (
     ProjectCreate, 

@@ -1,7 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc, or_
-from models.projects import Project
+from models.project import Project
 from models.task import Task
 from models.task_stage import TaskStage
 from schemas.project import ProjectCreate, ProjectUpdate

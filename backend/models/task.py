@@ -86,7 +86,7 @@ class Task(Base):
     followers = relationship(
         "User",
         secondary=task_followers,
-        backref="followed_tasks"
+        back_populates="followed_tasks"
     )
 
     # Many-to-many relationship for task dependencies

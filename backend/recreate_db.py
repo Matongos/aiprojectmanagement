@@ -2,7 +2,7 @@ from database import engine, Base
 from models.task import Task
 from models.company import Company
 from models.task_stage import TaskStage
-from models.projects import Project
+from models.project import Project
 from models.user import User
 from models.role import Role, Permission
 from models.milestone import Milestone

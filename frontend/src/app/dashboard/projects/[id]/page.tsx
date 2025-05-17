@@ -1032,10 +1032,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     <Dialog open={isFollowersDialogOpen} onOpenChange={setIsFollowersDialogOpen}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Project Followers</DialogTitle>
-          <DialogDescription>
-            Followers receive notifications and emails about project updates.
-          </DialogDescription>
+          <DialogTitle>Add Followers</DialogTitle>
         </DialogHeader>
         <div className="py-4">
           {isLoadingFollowers ? (
@@ -1056,21 +1053,21 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                   className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50"
                 >
                   <div className="flex items-center gap-2">
-                    <Avatar>
+                    <Avatar className="h-8 w-8">
                       <AvatarImage src={follower.profile_image_url || DEFAULT_AVATAR_URL} />
                       <AvatarFallback>{follower.name[0]}</AvatarFallback>
                     </Avatar>
                     <div>
                       <p className="text-sm font-medium">{follower.name}</p>
-                      <p className="text-xs text-gray-500">{follower.email}</p>
                     </div>
                   </div>
                   {user?.id !== follower.id && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={async () => {
+                      className="hover:bg-transparent p-0 h-auto"
+                      onClick={async (e) => {
+                        e.stopPropagation();
                         try {
                           const response = await fetch(
                             `${API_BASE_URL}/projects/${projectId}/followers/${follower.id}`,
@@ -1095,7 +1092,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                         }
                       }}
                     >
-                      <X className="h-4 w-4" />
+                      <X className="h-4 w-4 text-gray-500 hover:text-gray-700" />
                     </Button>
                   )}
                 </div>
@@ -1103,11 +1100,61 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
             </div>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setIsFollowersDialogOpen(false)}>
-            Close
-          </Button>
-        </DialogFooter>
+        <div className="mt-4">
+          <Command className="rounded-lg border shadow-md">
+            <CommandInput placeholder="Search users..." />
+            <CommandEmpty>No users found.</CommandEmpty>
+            <CommandGroup className="max-h-[200px] overflow-auto">
+              {users?.map((user) => (
+                <CommandItem
+                  key={user.id}
+                  onSelect={async () => {
+                    try {
+                      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers`, {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ user_id: user.id })
+                      });
+
+                      if (!response.ok) {
+                        throw new Error('Failed to add follower');
+                      }
+
+                      // Add the new follower to the list if not already present
+                      setFollowers(prev => {
+                        if (!prev.find(f => f.id === user.id)) {
+                          return [...prev, {
+                            id: user.id,
+                            name: user.name,
+                            email: user.email,
+                            profile_image_url: user.profile_image_url || null
+                          }];
+                        }
+                        return prev;
+                      });
+                      toast.success('Follower added successfully');
+                    } catch (error) {
+                      console.error('Error adding follower:', error);
+                      toast.error('Failed to add follower');
+                    }
+                  }}
+                >
+                  <Avatar className="h-6 w-6 mr-2">
+                    <AvatarImage 
+                      src={user.profile_image_url || DEFAULT_AVATAR_URL} 
+                      alt={user.name || ''} 
+                    />
+                    <AvatarFallback>{user.name ? user.name[0] : '?'}</AvatarFallback>
+                  </Avatar>
+                  {user.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Command>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -1131,10 +1178,11 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
           <Button
             variant="outline"
             size="sm"
+            className="flex items-center gap-1"
             onClick={() => setIsFollowersDialogOpen(true)}
           >
-            <Users className="h-4 w-4 mr-1" />
-            <span>Followers</span>
+            <Users className="h-4 w-4" />
+            <span className="ml-1">Followers ({followers.length})</span>
           </Button>
         </div>
 

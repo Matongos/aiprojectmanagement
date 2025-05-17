@@ -8,7 +8,7 @@ from alembic import context
 # Import your models here
 from models.base import Base
 from models.user import User
-from models.projects import Project
+from models.project import Project
 from models.task import Task
 from models.task_stage import TaskStage
 from config import settings

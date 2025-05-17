@@ -18,7 +18,7 @@ from schemas.user import User as UserSchema
 from services.file_service import FileService
 from services.notification_service import NotificationService
 from services.task_service import TaskService
-from models.projects import Project
+from models.project import Project
 from schemas.tag import Tag as TagSchema
 
 router = APIRouter(
