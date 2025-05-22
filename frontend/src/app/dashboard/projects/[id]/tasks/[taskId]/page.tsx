@@ -383,7 +383,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const activities = activitiesData || [];
 
   // State declarations
-  const [currentStage, setCurrentStage] = useState<string>("");
+  const [currentStage, setCurrentStage] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [showAllStages, setShowAllStages] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -417,7 +417,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [isDescriptionChanged, setIsDescriptionChanged] = useState(false);
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
-  const [currentStatus, setCurrentStatus] = useState<TaskState>(TaskState.IN_PROGRESS);
+  const [currentStatus, setCurrentStatus] = useState<TaskState | null>(null);
   const [isStatusChanged, setIsStatusChanged] = useState(false);
   const [task, setTask] = useState<Task | null>(null);
   const [taskActivities, setTaskActivities] = useState<Activity[]>([]);
@@ -430,6 +430,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [originalStageName, setOriginalStageName] = useState<string>("");
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const activityFeedRef = useRef<HTMLDivElement>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
   // Add scroll handler to show/hide scroll to latest button
   const handleActivityScroll = useCallback(() => {
@@ -581,9 +583,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           throw new Error(errorData?.detail || 'Failed to fetch log notes');
         }
         
-          const data = await response.json();
+        const data = await response.json();
         console.log('Log notes fetched successfully:', data);
-          setLogNotes(data);
+        
+        // Update the query cache instead of using setState
+        queryClient.setQueryData(['log-notes', resolvedParams.taskId], data);
       } catch (error) {
         console.error('Error fetching log notes:', error);
         setError('Failed to fetch log notes');
@@ -593,7 +597,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     if (resolvedParams.taskId) {
       fetchLogNotes();
     }
-  }, [resolvedParams.taskId, token]);
+  }, [resolvedParams.taskId, token, queryClient]);
 
   // Fetch comments
   const { data: comments = [], isLoading: isLoadingComments } = useQuery<Comment[]>({
@@ -649,7 +653,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const groupedActivities = useMemo(() => {
     if (!taskActivities || !comments || !logNotesData) return {};
     
-    // Combine activities, comments, and log notes into a single array with unique keys
+    // Combine activities, comments, log notes, and messages into a single array with unique keys
     const allItems = [
       ...(taskActivities || []).map((activity: Activity) => ({
         ...activity,
@@ -677,6 +681,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         created_at: logNote.created_at,
         user: logNote.user,
         attachments: logNote.attachments
+      })),
+      ...(messages || []).map((message: Message): Activity => ({
+        id: message.id,
+        uniqueId: `message-${message.id}`,
+        activity_type: 'message',
+        description: message.content,
+        created_at: message.created_at,
+        user: message.sender
       }))
     ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -689,7 +701,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       groups[date].push(item);
       return groups;
     }, {});
-  }, [taskActivities, comments, logNotesData]);
+  }, [taskActivities, comments, logNotesData, messages]);
 
   // Update effects to use task state instead of taskDetails
   useEffect(() => {
@@ -758,6 +770,36 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setSelectedTags(task.tags);
     }
   }, [task]);
+
+  // Fetch messages effect
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (!token || !taskId) return;
+      
+      setIsLoadingMessages(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/messages/task/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setMessages(data);
+        } else {
+          console.error("Failed to fetch messages");
+        }
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    };
+
+    fetchMessages();
+  }, [taskId, token]);
 
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
@@ -1003,118 +1045,26 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         throw new Error(errorData.detail || 'Failed to update task');
       }
 
-      // If stage was changed, handle stage update
-      if (isStageChanged && newStageId) {
-        try {
-          // Validate token first
-          const isAuthenticated = await checkAuth();
-          if (!isAuthenticated) {
-            toast.error("Session expired. Please log in again.");
-            router.push('/auth/login');
-            return;
-          }
+      // Create activity log for the update
+      const activityResponse = await fetch(`${API_BASE_URL}/activities/`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          activity_type: 'task_update',
+          description: optimisticActivity.description,
+          user_id: useAuthStore.getState().user?.id,
+          created_at: new Date().toISOString()
+        })
+      });
 
-          // Get the new stage name
-          const newStage = stages.find((s: TaskStage) => s.id.toString() === newStageId)?.name || 'Unknown Stage';
-
-          console.log('Moving task to new stage:', {
-            taskId: resolvedParams.taskId,
-            newStageId,
-            fromStage: originalStageName,
-            toStage: newStage
-          });
-
-          // Use the stages endpoint to move the task
-          const stageResponse = await fetch(`${API_BASE_URL}/stages/${newStageId}/tasks/${resolvedParams.taskId}`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            }
-          });
-
-          console.log('Stage update response status:', stageResponse.status);
-          
-          let responseData;
-          try {
-            responseData = await stageResponse.json();
-            console.log('Stage update response data:', responseData);
-          } catch (e) {
-            console.error('Error parsing response:', e);
-            responseData = { detail: 'Failed to parse server response' };
-          }
-
-          if (!stageResponse.ok) {
-            let errorMessage = 'Failed to update task stage';
-            
-            if (responseData) {
-              if (typeof responseData.detail === 'string') {
-                errorMessage = responseData.detail;
-              } else if (Array.isArray(responseData.detail)) {
-                errorMessage = responseData.detail.map((err: any) => err.msg || err.message || String(err)).join(', ');
-              } else if (typeof responseData === 'object') {
-                errorMessage = Object.values(responseData).map(val => String(val)).join(', ');
-              }
-            }
-            
-            throw new Error(errorMessage);
-          }
-
-          // Create activity log for stage change
-          const activityResponse = await fetch(`${API_BASE_URL}/activities/`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              task_id: Number(resolvedParams.taskId),
-              project_id: Number(id),
-              activity_type: 'task_update',
-              description: `Changed task stage from "${originalStageName}" to "${newStage}"`,
-              user_id: useAuthStore.getState().user?.id,
-              created_at: new Date().toISOString()
-            })
-          });
-
-          if (!activityResponse.ok) {
-            const activityError = await activityResponse.json().catch(() => null);
-            console.error('Failed to create activity log:', activityError);
-          } else {
-            console.log('Activity log created successfully for stage change');
-          }
-
-          // Update local state
-          setCurrentStage(newStageId);
-          setOriginalStageName(""); // Reset the original stage name
-          
-          // Reset stage change flag
-          setIsStageChanged(false);
-          setNewStageId(null);
-
-          // Refresh all relevant data
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ['stages', id] }),
-            queryClient.invalidateQueries({ queryKey: ['tasks', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['tags'] })
-          ]);
-          
-          toast.success('Task stage updated successfully');
-        } catch (error) {
-          console.error('Stage update error:', error);
-          
-          // Check if it's an authentication error
-          if (error instanceof Error && error.message.toLowerCase().includes('unauthorized')) {
-            toast.error("Session expired. Please log in again.");
-            router.push('/auth/login');
-            return;
-          }
-          
-          toast.error(error instanceof Error ? error.message : 'Failed to update task stage');
-          throw error;
-        }
+      if (!activityResponse.ok) {
+        const activityError = await activityResponse.json().catch(() => null);
+        console.error('Failed to create activity log:', activityError);
       }
 
       // Reset all change flags
@@ -1129,9 +1079,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       // Refresh all data
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['task', resolvedParams.taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['stages', id] })
+        queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] })
       ]);
 
       toast.success('Task updated successfully');
@@ -1385,17 +1333,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     // Create optimistic message
     const optimisticMessage = {
       id: Date.now(),
-      activity_type: 'message' as const,
-      description: messageText,
+      content: messageText,
       created_at: new Date().toISOString(),
-      user: useAuthStore.getState().user,
-      uniqueId: `temp-message-${Date.now()}`
+      sender: useAuthStore.getState().user,
+      task_id: Number(taskId)
     };
 
-    // Optimistically update the activities
-    queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
-      return [optimisticMessage, ...old];
-    });
+    // Optimistically update the messages
+    setMessages(prev => [optimisticMessage, ...prev]);
 
     setIsSendingMessage(true);
     try {
@@ -1417,20 +1362,21 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         throw new Error(errorData?.detail || 'Failed to send message');
       }
 
+      const sentMessage = await response.json();
+
+      // Update messages with the actual message from the server
+      setMessages(prev => prev.map(msg => 
+        msg.id === optimisticMessage.id ? sentMessage : msg
+      ));
+
       // Clear input and close dialog
       setMessageText('');
       setShowMessageInput(false);
 
-      // Refresh activities
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
-        queryClient.invalidateQueries({ queryKey: ['messages', taskId] })
-      ]);
-
       toast.success('Message sent successfully');
     } catch (error) {
       // Revert optimistic update on error
-      await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+      setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
       console.error('Error sending message:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to send message');
     } finally {
@@ -1451,17 +1397,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
         // Create optimistic message
         const optimisticMessage = {
           id: Date.now(),
-          activity_type: 'message' as const,
-          description: localMessageText,
+          content: localMessageText,
           created_at: new Date().toISOString(),
-          user: useAuthStore.getState().user,
-          uniqueId: `temp-message-${Date.now()}`
+          sender: useAuthStore.getState().user,
+          task_id: Number(taskId)
         };
 
-        // Optimistically update the activities
-        queryClient.setQueryData(['activities', taskId], (old: Activity[] = []) => {
-          return [optimisticMessage, ...old];
-        });
+        // Optimistically update the messages
+        setMessages(prev => [optimisticMessage, ...prev]);
 
         const response = await fetch(`${API_BASE_URL}/messages/`, {
           method: 'POST',
@@ -1481,20 +1424,21 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           throw new Error(errorData?.detail || 'Failed to send message');
         }
 
+        const sentMessage = await response.json();
+
+        // Update messages with the actual message from the server
+        setMessages(prev => prev.map(msg => 
+          msg.id === optimisticMessage.id ? sentMessage : msg
+        ));
+
         // Clear input and hide message box
         setLocalMessageText("");
         setShowMessageInput(false);
 
-        // Refresh activities
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['activities', taskId] }),
-          queryClient.invalidateQueries({ queryKey: ['messages', taskId] })
-        ]);
-
         toast.success('Message sent successfully');
       } catch (error) {
         // Revert optimistic update on error
-        await queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
+        setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
         console.error('Error sending message:', error);
         toast.error(error instanceof Error ? error.message : 'Failed to send message');
       } finally {
@@ -1556,7 +1500,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   };
 
   // Loading states
-  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingComments || isLoadingTags || isLoadingActivities) {
+  if (isLoadingTask || isLoadingStages || isLoadingMilestones || isLoadingUsers || isLoadingComments || isLoadingTags || isLoadingActivities || isLoadingMessages) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-pulse text-gray-500">Loading task details...</div>
@@ -2799,9 +2743,13 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                                   {activity.user?.full_name || activity.user?.username || 'Unknown User'}
                                 </span>
                                 <span className="text-xs text-gray-500 whitespace-nowrap ml-3">
-                                  {new Date(activity.created_at).toLocaleTimeString([], { 
-                                    hour: '2-digit', 
-                                    minute: '2-digit' 
+                                  {new Date(activity.created_at).toLocaleString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true,
+                                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                                   })}
                                 </span>
                               </div>

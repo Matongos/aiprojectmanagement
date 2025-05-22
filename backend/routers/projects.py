@@ -23,6 +23,7 @@ from crud.tag import tag as tag_crud
 from crud import activity
 from schemas.activity import ActivityCreate
 from services.notification_service import NotificationService
+from sqlalchemy.sql import text
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -43,7 +44,45 @@ async def create_project(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    return project_crud.create_with_owner(db=db, obj_in=project, owner_id=current_user["id"])
+    """Create a new project and automatically add superusers as followers."""
+    # Create the project
+    created_project = project_crud.create_with_owner(db=db, obj_in=project, owner_id=current_user["id"])
+    
+    # Get all superusers
+    superusers = db.query(User).filter(User.is_superuser == True).all()
+    
+    # Add each superuser as a follower
+    for superuser in superusers:
+        if superuser.id != current_user["id"]:  # Don't add the project creator if they're a superuser
+            # Check if already following
+            query = text("""
+                SELECT 1 FROM project_followers
+                WHERE project_id = :project_id AND user_id = :user_id
+            """)
+            exists = db.execute(query, {"project_id": created_project.id, "user_id": superuser.id}).first()
+            
+            if not exists:
+                # Add follower
+                query = text("""
+                    INSERT INTO project_followers (project_id, user_id)
+                    VALUES (:project_id, :user_id)
+                """)
+                db.execute(query, {"project_id": created_project.id, "user_id": superuser.id})
+                
+                # Send notification to the superuser
+                notification_data = {
+                    "user_id": superuser.id,
+                    "title": "Project Following",
+                    "content": f"You have been automatically added as a follower to project '{created_project.name}'",
+                    "type": "project_follow",
+                    "reference_type": "project",
+                    "reference_id": created_project.id,
+                    "is_read": False
+                }
+                notification_service.create_notification(db, notification_data)
+    
+    db.commit()
+    return created_project
 
 @router.get("/", response_model=List[ProjectSchema])
 async def read_projects(

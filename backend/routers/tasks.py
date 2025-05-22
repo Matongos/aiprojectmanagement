@@ -493,29 +493,6 @@ async def update_task(
                 # Continue even if activity creation fails
                 pass
         
-        # Send notifications if status has changed
-        if task.state is not None and task.state != original_values["state"]:
-            # Notify creator and assignee (if different from current user and creator)
-            users_to_notify = set()
-            if db_task.created_by and db_task.created_by != current_user["id"]:
-                users_to_notify.add(db_task.created_by)
-            if db_task.assigned_to and db_task.assigned_to != current_user["id"] and db_task.assigned_to != db_task.created_by:
-                users_to_notify.add(db_task.assigned_to)
-                
-            if users_to_notify:
-                # Notify all users in users_to_notify
-                for user_id in users_to_notify:
-                    notification_data = {
-                        "user_id": user_id,
-                        "title": "Task Status Changed",
-                        "content": f"Task '{updated_task.name}' status changed to {task.state}",
-                        "type": "task_status",
-                        "reference_type": "task",
-                        "reference_id": task_id,
-                        "is_read": False
-                    }
-                    notification_service.create_notification(db, notification_data)
-        
         # Create base task dictionary for serialization
         task_dict = {
             "id": updated_task.id,

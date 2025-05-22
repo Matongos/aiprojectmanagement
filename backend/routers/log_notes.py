@@ -7,7 +7,7 @@ from crud import log_note as log_note_crud
 from routers.auth import get_current_user
 import os
 from config import settings
-from datetime import datetime
+from sqlalchemy import func
 
 router = APIRouter(prefix="/log-notes", tags=["log-notes"])
 
@@ -18,20 +18,15 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure upload directory exists
 async def create_log_note(
     content: str = Form(...),
     task_id: int = Form(...),
-    files: Optional[List[UploadFile]] = File(default=None),
+    files: List[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new log note with optional attachments"""
+    """Create a new log note."""
     try:
         # Create log note
         log_note_data = LogNoteCreate(content=content, task_id=task_id)
         log_note = log_note_crud.create_log_note(db, log_note_data, current_user["id"])
-        
-        # Set timestamps
-        current_time = datetime.utcnow()
-        log_note.created_at = current_time
-        log_note.updated_at = current_time
         
         # Handle attachments if any
         if files:  # Only process files if they exist
@@ -91,8 +86,8 @@ async def get_task_log_notes(
                 content=note.content,
                 task_id=note.task_id,
                 created_by=note.created_by,
-                created_at=note.created_at or datetime.utcnow(),
-                updated_at=note.updated_at or datetime.utcnow(),
+                created_at=note.created_at,
+                updated_at=note.updated_at,
                 attachments=note.attachments,
                 user={
                     "id": note.user.id,

@@ -80,6 +80,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import FollowersDialog from '@/components/FollowersDialog';
 
 interface TaskStatus {
   id: string;
@@ -859,6 +860,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
 
   const fetchFollowerInfo = async () => {
     try {
+      console.log('Fetching follower info for project:', projectId);
       const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers/info`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -867,14 +869,24 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch follower info');
+        const errorData = await response.json().catch(() => null);
+        console.error('Follower info response error:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorData
+        });
+        throw new Error(errorData?.detail || `Failed to fetch follower info: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
+      console.log('Follower info fetched successfully:', data);
       setIsFollowing(data.is_following);
       setFollowerCount(data.follower_count);
     } catch (error) {
       console.error('Error fetching follower info:', error);
+      // Set default values in case of error
+      setIsFollowing(false);
+      setFollowerCount(0);
     }
   };
 
@@ -1022,138 +1034,6 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
               Create Task
             </Button>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-
-  // Followers Dialog
-  const FollowersDialog = () => (
-    <Dialog open={isFollowersDialogOpen} onOpenChange={setIsFollowersDialogOpen}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>Add Followers</DialogTitle>
-        </DialogHeader>
-        <div className="py-4">
-          {isLoadingFollowers ? (
-            <div className="space-y-2">
-              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
-              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
-              <div className="h-12 bg-gray-100 animate-pulse rounded-lg" />
-            </div>
-          ) : followers.length === 0 ? (
-            <div className="text-center py-4 text-gray-500">
-              No followers yet
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {followers.map((follower) => (
-                <div
-                  key={follower.id}
-                  className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50"
-                >
-                  <div className="flex items-center gap-2">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src={follower.profile_image_url || DEFAULT_AVATAR_URL} />
-                      <AvatarFallback>{follower.name[0]}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="text-sm font-medium">{follower.name}</p>
-                    </div>
-                  </div>
-                  {user?.id !== follower.id && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="hover:bg-transparent p-0 h-auto"
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        try {
-                          const response = await fetch(
-                            `${API_BASE_URL}/projects/${projectId}/followers/${follower.id}`,
-                            {
-                              method: 'DELETE',
-                              headers: {
-                                'Authorization': `Bearer ${token}`,
-                                'Content-Type': 'application/json'
-                              }
-                            }
-                          );
-
-                          if (!response.ok) {
-                            throw new Error('Failed to remove follower');
-                          }
-
-                          setFollowers(prev => prev.filter(f => f.id !== follower.id));
-                          toast.success('Follower removed successfully');
-                        } catch (error) {
-                          console.error('Error removing follower:', error);
-                          toast.error('Failed to remove follower');
-                        }
-                      }}
-                    >
-                      <X className="h-4 w-4 text-gray-500 hover:text-gray-700" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="mt-4">
-          <Command className="rounded-lg border shadow-md">
-            <CommandInput placeholder="Search users..." />
-            <CommandEmpty>No users found.</CommandEmpty>
-            <CommandGroup className="max-h-[200px] overflow-auto">
-              {users?.map((user) => (
-                <CommandItem
-                  key={user.id}
-                  onSelect={async () => {
-                    try {
-                      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers`, {
-                        method: 'POST',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ user_id: user.id })
-                      });
-
-                      if (!response.ok) {
-                        throw new Error('Failed to add follower');
-                      }
-
-                      // Add the new follower to the list if not already present
-                      setFollowers(prev => {
-                        if (!prev.find(f => f.id === user.id)) {
-                          return [...prev, {
-                            id: user.id,
-                            name: user.name,
-                            email: user.email,
-                            profile_image_url: user.profile_image_url || null
-                          }];
-                        }
-                        return prev;
-                      });
-                      toast.success('Follower added successfully');
-                    } catch (error) {
-                      console.error('Error adding follower:', error);
-                      toast.error('Failed to add follower');
-                    }
-                  }}
-                >
-                  <Avatar className="h-6 w-6 mr-2">
-                    <AvatarImage 
-                      src={user.profile_image_url || DEFAULT_AVATAR_URL} 
-                      alt={user.name || ''} 
-                    />
-                    <AvatarFallback>{user.name ? user.name[0] : '?'}</AvatarFallback>
-                  </Avatar>
-                  {user.name}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </Command>
         </div>
       </DialogContent>
     </Dialog>
@@ -1621,7 +1501,11 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
       </AlertDialog>
 
       {/* Followers Dialog */}
-      <FollowersDialog />
+      <FollowersDialog
+        isOpen={isFollowersDialogOpen}
+        onClose={() => setIsFollowersDialogOpen(false)}
+        projectId={Number(projectId)}
+      />
     </div>
   );
 } 

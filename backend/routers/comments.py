@@ -100,7 +100,7 @@ async def create_comment(
                 "user_id": task.created_by,
                 "title": "New Comment on Task",
                 "content": f"New comment on task: {task.name}",
-                "type": "comment",
+                "type": "task_comment",
                 "reference_type": "comment",
                 "reference_id": db_comment.id,
                 "is_read": False
@@ -113,7 +113,7 @@ async def create_comment(
                 "user_id": task.assigned_to,
                 "title": "New Comment on Task",
                 "content": f"New comment on task: {task.name}",
-                "type": "comment",
+                "type": "task_comment",
                 "reference_type": "comment",
                 "reference_id": db_comment.id,
                 "is_read": False

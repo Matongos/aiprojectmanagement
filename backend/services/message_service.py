@@ -11,6 +11,18 @@ from config import settings
 async def create_message(db: Session, message_data: dict) -> Optional[Dict]:
     """Create a new message and handle notifications."""
     try:
+        # Validate required fields
+        if not message_data.get("content"):
+            raise ValueError("Message content is required")
+        if not message_data.get("message_type"):
+            raise ValueError("Message type is required")
+        if not message_data.get("sender_id"):
+            raise ValueError("Sender ID is required")
+        
+        # For task messages, validate task_id
+        if message_data["message_type"] == "task_message" and not message_data.get("task_id"):
+            raise ValueError("Task ID is required for task messages")
+            
         # Insert message
         insert_query = text("""
         INSERT INTO messages (
@@ -37,7 +49,7 @@ async def create_message(db: Session, message_data: dict) -> Optional[Dict]:
         ).fetchone()
         
         if not result:
-            return None
+            raise ValueError("Failed to insert message into database")
 
         # Create activity log entry
         if result[3]:  # If task_id exists
@@ -145,7 +157,10 @@ async def create_message(db: Session, message_data: dict) -> Optional[Dict]:
     
     except Exception as e:
         db.rollback()
-        return None
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error creating message: {str(e)}\n{error_details}")
+        raise Exception(f"Failed to create message: {str(e)}")
 
 def get_task_messages(db: Session, task_id: int, skip: int = 0, limit: int = 100) -> List[Dict]:
     """Get all messages for a specific task."""

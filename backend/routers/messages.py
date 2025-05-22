@@ -5,6 +5,7 @@ from database import get_db
 from schemas.message import MessageCreate, MessageResponse, MessageUpdate
 from services import message_service
 from routers.auth import get_current_user
+from schemas.user import User
 
 router = APIRouter(
     prefix="/messages",
@@ -15,27 +16,25 @@ router = APIRouter(
 @router.post("/", response_model=MessageResponse)
 async def create_message(
     message: MessageCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Create a new message."""
     try:
-        message_data = message.model_dump()
-        message_data["sender_id"] = current_user["id"]
+        # Add sender_id to message data
+        message_data = message.dict()
+        message_data["sender_id"] = current_user.get("id")
         
-        result = message_service.create_message(db, message_data)
+        if not message_data["sender_id"]:
+            raise HTTPException(status_code=400, detail="Invalid user ID")
+        
+        # Create message
+        result = await message_service.create_message(db, message_data)
         if not result:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to create message"
-            )
-        
+            raise HTTPException(status_code=400, detail="Failed to create message")
         return result
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create message: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/task/{task_id}", response_model=List[MessageResponse])
 async def get_task_messages(

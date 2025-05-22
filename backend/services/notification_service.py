@@ -39,7 +39,7 @@ class NotificationService:
             user_id=notification_data["user_id"],
             title=notification_data["title"],
             content=notification_data.get("content"),
-            type=notification_data.get("type", "general"),
+            type=notification_data.get("type", notification_data.get("notification_type", "general")),
             reference_type=notification_data.get("reference_type"),
             reference_id=notification_data.get("reference_id"),
             is_read=notification_data.get("is_read", False)
