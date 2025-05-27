@@ -82,7 +82,7 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 #### Month 3: Time Tracking & AI Infrastructure Setup
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
-| 1 | [NEW] Ollama installation and setup | AI Engineer | None | Ollama service running |
+| 1 | [NEW] Ollama installation and setup | AI Engineer |✅ None | Ollama service running |
 | 1 | Time entry model and API | Backend | Task API | Time tracking API |
 | 2 | [NEW] PgVector setup and configuration | Backend | PostgreSQL | Vector DB ready |
 | 2 | Task stage workflow | Backend | Task API | Stage transitions |
