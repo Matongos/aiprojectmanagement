@@ -1,11 +1,13 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from datetime import datetime
 
 from .base import Base
 from .message import Message
 from .task import task_followers
 from .project import project_followers
+from .metrics import ResourceMetrics
 
 class User(Base):
     __tablename__ = "users"
@@ -22,8 +24,8 @@ class User(Base):
     job_title = Column(String, nullable=True)
     bio = Column(String, nullable=True)
     email_notifications_enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=text('now()'))
+    updated_at = Column(DateTime(timezone=True), onupdate=text('now()'))
 
     # Relationships using string references to avoid circular imports
     roles = relationship("Role", secondary="user_role", back_populates="users", lazy="joined")
@@ -33,7 +35,6 @@ class User(Base):
     created_milestones = relationship("Milestone", foreign_keys="Milestone.created_by", back_populates="creator")
     created_companies = relationship("Company", foreign_keys="Company.created_by", back_populates="creator", overlaps="creator")
     project_memberships = relationship("ProjectMember", back_populates="user", overlaps="member_of_projects")
-    member_of_projects = relationship("Project", secondary="project_members", back_populates="members", overlaps="project_memberships")
     time_entries = relationship("TimeEntry", back_populates="user")
     comments = relationship("Comment", back_populates="author", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user")
@@ -51,6 +52,20 @@ class User(Base):
 
     # Project relationships
     followed_projects = relationship("Project", secondary=project_followers, back_populates="followers")
+
+    # New relationships
+    owned_projects = relationship(
+        "Project",
+        primaryjoin="User.id==Project.owner_id",
+        back_populates="owner"
+    )
+    member_of_projects = relationship(
+        "Project",
+        secondary="project_members",
+        back_populates="members",
+        overlaps="project_memberships,project_members,project"
+    )
+    metrics = relationship("ResourceMetrics", back_populates="user")
 
     def __repr__(self):
         return f"<User {self.username}>" 

@@ -51,7 +51,7 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 
 ## Detailed Roadmap
 
-### Phase 1: Foundation (Months 1-3)
+### Phase 1: Foundation & Early AI Integration (Months 1-4)
 
 #### Month 1: Core Setup & Authentication
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
@@ -66,149 +66,92 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 | 4 | Role-based permissions  | Backend |✅ User system | Permission system |
 | 4 | CI/CD pipeline setup  | DevOps |✅ Repo setup | GitHub Actions workflow |
 
-**Deliverables:**
-- Working authentication system
-- User management
-- CI/CD pipeline
-- Standardized development environment
-- Initial database schema
-
-#### Month 2: Project & Task Management
+#### Month 2: Project & Task Management with Data Collection
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
 | 1 | Project model and API endpoints |✅ Backend | User system | Project CRUD API |
 | 1 | Task model and API endpoints |✅ Backend | Project API | Task CRUD API |
+| 1 | [NEW] Enhanced data collection models |✅ Backend | Project & Task API | Comprehensive data schema |
 | 2 | Project dashboard UI | Frontend |✅ Project API | List/grid view of projects |
 | 2 | Task board UI (Kanban) | Frontend |✅ Task API | Kanban board for tasks |
 | 3 | File attachment system | Backend |✅ Task API | File upload/download API |
 | 3 | Comments and activity log | Backend |✅ User & Task API | Activity tracking |
+| 4 | [NEW] Performance metrics collection |✅ Backend | Activity log | Metrics tracking system |
 | 4 | Notification system | Backend |✅ User system | Notification engine |
-| 4 | Email integration for notifications |✅ Backend | Notification system | Email delivery for events |
 
-**Deliverables:**
-- Project management core functionality
-- Task management with Kanban boards
-- File attachments
-- Comments and activity logs
-- Basic notification system
-
-#### Month 3: Time Tracking & Basic Reporting
-| Week | Tasks | Owner | Dependencies | Expected Outcome |
-|------|----
----|-------|--------------|------------------|
-| 1 | Time entry model and API | Backend | Task API | Time tracking API |
-| 1 | Timer UI component | Frontend | Time API | Stopwatch functionality |
-| 2 | Task stage workflow | Backend | Task API | Stage transitions |
-| 2 | Gantt chart implementation | Frontend | Task API | Basic timeline view |
-| 3 | Milestone tracking | Backend & Frontend | Project API | Milestone feature |
-| 3 | Basic reporting API | Backend | Project & Time API | Report data endpoints |
-| 4 | Dashboard components | Frontend | Reporting API | Charts and KPIs |
-| 4 | Export functionality | Backend & Frontend | Reporting system | CSV/PDF exports |
-
-**Deliverables:**
-- Time tracking system
-- Basic Gantt chart for project timeline
-- Milestone tracking
-- Initial reporting dashboard
-- Data export functionality
-
-### Phase 2: AI Integration & Advanced Features (Months 4-8)
-
-#### Month 4: AI Infrastructure & Task Prioritization
+#### Month 3: Time Tracking & AI Infrastructure Setup
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
-| 1 | Ollama installation and setup | AI Engineer | None | Ollama service running on dedicated server |
-| 1 | AI service architecture | Backend & AI | None | API design for AI services |
-| 1 | AI environment configuration | DevOps & AI | None | Systemd service for Ollama with monitoring |
-| 2 | Priority scoring algorithm | AI Engineer | Task API | ML model for task scoring |
-| 2 | Database extensions for AI data | Backend | DB schema | AI-specific table fields |
-| 3 | Task auto-prioritization API | Backend | AI service | Priority prediction endpoint |
-| 3 | AI dashboard components | Frontend | AI API | First AI visualization |
-| 4 | Task relevance scoring | AI Engineer | Task API | Semantic relevance engine |
-| 4 | Integration testing | QA | AI endpoints | Validation of AI features |
+| 1 | [NEW] Ollama installation and setup | AI Engineer | None | Ollama service running |
+| 1 | Time entry model and API | Backend | Task API | Time tracking API |
+| 2 | [NEW] PgVector setup and configuration | Backend | PostgreSQL | Vector DB ready |
+| 2 | Task stage workflow | Backend | Task API | Stage transitions |
+| 3 | [NEW] Initial AI service endpoints | Backend & AI | Ollama setup | Basic AI API structure |
+| 3 | Milestone tracking | Backend & Frontend | Project API | Milestone feature |
+| 4 | [NEW] WebSocket implementation | Backend | Core APIs | Real-time updates foundation |
+| 4 | Dashboard components | Frontend | Reporting API | Charts and KPIs |
 
-**Deliverables:**
-- Ollama AI service installation and configuration
-- Task priority scoring algorithm
-- Database schema extensions for AI
-- First AI dashboard components
+#### Month 4: Initial AI Features & Real-Time Processing
+| Week | Tasks | Owner | Dependencies | Expected Outcome |
+|------|-------|-------|--------------|------------------|
+| 1 | Task embedding generation | AI Engineer | PgVector | Semantic task analysis |
+| 1 | Real-time event processing setup | Backend | WebSocket | Event-driven architecture |
+| 2 | Initial task prioritization model | AI Engineer | Task data | Basic priority scoring |
+| 2 | Real-time dashboard updates | Frontend | WebSocket | Live data visualization |
+| 3 | Basic resource utilization tracking | Backend | Time entry data | Resource metrics |
+| 3 | AI insights API endpoints | Backend | AI models | First AI recommendations |
+| 4 | AI dashboard components | Frontend | AI API | Initial AI visualizations |
+| 4 | Performance monitoring setup | DevOps | All systems | Real-time system metrics |
+
+### Phase 2: AI Integration & Advanced Features (Months 5-8)
 
 #### Month 5: Adaptive Scheduling & Dependencies
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
 | 1 | Task dependency model & API | Backend | Task API | Dependency system |
 | 1 | Task dependency UI | Frontend | Dependency API | Visual dependency editor |
-| 2 | PgVector setup | Backend | PostgreSQL | Vector embeddings DB |
-| 2 | Task embedding generation | AI Engineer | Task API | Task vectorization |
-| 3 | Scheduling algorithm development | AI Engineer | Task & dependency API | AI scheduling engine |
-| 3 | Adaptive scheduling API | Backend | AI scheduling engine | Schedule generation endpoint |
+| 2 | [NEW] Advanced scheduling model training | AI Engineer | Historical data | Initial ML scheduling model |
+| 2 | Task embedding refinement | AI Engineer | Task API | Enhanced task vectors |
+| 3 | AI scheduling engine development | AI Engineer | Task & dependency API | Smart scheduling system |
+| 3 | Adaptive scheduling API | Backend | AI scheduling engine | Schedule optimization |
 | 4 | Interactive Gantt with AI insights | Frontend | Scheduling API | Enhanced timeline UI |
 | 4 | Resource conflict detection | Backend | Scheduling engine | Conflict alerts system |
-
-**Deliverables:**
-- Task dependency system
-- Vector embeddings for tasks
-- AI scheduling engine
-- Enhanced Gantt chart with AI scheduling
-- Resource conflict detection
 
 #### Month 6: Risk Management & Predictive Analytics
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
 | 1 | Risk model & API | Backend | Project API | Risk register system |
-| 1 | Risk management UI | Frontend | Risk API | Risk tracking interface |
+| 1 | [NEW] Historical risk data analysis | AI Engineer | Project history | Risk patterns identification |
 | 2 | Risk scoring algorithm | AI Engineer | Project & Task API | Risk prediction model |
 | 2 | Real-time risk monitoring | Backend | AI risk engine | Risk alerts system |
-| 3 | Time estimation model | AI Engineer | Time entry data | ML estimation model |
+| 3 | [NEW] Multi-factor time estimation | AI Engineer | Time entry data | Advanced estimation model |
 | 3 | Predictive analytics API | Backend | AI models | Analytics endpoints |
 | 4 | AI dashboard enhancements | Frontend | Analytics API | Risk visualizations |
 | 4 | Automated alert system | Backend | Risk monitoring | Alert distribution system |
 
-**Deliverables:**
-- Risk management system
-- AI risk scoring
-- Predictive time estimation
-- Enhanced AI dashboards
-- Automated alerts system
-
-#### Month 7: Stakeholder Collaboration & Sentiment Analysis
+#### Month 7: Resource Optimization & Team Analytics
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
-| 1 | Stakeholder model & portal API | Backend | User system | Stakeholder system |
-| 1 | Portal authentication | Frontend | Stakeholder API | Portal login flow |
-| 2 | Document sharing system | Backend & Frontend | File system | Document collaboration |
-| 2 | Approval workflows | Backend | Stakeholder system | Approval process API |
-| 3 | NLP comment analysis | AI Engineer | Comments API | Sentiment analysis model |
-| 3 | Sentiment tracking API | Backend | NLP model | Sentiment data endpoints |
-| 4 | Sentiment visualization | Frontend | Sentiment API | Sentiment dashboard |
-| 4 | Feedback collection system | Backend & Frontend | Stakeholder API | Feedback gathering tools |
+| 1 | [NEW] Skills taxonomy development | AI Engineer | User system | Skills classification |
+| 1 | Skills model & API | Backend | User system | Skills database |
+| 2 | Team composition analysis | Backend & AI | Skills data | Team analytics |
+| 2 | [NEW] Resource efficiency modeling | AI Engineer | Time tracking data | Efficiency metrics |
+| 3 | Resource recommendation engine | AI Engineer | Skills & efficiency data | Smart assignments |
+| 3 | Resource allocation UI | Frontend | Resource API | Team assignment interface |
+| 4 | [NEW] Workload balancing algorithm | AI Engineer | Resource data | Load balancing engine |
+| 4 | Capacity visualization | Frontend | Resource system | Capacity dashboards |
 
-**Deliverables:**
-- Stakeholder portal
-- Document sharing
-- Approval workflows
-- Sentiment analysis of communications
-- Feedback collection system
-
-#### Month 8: Advanced Analytics & Reporting
+#### Month 8: Advanced Analytics & Insights
 | Week | Tasks | Owner | Dependencies | Expected Outcome |
 |------|-------|-------|--------------|------------------|
-| 1 | Advanced analytics data models | Backend | All core APIs | Analytics schema |
-| 1 | Report template engine | Backend | Analytics models | Report generation system |
-| 2 | AI-generated summaries | AI Engineer | Project data | Summary generation model |
-| 2 | Custom report designer UI | Frontend | Report API | Report builder interface |
-| 3 | Historical trend analysis | Backend & AI | Time series data | Trend detection |
-| 3 | KPI tracking system | Backend | Analytics | KPI definition & tracking |
-| 4 | Export enhancements (PDF, Excel) | Backend | Reporting system | Advanced exports |
-| 4 | Dashboard customization | Frontend | Analytics API | User-customizable dashboards |
-
-**Deliverables:**
-- Advanced analytics system
-- AI-generated project summaries
-- Custom report designer
-- Historical trend analysis
-- Enhanced export capabilities
-- Customizable dashboards
+| 1 | [NEW] AI insights aggregation | AI Engineer | All AI models | Unified insights engine |
+| 1 | Advanced analytics models | Backend | All core APIs | Analytics framework |
+| 2 | AI-generated project summaries | AI Engineer | Project data | Auto-summarization |
+| 2 | [NEW] Predictive trend modeling | AI Engineer | Historical data | Trend forecasting |
+| 3 | Historical trend analysis | Backend & AI | Time series data | Pattern detection |
+| 3 | KPI prediction system | Backend | Analytics | Predictive KPIs |
+| 4 | [NEW] AI recommendation dashboard | Frontend | AI insights | Unified AI interface |
+| 4 | Custom analytics builder | Frontend | Analytics API | Self-service analytics |
 
 ### Phase 3: Polishing & Enterprise Features (Months 9-12)
 
@@ -294,26 +237,27 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 
 ## Milestones & Success Criteria
 
-### Milestone 1: MVP Launch (End of Month 3)
+### Milestone 1: Enhanced MVP (End of Month 4)
 **Success Criteria:**
-- Users can create and manage projects
-- Tasks can be tracked on Kanban boards
-- Time tracking is functional
-- Basic reporting is available
+- Core project management functionality working
+- Initial AI infrastructure operational
+- Real-time updates implemented
+- Basic AI insights available
+- Comprehensive data collection in place
 
-### Milestone 2: AI Core Features (End of Month 6)
+### Milestone 2: Advanced AI Features (End of Month 6)
 **Success Criteria:**
-- AI task prioritization works with 80%+ accuracy
-- Adaptive scheduling resolves resource conflicts
-- Risk prediction identifies issues before impact
-- Time estimation matches actual within 20% margin
+- AI scheduling achieves 85%+ resource optimization
+- Risk prediction identifies 90% of critical issues
+- Time estimation accuracy within 15% margin
+- Real-time updates delivered in under 500ms
 
-### Milestone 3: Enterprise Capabilities (End of Month 9)
+### Milestone 3: Resource Optimization (End of Month 8)
 **Success Criteria:**
-- Stakeholder portal gets positive user feedback
-- Resource allocation accuracy improves team utilization by 15%+
-- Custom reports meet 90% of reporting requirements
-- Sentiment analysis correctly identifies negative sentiment with 75%+ accuracy
+- Resource allocation improves team utilization by 25%+
+- Workload balancing reduces overallocation by 40%
+- AI insights drive 30% faster decision making
+- Predictive analytics achieve 85%+ accuracy
 
 ### Milestone 4: Production Release (End of Month 12)
 **Success Criteria:**

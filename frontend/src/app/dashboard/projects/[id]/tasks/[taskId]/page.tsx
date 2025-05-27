@@ -421,6 +421,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [isStatusChanged, setIsStatusChanged] = useState(false);
   const [task, setTask] = useState<Task | null>(null);
   const [taskActivities, setTaskActivities] = useState<Activity[]>([]);
+  const [logNotes, setLogNotes] = useState<LogNote[]>([]);
   const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
   // Additional state declarations
   const [showTagDialog, setShowTagDialog] = useState(false);

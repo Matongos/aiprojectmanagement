@@ -1,11 +1,13 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float, select, Enum, CheckConstraint
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Table, JSON, Date, Text, Float, select, Enum, CheckConstraint, text
 from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
 from .base import Base
 from .milestone import Milestone  # Import Milestone from its dedicated module
 from .task import Task  # Import Task model
 from .tag import Tag  # Import Tag model
+from .metrics import ProjectMetrics, ResourceMetrics
 import enum
+from datetime import datetime
 
 # Association table for project tags
 project_tag = Table(
@@ -71,10 +73,11 @@ class Project(Base):
     color = Column(String, nullable=False, default="#3498db")
     is_template = Column(Boolean, nullable=False, default=False)
     progress = Column(Float, default=0.0, comment='Project progress percentage')
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=text('now()'))
+    updated_at = Column(DateTime(timezone=True), onupdate=text('now()'))
     is_active = Column(Boolean, nullable=False, default=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    owner_id = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
 
     # Relationships
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_projects")
@@ -92,6 +95,7 @@ class Project(Base):
     activities = relationship("Activity", back_populates="project", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
     stage = relationship("StageDefinition")
+    owner = relationship("User", foreign_keys=[owner_id], back_populates="owned_projects")
     
     # Followers relationship
     followers = relationship(
@@ -108,12 +112,51 @@ class Project(Base):
         .scalar_subquery()
     )
 
+    # Add new relationships for metrics
+    metrics = relationship("ProjectMetrics", back_populates="project", uselist=False)
+    resource_metrics = relationship("ResourceMetrics", back_populates="project")
+
     def calculate_progress(self):
         """Calculate project progress based on task completion."""
         tasks = self.tasks
         if not tasks:
             return 0.0
         return sum(task.progress for task in tasks) / len(tasks)
+
+    def update_metrics(self):
+        """Update project metrics based on current state"""
+        if not self.metrics:
+            from .metrics import ProjectMetrics
+            self.metrics = ProjectMetrics(project_id=self.id)
+        
+        # Calculate schedule variance
+        if self.start_date and self.end_date:
+            planned_duration = (self.end_date - self.start_date).days
+            actual_duration = (datetime.now() - self.start_date).days
+            self.metrics.schedule_variance = actual_duration - planned_duration
+        
+        # Calculate milestone completion rate
+        total_milestones = len(self.milestones)
+        if total_milestones > 0:
+            completed_milestones = sum(1 for m in self.milestones if m.is_completed)
+            self.metrics.milestone_completion_rate = completed_milestones / total_milestones
+        
+        # Calculate resource utilization
+        total_planned_hours = sum(task.planned_hours for task in self.tasks)
+        total_actual_hours = sum(sum(entry.hours for entry in task.time_entries) for task in self.tasks)
+        if total_planned_hours > 0:
+            self.metrics.resource_utilization = total_actual_hours / total_planned_hours
+        
+        # Calculate team load
+        active_members = len(self.members)
+        if active_members > 0:
+            self.metrics.team_load = total_actual_hours / active_members
+        
+        # Calculate velocity and throughput
+        completed_tasks = sum(1 for task in self.tasks if task.state == 'done')
+        total_weeks = max(1, (datetime.now() - self.start_date).days / 7) if self.start_date else 1
+        self.metrics.velocity = completed_tasks / total_weeks
+        self.metrics.throughput = completed_tasks
 
     def __repr__(self):
         return f"<Project {self.name}>" 

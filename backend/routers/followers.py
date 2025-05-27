@@ -104,4 +104,35 @@ async def remove_project_follower(
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="User is not following this project")
     
-    return {"message": "Follower removed successfully"} 
+    return {"message": "Follower removed successfully"}
+
+@router.get("/info", response_model=dict)
+async def get_follower_info(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get follower info for a project (count and whether current user is following)."""
+    # Get follower count
+    count_query = text("""
+        SELECT COUNT(*) as count
+        FROM project_followers
+        WHERE project_id = :project_id
+    """)
+    count_result = db.execute(count_query, {"project_id": project_id}).first()
+    follower_count = count_result.count if count_result else 0
+    
+    # Check if current user is following
+    is_following_query = text("""
+        SELECT 1 FROM project_followers
+        WHERE project_id = :project_id AND user_id = :user_id
+    """)
+    is_following = db.execute(
+        is_following_query, 
+        {"project_id": project_id, "user_id": current_user["id"]}
+    ).first() is not None
+    
+    return {
+        "follower_count": follower_count,
+        "is_following": is_following
+    } 
