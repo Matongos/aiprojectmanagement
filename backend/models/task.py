@@ -148,13 +148,19 @@ class Task(Base):
         if self.state not in self.metrics.state_changes:
             self.metrics.state_changes.append(self.state)
             
-        # Calculate actual duration
-        total_time = sum(entry.hours for entry in self.time_entries)
-        self.metrics.actual_duration = total_time
-        
-        # Calculate time estimate accuracy
-        if self.planned_hours > 0:
-            self.metrics.time_estimate_accuracy = total_time / self.planned_hours
+        # Calculate actual duration from time entries
+        try:
+            total_time = sum(entry.duration for entry in self.time_entries)
+            self.metrics.actual_duration = total_time
+            
+            # Calculate time estimate accuracy
+            if self.planned_hours > 0:
+                self.metrics.time_estimate_accuracy = total_time / self.planned_hours
+        except Exception as e:
+            print(f"Warning: Failed to calculate time metrics: {str(e)}")
+            # Set default values if calculation fails
+            self.metrics.actual_duration = 0
+            self.metrics.time_estimate_accuracy = 0
         
         # Update complexity metrics
         self.metrics.dependency_count = len(self.depends_on) + len(self.dependent_tasks)
@@ -163,14 +169,18 @@ class Task(Base):
         self.metrics.comment_count = len(self.comments)
         
         # Calculate idle time (time without activity)
-        activities = sorted(self.activities, key=lambda x: x.created_at)
-        if activities:
-            idle_time = 0
-            for i in range(1, len(activities)):
-                time_diff = activities[i].created_at - activities[i-1].created_at
-                if time_diff.total_seconds() > 24 * 3600:  # More than 24 hours
-                    idle_time += time_diff.total_seconds() / 3600  # Convert to hours
-            self.metrics.idle_time = idle_time
+        try:
+            activities = sorted(self.activities, key=lambda x: x.created_at)
+            if activities:
+                idle_time = 0
+                for i in range(1, len(activities)):
+                    time_diff = activities[i].created_at - activities[i-1].created_at
+                    if time_diff.total_seconds() > 24 * 3600:  # More than 24 hours
+                        idle_time += time_diff.total_seconds() / 3600  # Convert to hours
+                self.metrics.idle_time = idle_time
+        except Exception as e:
+            print(f"Warning: Failed to calculate idle time: {str(e)}")
+            self.metrics.idle_time = 0
 
     def move_to_stage(self, new_stage_id: int, db: Session) -> bool:
         """Move task to a new stage"""
@@ -184,20 +194,13 @@ class Task(Base):
             
         # Update stage and last update time
         self.stage_id = new_stage_id
-        self.date_last_stage_update = func.now()
+        self.date_last_stage_update = datetime.utcnow()
         
         # If stage has auto progress percentage, update task progress
         if new_stage.auto_progress_percentage is not None:
             self.progress = new_stage.auto_progress_percentage
             
-        try:
-            # Try to update metrics, but don't fail if it's not possible
-            self.update_metrics()
-        except Exception as e:
-            print(f"Warning: Failed to update metrics: {e}")
-            # Continue with the stage change even if metrics update fails
-            pass
-        
+        # Don't update metrics here - let the caller handle it
         return True
 
     def get_available_stages(self, db: Session):

@@ -96,6 +96,7 @@ class Project(Base):
     comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
     stage = relationship("StageDefinition")
     owner = relationship("User", foreign_keys=[owner_id], back_populates="owned_projects")
+    time_entries = relationship("TimeEntry", back_populates="project", cascade="all, delete-orphan")
     
     # Followers relationship
     followers = relationship(

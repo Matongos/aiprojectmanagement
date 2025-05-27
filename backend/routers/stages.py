@@ -1,6 +1,7 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from database import get_db
 from models.task_stage import TaskStage
@@ -86,28 +87,61 @@ async def move_task_to_stage(
     current_user: dict = Depends(get_current_user)
 ):
     """Move a task to a specific stage"""
-    # Get task and verify it exists
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    # Start a new transaction
+    try:
+        # Get task and verify it exists
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        # Get stage and verify it exists
+        stage = db.query(TaskStage).filter(TaskStage.id == stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Stage not found")
+            
+        # Verify stage belongs to the same project as task
+        if stage.project_id != task.project_id:
+            raise HTTPException(
+                status_code=400, 
+                detail="Stage does not belong to the task's project"
+            )
         
-    # Get stage and verify it exists
-    stage = db.query(TaskStage).filter(TaskStage.id == stage_id).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Stage not found")
+        # Move task to new stage
+        changed = task.move_to_stage(stage_id, db)
         
-    # Verify stage belongs to the same project as task
-    if stage.project_id != task.project_id:
+        if changed:
+            # First commit the stage change
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to update task stage: {str(e)}"
+                )
+            
+            # Then try to update metrics in a separate transaction
+            try:
+                task.update_metrics()
+                db.commit()
+            except Exception as e:
+                # If metrics update fails, just log it and continue
+                print(f"Warning: Failed to update metrics: {str(e)}")
+                db.rollback()
+                # Start a new transaction for any subsequent operations
+                db.begin()
+        
+        return {"success": True, "stage_changed": changed}
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
         raise HTTPException(
-            status_code=400, 
-            detail="Stage does not belong to the task's project"
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
         )
-    
-    # Move task to new stage
-    changed = task.move_to_stage(stage_id, db)
-    db.commit()
-    
-    return {"success": True, "stage_changed": changed}
 
 @router.post("/tasks/{task_id}/next")
 async def move_task_to_next_stage(
