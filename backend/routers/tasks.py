@@ -385,211 +385,32 @@ async def read_task(
 @router.put("/{task_id}", response_model=TaskSchema)
 async def update_task(
     task_id: int,
-    task: TaskUpdate,
+    task_update: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: Dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
-    """Update a specific task."""
-    try:
-        print(f"\n=== Task Update Request ===")
-        print(f"Task ID: {task_id}")
-        print(f"Update Data: {task.model_dump(exclude_unset=True)}")
-        print(f"Current User: {current_user['username']}")
+    """Update a task"""
+    db_task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Task not found")
 
-        db_task = task_crud.get(db=db, id=task_id)
-        if db_task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if not current_user["is_superuser"] and db_task.created_by != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-        
-        # Store original values for comparison
-        original_values = {
-            "name": db_task.name,
-            "description": db_task.description,
-            "state": db_task.state,
-            "assigned_to": db_task.assigned_to,
-            "stage_id": db_task.stage_id,
-            "priority": db_task.priority,
-            "deadline": db_task.deadline,
-            "start_date": db_task.start_date,
-            "end_date": db_task.end_date,
-            "planned_hours": db_task.planned_hours,
-            "progress": db_task.progress
-        }
-        
-        # Update task
-        updated_task = task_crud.update(db=db, db_obj=db_task, obj_in=task)
-        print(f"\nTask Updated Successfully")
-        
-        # Create activity logs for changes
-        update_data = task.model_dump(exclude_unset=True)
-        for field, new_value in update_data.items():
-            old_value = original_values.get(field)
-            
-            # Skip if values are the same
-            if old_value == new_value:
-                continue
-            
-            # Format description based on field type
-            if field == "name":
-                description = f"Task name: {old_value} → {new_value}"
-            elif field == "state":
-                # Format state changes to be more readable
-                old_state = old_value.replace("_", " ").title() if old_value else "None"
-                new_state = new_value.replace("_", " ").title()
-                description = f"Task status: {old_state} → {new_state}"
-            elif field == "assigned_to":
-                # Get user names for better readability
-                old_user = db.query(User).filter(User.id == old_value).first() if old_value else None
-                new_user = db.query(User).filter(User.id == new_value).first() if new_value else None
-                old_name = old_user.full_name if old_user else "Unassigned"
-                new_name = new_user.full_name if new_user else "Unassigned"
-                description = f"Assignee: {old_name} → {new_name}"
-            elif field == "deadline":
-                old_date = old_value.strftime("%Y-%m-%d %H:%M") if old_value else "None"
-                new_date = new_value.strftime("%Y-%m-%d %H:%M") if new_value else "None"
-                description = f"Deadline: {old_date} → {new_date}"
-            elif field == "description":
-                description = "Updated task description"
-            elif field == "start_date":
-                old_date = old_value.strftime("%Y-%m-%d") if old_value else "None"
-                new_date = new_value.strftime("%Y-%m-%d") if new_value else "None"
-                description = f"Start date: {old_date} → {new_date}"
-            elif field == "end_date":
-                old_date = old_value.strftime("%Y-%m-%d") if old_value else "None"
-                new_date = new_value.strftime("%Y-%m-%d") if new_value else "None"
-                description = f"End date: {old_date} → {new_date}"
-            elif field == "progress":
-                old_progress = f"{old_value}%" if old_value is not None else "0%"
-                new_progress = f"{new_value}%" if new_value is not None else "0%"
-                description = f"Progress: {old_progress} → {new_progress}"
-            elif field == "planned_hours":
-                old_hours = f"{old_value}h" if old_value else "None"
-                new_hours = f"{new_value}h" if new_value else "None"
-                description = f"Planned hours: {old_hours} → {new_hours}"
-            else:
-                description = f"Updated task {field}"
+    # Handle milestone update separately to ensure inheritance
+    milestone_id = task_update.milestone_id
+    if milestone_id is not None and milestone_id != db_task.milestone_id:
+        # Check if milestones are enabled for the project
+        project = db.query(Project).filter(Project.id == db_task.project_id).first()
+        if not project.allow_milestones:
+            raise HTTPException(status_code=403, detail="Milestones are not enabled for this project")
+        db_task.update_milestone(milestone_id, db)
 
-            print(f"\nCreating activity log: {description}")
+    # Update other fields
+    update_data = task_update.model_dump(exclude={'milestone_id'}, exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_task, field, value)
 
-            # Create activity log
-            activity_data = ActivityCreate(
-                activity_type="task_update",
-                description=description,
-                task_id=task_id,
-                project_id=db_task.project_id,
-                user_id=current_user["id"]
-            )
-            
-            try:
-                print(f"\nActivity data: {activity_data.model_dump()}")
-                db_activity = activity.create_activity(db, activity_data)
-                print(f"Activity created successfully with ID: {db_activity.id}")
-            except Exception as e:
-                print(f"\nError creating activity log:")
-                print(f"Error message: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                # Continue even if activity creation fails
-                pass
-        
-        # Send notifications if status has changed
-        if task.state is not None and task.state != original_values["state"]:
-            # Notify creator and assignee (if different from current user and creator)
-            users_to_notify = set()
-            if db_task.created_by and db_task.created_by != current_user["id"]:
-                users_to_notify.add(db_task.created_by)
-            if db_task.assigned_to and db_task.assigned_to != current_user["id"] and db_task.assigned_to != db_task.created_by:
-                users_to_notify.add(db_task.assigned_to)
-                
-            if users_to_notify:
-                # Notify all users in users_to_notify
-                for user_id in users_to_notify:
-                    notification_data = {
-                        "user_id": user_id,
-                        "title": "Task Status Changed",
-                        "content": f"Task '{updated_task.name}' status changed to {task.state}",
-                        "type": "task_status",
-                        "reference_type": "task",
-                        "reference_id": task_id,
-                        "is_read": False
-                    }
-                    notification_service.create_notification(db, notification_data)
-        
-        # Create base task dictionary for serialization
-        task_dict = {
-            "id": updated_task.id,
-            "name": updated_task.name,
-            "description": updated_task.description,
-            "priority": updated_task.priority,
-            "state": updated_task.state,
-            "project_id": updated_task.project_id,
-            "stage_id": updated_task.stage_id,
-            "assigned_to": updated_task.assigned_to,
-            "parent_id": updated_task.parent_id,
-            "milestone_id": updated_task.milestone_id,
-            "company_id": updated_task.company_id,
-            "start_date": updated_task.start_date,
-            "end_date": updated_task.end_date,
-            "deadline": updated_task.deadline,
-            "planned_hours": updated_task.planned_hours,
-            "created_by": updated_task.created_by,
-            "progress": updated_task.progress if updated_task.progress is not None else 0.0,
-            "created_at": updated_task.created_at,
-            "updated_at": updated_task.updated_at,
-            "date_last_stage_update": updated_task.date_last_stage_update,
-            "assignee": None,
-            "milestone": None,
-            "company": None,
-            "depends_on_ids": [],
-            "subtask_ids": []
-        }
-        
-        # Handle assignee
-        if hasattr(updated_task, 'assignee') and updated_task.assignee:
-            task_dict['assignee'] = {
-                'id': updated_task.assignee.id,
-                'username': updated_task.assignee.username,
-                'email': updated_task.assignee.email,
-                'full_name': updated_task.assignee.full_name,
-                'profile_image_url': getattr(updated_task.assignee, 'profile_image_url', None)
-            }
-        
-        # Handle milestone
-        if hasattr(updated_task, 'milestone') and updated_task.milestone:
-            task_dict['milestone'] = {
-                'id': updated_task.milestone.id,
-                'name': updated_task.milestone.name,
-                'description': updated_task.milestone.description,
-                'due_date': updated_task.milestone.due_date.isoformat() if updated_task.milestone.due_date else None,
-                'is_completed': updated_task.milestone.is_completed,
-                'is_active': getattr(updated_task.milestone, 'is_active', True)
-            }
-        
-        # Handle company
-        if hasattr(updated_task, 'company') and updated_task.company:
-            task_dict['company'] = {
-                'id': updated_task.company.id,
-                'name': updated_task.company.name
-            }
-        
-        # Handle dependencies and subtasks
-        if hasattr(updated_task, 'depends_on') and updated_task.depends_on:
-            task_dict["depends_on_ids"] = [dep.id for dep in updated_task.depends_on]
-        
-        if hasattr(updated_task, 'children') and updated_task.children:
-            task_dict["subtask_ids"] = [child.id for child in updated_task.children]
-        
-        return TaskSchema.model_validate(task_dict)
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating task: {str(e)}"
-        )
+    db.commit()
+    db.refresh(db_task)
+    return db_task
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(

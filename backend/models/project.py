@@ -73,6 +73,7 @@ class Project(Base):
     color = Column(String, nullable=False, default="#3498db")
     is_template = Column(Boolean, nullable=False, default=False)
     progress = Column(Float, default=0.0, comment='Project progress percentage')
+    allow_milestones = Column(Boolean, nullable=False, default=True, comment='Whether milestones are enabled for this project')
     created_at = Column(DateTime(timezone=True), server_default=text('now()'))
     updated_at = Column(DateTime(timezone=True), onupdate=text('now()'))
     is_active = Column(Boolean, nullable=False, default=True)

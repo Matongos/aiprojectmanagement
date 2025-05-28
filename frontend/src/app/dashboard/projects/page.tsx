@@ -451,7 +451,7 @@ function ProjectsContent() {
                           <ListTodo className="mr-2 h-4 w-4" />
                           <span>Tasks</span>
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => router.push(`/dashboard/projects/${project.id}/milestones`)}>
                           <Milestone className="mr-2 h-4 w-4" />
                           <span>Milestones</span>
                         </DropdownMenuItem>

@@ -245,4 +245,23 @@ class Task(Base):
         if user and user in self.followers:
             self.followers.remove(user)
             return True
-        return False 
+        return False
+
+    def update_milestone(self, milestone_id: int, db_session) -> None:
+        """Update task milestone and propagate to eligible child tasks"""
+        self.milestone_id = milestone_id
+        
+        # Update child tasks that meet inheritance criteria
+        for child in self.subtasks:
+            # Only inherit if:
+            # 1. Same project
+            # 2. No existing milestone
+            # 3. Not in closed state
+            # 4. Task is active
+            if (child.project_id == self.project_id and 
+                not child.milestone_id and 
+                child.state not in ['done', 'canceled'] and
+                child.is_active):
+                child.milestone_id = milestone_id
+        
+        db_session.flush()  # Ensure changes are visible within the session 

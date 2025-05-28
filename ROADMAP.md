@@ -86,7 +86,7 @@ This roadmap outlines the development plan for our AI-enhanced project managemen
 | 1 | Time entry model and API | Backend | Task API |✅ Time tracking API |
 | 2 | [NEW] PgVector setup and configuration | Backend |✅  PostgreSQL | Vector DB ready |
 | 2 | Task stage workflow | Backend | Task API |✅ Stage transitions |
-| 3 | [NEW] Initial AI service endpoints | Backend & AI | Ollama setup | Basic AI API structure |
+| 3 | [NEW] Initial AI service endpoints | Backend & AI |✅ Ollama setup | Basic AI API structure |
 | 3 | Milestone tracking | Backend & Frontend | Project API | Milestone feature |
 | 4 | [NEW] WebSocket implementation | Backend | Core APIs | Real-time updates foundation |
 | 4 | Dashboard components | Frontend | Reporting API | Charts and KPIs |

@@ -28,6 +28,7 @@ class ProjectBase(BaseModel):
     color: str = "#3498db"
     is_template: bool = False
     is_active: bool = True
+    allow_milestones: bool = True
     tag_ids: Optional[List[int]] = Field(default=[], description="List of tag IDs")
 
 class ProjectCreate(ProjectBase):
@@ -47,6 +48,7 @@ class ProjectUpdate(BaseModel):
     color: Optional[str] = None
     is_template: Optional[bool] = None
     is_active: Optional[bool] = None
+    allow_milestones: Optional[bool] = None
     tag_ids: Optional[List[int]] = None
 
 class Project(ProjectBase):
