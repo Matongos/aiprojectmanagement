@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -13,12 +13,24 @@ from typing import Optional
 from starlette.staticfiles import StaticFiles
 from services.task_scheduler import TaskScheduler
 from config import settings
+from contextlib import asynccontextmanager
+import bcrypt
+from passlib.context import CryptContext
+
+# Create bcrypt context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+print("Successfully initialized bcrypt CryptContext")
 
 # Create database tables
-Base.metadata.create_all(bind=engine)
+print(f"Created direct database engine with URL: {str(engine.url)}")
 
-# Create OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    Base.metadata.create_all(bind=engine)
+    yield
+    # Shutdown
+    pass
 
 app = FastAPI(
     title="AI Project Management API",
@@ -27,7 +39,8 @@ app = FastAPI(
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_version="3.0.2"
+    openapi_version="3.0.2",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -69,6 +82,8 @@ app.include_router(tags.router)
 app.include_router(log_notes.router)
 app.include_router(time_entries.router)
 app.include_router(messages.router)
+app.include_router(vectors.router)
+app.include_router(ai.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

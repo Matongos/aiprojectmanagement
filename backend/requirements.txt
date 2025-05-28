@@ -18,3 +18,4 @@ pandas==2.1.4
 fpdf2==2.7.6
 xlsxwriter==3.1.9
 aiohttp==3.9.1
+pgvector==0.2.3

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float
+from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -10,26 +10,20 @@ class TimeEntry(Base):
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
-    
-    # Time tracking
-    start_time = Column(DateTime(timezone=True), nullable=False)
-    end_time = Column(DateTime(timezone=True), nullable=True)  # Null if ongoing
-    duration = Column(Float, nullable=False)  # Duration in hours
+    duration = Column(Float, nullable=False, default=0.0)  # Duration in hours
+    description = Column(String, nullable=True)
+    activity_type = Column(String(50), nullable=True)
+    is_billable = Column(Boolean, default=True)
     is_running = Column(Boolean, default=False)
     
-    # Description and categorization
-    description = Column(Text, nullable=True)
-    activity_type = Column(String(50), nullable=True)  # e.g., Development, Meeting, Review
-    is_billable = Column(Boolean, default=True)
+    # Foreign Keys
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     
-    # Relations
-    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    
-    # AI-assisted fields
-    productivity_score = Column(Float, nullable=True)  # AI-calculated productivity score
-    efficiency_metrics = Column(Text, nullable=True)  # JSON string for AI insights
+    # AI Analysis Fields
+    productivity_score = Column(Float, nullable=True)
+    efficiency_metrics = Column(JSON, nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
