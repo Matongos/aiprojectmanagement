@@ -48,7 +48,9 @@
     "tailwindcss": "^4",
     "tw-animate-css": "^1.2.5",
     "zod": "^3.22.4",
-    "zustand": "^4.5.0"
+    "zustand": "^4.5.0",
+    "chart.js": "^4.4.1",
+    "@types/chart.js": "^2.9.41"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

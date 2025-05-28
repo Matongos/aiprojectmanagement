@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, Header, status, Form, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Header, status, Form, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
-from typing import Optional, Union
+from typing import Optional, Union, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import json
@@ -378,4 +378,52 @@ async def test_db_endpoint(db: Session = Depends(get_db)):
         return JSONResponse({
             "status": "ERROR",
             "message": f"Database connection failed: {str(e)}"
-        }, status_code=500) 
+        }, status_code=500)
+
+async def get_current_user_ws(
+    websocket: WebSocket,
+    db: Session = Depends(get_db)
+) -> Dict:
+    try:
+        token = websocket.headers.get("authorization", "").replace("Bearer ", "")
+        if not token:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        user = db.query(User).filter(User.username == username).first()
+        if user is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_superuser": user.is_superuser
+        }
+        
+    except JWTError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) 

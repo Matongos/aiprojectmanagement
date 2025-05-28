@@ -65,7 +65,7 @@ async def get_task_analytics_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """Get overall task analytics summary."""
-    return task_analytics.get_task_analytics_summary(db=db)
+    return task_analytics.get_task_analytics_summary(db=db, current_user_id=current_user["id"])
 
 @router.get("/tasks/trend", response_model=List[Dict[str, Any]])
 async def get_task_trend_data(

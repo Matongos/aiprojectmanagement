@@ -90,6 +90,7 @@ class TaskUpdate(BaseModel):
     stage_id: Optional[int] = None
     parent_id: Optional[int] = None
     assigned_to: Optional[int] = None
+    milestone_id: Optional[int] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     deadline: Optional[datetime] = None

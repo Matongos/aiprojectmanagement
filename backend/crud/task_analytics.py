@@ -164,21 +164,35 @@ class TaskAnalytics:
             }
 
     @staticmethod
-    def get_task_analytics_summary(db: Session) -> Dict[str, Any]:
+    def get_task_analytics_summary(db: Session, current_user_id: int) -> Dict[str, Any]:
         """Get overall task analytics summary."""
         try:
-            # Get total tasks
-            total_tasks = db.query(Task).count()
+            # Get total tasks for the current user (either created by or assigned to)
+            total_tasks = db.query(Task).filter(
+                or_(
+                    Task.created_by == current_user_id,
+                    Task.assigned_to == current_user_id
+                )
+            ).count()
             
             # Get tasks by status
             tasks_by_status = db.query(
                 Task.state,
                 func.count(Task.id).label('count')
+            ).filter(
+                or_(
+                    Task.created_by == current_user_id,
+                    Task.assigned_to == current_user_id
+                )
             ).group_by(Task.state).all()
             
             # Get overdue tasks
             overdue_tasks = db.query(Task).filter(
                 and_(
+                    or_(
+                        Task.created_by == current_user_id,
+                        Task.assigned_to == current_user_id
+                    ),
                     Task.deadline < func.now(),
                     Task.state != TaskState.DONE
                 )
@@ -187,6 +201,10 @@ class TaskAnalytics:
             # Get average completion time
             completed_tasks = db.query(Task).filter(
                 and_(
+                    or_(
+                        Task.created_by == current_user_id,
+                        Task.assigned_to == current_user_id
+                    ),
                     Task.state == TaskState.DONE,
                     Task.start_date.isnot(None),
                     Task.end_date.isnot(None)
