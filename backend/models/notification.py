@@ -25,8 +25,8 @@ class Notification(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(255), nullable=False)
-    content = Column(Text, nullable=False)
-    notification_type = Column(String(50), nullable=False)  # Using values from NotificationType enum
+    content = Column(Text, nullable=True)  # Changed to nullable=True to match schema
+    type = Column(String(50), nullable=False)  # Changed from notification_type to type
     is_read = Column(Boolean, default=False)
     
     # Reference info (e.g., task_id if notification is about a task)

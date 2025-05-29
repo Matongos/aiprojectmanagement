@@ -198,7 +198,7 @@ class TaskAnalytics:
                 )
             ).count()
             
-            # Get average completion time
+            # Get average completion time based on 8-hour workdays
             completed_tasks = db.query(Task).filter(
                 and_(
                     or_(
@@ -213,8 +213,18 @@ class TaskAnalytics:
             
             completion_times = []
             for task in completed_tasks:
-                time_diff = task.end_date - task.start_date
-                completion_times.append(time_diff.total_seconds() / 3600)  # hours
+                # Calculate business days between start and end date
+                current_date = task.start_date
+                business_days = 0
+                while current_date <= task.end_date:
+                    # Check if it's a weekday (Monday = 0, Sunday = 6)
+                    if current_date.weekday() < 5:  # Monday to Friday
+                        business_days += 1
+                    current_date += timedelta(days=1)
+                
+                # Convert business days to working hours (8 hours per day)
+                working_hours = business_days * 8
+                completion_times.append(working_hours)
             
             avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
             

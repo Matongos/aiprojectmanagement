@@ -1,11 +1,33 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, time
 from models.task import Task
+from models.project import Project
 from schemas.task import TaskCreate
+from .permission_service import PermissionService
+from fastapi import HTTPException
 
 class TaskService:
+    def __init__(self):
+        self.permission_service = PermissionService()
+
+    @staticmethod
+    def get_next_workday_8am(from_date: datetime) -> datetime:
+        """Get the next workday at 8am from a given date"""
+        # Set time to 8am
+        next_day = from_date.replace(hour=8, minute=0, second=0, microsecond=0)
+        
+        # If it's already past 8am, move to next day
+        if from_date.time() >= time(8, 0):
+            next_day += timedelta(days=1)
+        
+        # Skip weekends
+        while next_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
+            next_day += timedelta(days=1)
+        
+        return next_day
+
     def create_task(
         self,
         db: Session,
@@ -13,6 +35,14 @@ class TaskService:
         current_user_id: int
     ) -> Task:
         """Create a new task with default values for optional fields"""
+        # Check project permissions if project_id is provided
+        if task_data.project_id:
+            if not self.permission_service.can_modify_project(db, current_user_id, task_data.project_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have permission to create tasks in this project"
+                )
+
         # Convert task data to dict and remove tag_ids
         task_dict = task_data.dict()
         
@@ -22,6 +52,21 @@ class TaskService:
         task_dict.pop('estimated_hours', None)
         task_dict.pop('tags', None)  # Remove tags string field
         task_dict.pop('is_recurring', None)  # Remove is_recurring field
+        
+        # Calculate start date (next workday at 8am)
+        start_date = self.get_next_workday_8am(datetime.utcnow())
+        
+        # If no deadline is set, get project deadline and subtract one day
+        if not task_dict.get('deadline') and task_dict.get('project_id'):
+            project = db.query(Project).filter(Project.id == task_dict['project_id']).first()
+            if project and project.end_date:
+                # Set deadline to one day before project end date
+                project_end = project.end_date
+                task_deadline = (project_end - timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
+                # Ensure deadline is not on weekend
+                while task_deadline.weekday() >= 5:
+                    task_deadline -= timedelta(days=1)
+                task_dict['deadline'] = task_deadline
         
         # Set all default values
         task_dict.update({
@@ -35,9 +80,8 @@ class TaskService:
             "assigned_to": None,     # Default no assignee
             "milestone_id": None,    # Default no milestone
             "company_id": None,      # Default no company
-            "start_date": None,      # Default no start date
+            "start_date": start_date,  # Set start date to next workday at 8am
             "end_date": None,        # Default no end date
-            "deadline": None         # Default no deadline
         })
 
         # Create task with all fields
@@ -54,6 +98,33 @@ class TaskService:
             db.commit()
             db.refresh(task)
 
+        return task
+
+    def update_task_state(self, db: Session, task: Task, new_state: str, current_user_id: int) -> Task:
+        """Update task state and set end_date if task is done"""
+        # Check project permissions
+        if task.project_id:
+            if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have permission to update tasks in this project"
+                )
+
+        task.state = new_state
+        if new_state == "done":
+            # Set end date to current time if during work hours (8am-4pm)
+            now = datetime.utcnow()
+            if now.weekday() < 5 and time(8, 0) <= now.time() <= time(16, 0):
+                task.end_date = now
+            else:
+                # Set to 4pm of the last workday
+                end_date = now
+                while end_date.weekday() >= 5:
+                    end_date -= timedelta(days=1)
+                task.end_date = end_date.replace(hour=16, minute=0, second=0, microsecond=0)
+            task.progress = 100.0
+        db.commit()
+        db.refresh(task)
         return task
 
 def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
@@ -186,7 +257,7 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
     
     return tasks
 
-def update_task(db: Session, task_id: int, task_data: dict) -> Tuple[Dict[str, Any], Optional[str]]:
+def update_task(db: Session, task_id: int, task_data: dict, current_user_id: int) -> Tuple[Dict[str, Any], Optional[str]]:
     """
     Update a task.
     
@@ -200,10 +271,15 @@ def update_task(db: Session, task_id: int, task_data: dict) -> Tuple[Dict[str, A
     """
     try:
         # Check if task exists
-        check_query = text("SELECT id FROM tasks WHERE id = :task_id")
-        existing = db.execute(check_query, {"task_id": task_id}).fetchone()
-        if not existing:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
             return None, f"Task with ID {task_id} not found"
+
+        # Check project permissions
+        if task.project_id:
+            permission_service = PermissionService()
+            if not permission_service.can_modify_project(db, current_user_id, task.project_id):
+                return None, "You don't have permission to update tasks in this project"
         
         # Validate project exists if specified
         if task_data.get("project_id"):
@@ -291,7 +367,7 @@ def update_task(db: Session, task_id: int, task_data: dict) -> Tuple[Dict[str, A
         db.rollback()
         return None, f"Error updating task: {str(e)}"
 
-def delete_task(db: Session, task_id: int) -> Optional[str]:
+def delete_task(db: Session, task_id: int, current_user_id: int) -> Optional[str]:
     """
     Delete a task.
     
@@ -304,11 +380,16 @@ def delete_task(db: Session, task_id: int) -> Optional[str]:
     """
     try:
         # Check if task exists
-        check_query = text("SELECT id FROM tasks WHERE id = :task_id")
-        existing = db.execute(check_query, {"task_id": task_id}).fetchone()
-        if not existing:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
             return f"Task with ID {task_id} not found"
-        
+
+        # Check project permissions
+        if task.project_id:
+            permission_service = PermissionService()
+            if not permission_service.can_modify_project(db, current_user_id, task.project_id):
+                return "You don't have permission to delete tasks in this project"
+
         # Delete task
         delete_query = text("DELETE FROM tasks WHERE id = :task_id")
         db.execute(delete_query, {"task_id": task_id})

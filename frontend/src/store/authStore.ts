@@ -206,8 +206,10 @@ export const useAuthStore = create<AuthStore>((set, get) => {
         console.log("Checking authentication with token");
         const response = await fetch(`${API_BASE_URL}/users/me`, {
           headers: {
-            Authorization: `Bearer ${storedToken}`,
+            'Authorization': `Bearer ${storedToken}`,
+            'Content-Type': 'application/json',
           },
+          credentials: 'include',
           cache: 'no-store'
         });
 
@@ -216,8 +218,12 @@ export const useAuthStore = create<AuthStore>((set, get) => {
         if (response.ok) {
           const userData = await response.json();
           console.log("Authentication successful, user data:", userData);
+          // Update token in localStorage in case it was refreshed
+          if (userData.access_token) {
+            localStorage.setItem('token', userData.access_token);
+          }
           set({ 
-            token: storedToken, 
+            token: userData.access_token || storedToken, 
             isAuthenticated: true, 
             user: userData, 
             loadingUserData: false, 
@@ -226,26 +232,33 @@ export const useAuthStore = create<AuthStore>((set, get) => {
           return true;
         } else {
           console.error("Authentication check failed, status:", response.status);
-          // Clear invalid token
-          localStorage.removeItem('token');
-          set({ 
-            token: null, 
-            isAuthenticated: false, 
-            user: null, 
-            loadingUserData: false,
-            error: 'Session expired. Please log in again.'
-          });
+          // Only clear token if it's truly invalid (401 or 403)
+          if (response.status === 401 || response.status === 403) {
+            localStorage.removeItem('token');
+            set({ 
+              token: null, 
+              isAuthenticated: false, 
+              user: null, 
+              loadingUserData: false,
+              error: 'Session expired. Please log in again.'
+            });
+          } else {
+            // For other errors, keep the token but set authenticated to false
+            set({ 
+              isAuthenticated: false, 
+              loadingUserData: false,
+              error: 'Authentication error. Please try again.'
+            });
+          }
           return false;
         }
       } catch (error) {
         console.error('Error checking auth:', error);
-        localStorage.removeItem('token');
+        // Don't remove token on network errors
         set({ 
-          token: null, 
           isAuthenticated: false, 
-          user: null, 
           loadingUserData: false,
-          error: 'Authentication error. Please log in again.'
+          error: 'Network error. Please check your connection.'
         });
         return false;
       }

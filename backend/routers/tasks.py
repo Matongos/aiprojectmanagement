@@ -382,35 +382,144 @@ async def read_task(
             detail=f"Error fetching task: {str(e)}"
         )
 
-@router.put("/{task_id}", response_model=TaskSchema)
+@router.patch("/{task_id}", response_model=TaskSchema)
 async def update_task(
     task_id: int,
     task_update: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user)
 ):
-    """Update a task"""
-    db_task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
-    if not db_task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    """Update a task."""
+    try:
+        # Get existing task
+        db_task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+        if not db_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Check permissions
+        if not current_user["is_superuser"] and db_task.assigned_to != current_user["id"] and db_task.created_by != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    # Handle milestone update separately to ensure inheritance
-    milestone_id = task_update.milestone_id
-    if milestone_id is not None and milestone_id != db_task.milestone_id:
-        # Check if milestones are enabled for the project
-        project = db.query(Project).filter(Project.id == db_task.project_id).first()
-        if not project.allow_milestones:
-            raise HTTPException(status_code=403, detail="Milestones are not enabled for this project")
-        db_task.update_milestone(milestone_id, db)
+        # Store original values for activity log
+        original_deadline = db_task.deadline
+        original_start_date = db_task.start_date
+        original_end_date = db_task.end_date
+        original_assigned_to = db_task.assigned_to
 
-    # Update other fields
-    update_data = task_update.model_dump(exclude={'milestone_id'}, exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_task, field, value)
+        # Update task fields
+        update_data = task_update.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_task, field, value)
+        
+        db.commit()
+        db.refresh(db_task)
 
-    db.commit()
-    db.refresh(db_task)
-    return db_task
+        # Create notification for task assignment
+        if 'assigned_to' in update_data and original_assigned_to != db_task.assigned_to and db_task.assigned_to is not None:
+            # Get assignee details
+            assignee = db.query(User).filter(User.id == db_task.assigned_to).first()
+            if assignee:
+                # Create notification for the new assignee
+                notification_service.create_notification(
+                    db=db,
+                    notification_data={
+                        "title": "New Task Assignment",
+                        "content": f"You have been assigned to task: {db_task.name}",
+                        "type": "task_assignment",
+                        "reference_type": "task",
+                        "reference_id": task_id,
+                        "user_id": db_task.assigned_to,
+                        "is_read": False
+                    }
+                )
+
+        # Create activity logs for date changes
+        if 'deadline' in update_data and original_deadline != db_task.deadline:
+            old_deadline = original_deadline.strftime('%Y-%m-%d %H:%M') if original_deadline else 'none'
+            new_deadline = db_task.deadline.strftime('%Y-%m-%d %H:%M') if db_task.deadline else 'none'
+            activity_data = ActivityCreate(
+                activity_type="task_update",
+                description=f"Updated task deadline from {old_deadline} to {new_deadline}",
+                task_id=task_id,
+                project_id=db_task.project_id,
+                user_id=current_user["id"]
+            )
+            activity.create_activity(db, activity_data)
+
+            # Create notification for deadline change
+            if db_task.assigned_to and db_task.assigned_to != current_user["id"]:
+                notification_service.create_notification(
+                    db=db,
+                    notification_data={
+                        "title": "Task Deadline Updated",
+                        "content": f"The deadline for task '{db_task.name}' has been updated from {old_deadline} to {new_deadline}",
+                        "type": "task_update",
+                        "reference_type": "task",
+                        "reference_id": task_id,
+                        "user_id": db_task.assigned_to,
+                        "is_read": False
+                    }
+                )
+
+        # Create response dictionary with proper assignee handling
+        response_data = {
+            "id": db_task.id,
+            "name": db_task.name,
+            "description": db_task.description,
+            "priority": db_task.priority,
+            "state": db_task.state,
+            "project_id": db_task.project_id,
+            "stage_id": db_task.stage_id,
+            "assigned_to": db_task.assigned_to,
+            "parent_id": db_task.parent_id,
+            "milestone_id": db_task.milestone_id,
+            "company_id": db_task.company_id,
+            "start_date": db_task.start_date,
+            "end_date": db_task.end_date,
+            "deadline": db_task.deadline,
+            "planned_hours": db_task.planned_hours,
+            "created_by": db_task.created_by,
+            "progress": db_task.progress if db_task.progress is not None else 0.0,
+            "created_at": db_task.created_at,
+            "updated_at": db_task.updated_at,
+            "date_last_stage_update": db_task.date_last_stage_update,
+            "assignee": None,
+            "milestone": None,
+            "company": None,
+            "depends_on_ids": [],
+            "subtask_ids": [],
+            "attachments": []
+        }
+
+        # Handle assignee
+        if hasattr(db_task, 'assignee') and db_task.assignee:
+            response_data["assignee"] = {
+                'id': db_task.assignee.id,
+                'username': db_task.assignee.username,
+                'email': db_task.assignee.email,
+                'full_name': db_task.assignee.full_name,
+                'profile_image_url': getattr(db_task.assignee, 'profile_image_url', None)
+            }
+
+        # Handle milestone
+        if hasattr(db_task, 'milestone') and db_task.milestone:
+            response_data["milestone"] = {
+                'id': db_task.milestone.id,
+                'name': db_task.milestone.name,
+                'description': db_task.milestone.description,
+                'due_date': db_task.milestone.due_date.isoformat() if db_task.milestone.due_date else None,
+                'is_completed': db_task.milestone.is_completed,
+                'is_active': getattr(db_task.milestone, 'is_active', True)
+            }
+
+        return TaskSchema.model_validate(response_data)
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating task: {str(e)}"
+        )
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(

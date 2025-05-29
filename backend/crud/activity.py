@@ -44,17 +44,21 @@ def get_activities_by_project(db: Session, project_id: int, skip: int = 0, limit
 
 def create_activity(db: Session, activity: ActivityCreate) -> Activity:
     """Create a new activity."""
-    db_activity = Activity(
-        activity_type=activity.activity_type,
-        description=activity.description,
-        task_id=activity.task_id,
-        project_id=activity.project_id,
-        user_id=activity.user_id
-    )
-    db.add(db_activity)
-    db.commit()
-    db.refresh(db_activity)
-    return db_activity
+    try:
+        db_activity = Activity(
+            activity_type=activity.activity_type,
+            description=activity.description,
+            task_id=activity.task_id,
+            project_id=activity.project_id,
+            user_id=activity.user_id
+        )
+        db.add(db_activity)
+        db.commit()
+        db.refresh(db_activity)
+        return db_activity
+    except Exception as e:
+        db.rollback()
+        raise e
 
 
 def update_activity(db: Session, activity_id: int, activity_update: ActivityUpdate) -> Optional[Activity]:

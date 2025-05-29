@@ -40,7 +40,7 @@ export async function fetchApi<T>(
       ...options,
       headers,
       mode: 'cors',  // Explicitly set CORS mode
-      credentials: 'same-origin'  // Changed from 'include' to 'same-origin'
+      credentials: 'include'  // Changed from 'same-origin' to 'include' for cross-origin requests
     });
 
     // Handle redirects for authentication

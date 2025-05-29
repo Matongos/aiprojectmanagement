@@ -11,12 +11,13 @@ import { Check } from 'lucide-react';
 interface Notification {
   id: number;
   title: string;
-  content: string;
-  notification_type: string;
+  content: string | null;
+  type: string;
   is_read: boolean;
   reference_type: string | null;
   reference_id: number | null;
   created_at: string;
+  updated_at: string;
 }
 
 interface NotificationsDialogProps {
@@ -104,13 +105,44 @@ export const NotificationsDialog = ({ open, onOpenChange, onNotificationsRead }:
     if (notification.reference_type && notification.reference_id) {
       switch (notification.reference_type) {
         case 'task':
-          router.push(`/dashboard/tasks/${notification.reference_id}`);
+          if (notification.type === 'task_assignment') {
+            fetch(`${API_BASE_URL}/tasks/${notification.reference_id}`, {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              }
+            })
+            .then(response => response.json())
+            .then(task => {
+              router.push(`/dashboard/projects/${task.project_id}/tasks/${notification.reference_id}`);
+            })
+            .catch(error => {
+              console.error('Error fetching task details:', error);
+              router.push(`/dashboard/tasks/${notification.reference_id}`);
+            });
+          } else {
+            router.push(`/dashboard/tasks/${notification.reference_id}`);
+          }
           break;
         case 'project':
           router.push(`/dashboard/projects/${notification.reference_id}`);
           break;
       }
       onOpenChange(false);
+    }
+  };
+
+  // Helper function to get notification style based on type
+  const getNotificationStyle = (notification: Notification) => {
+    switch (notification.type) {
+      case 'task_assignment':
+        return 'bg-blue-50 hover:bg-blue-100';
+      case 'task_update':
+        return 'bg-purple-50 hover:bg-purple-100';
+      case 'comment':
+        return 'bg-green-50 hover:bg-green-100';
+      default:
+        return notification.is_read ? 'bg-gray-50 hover:bg-gray-100' : 'bg-blue-50 hover:bg-blue-100';
     }
   };
 
@@ -141,9 +173,7 @@ export const NotificationsDialog = ({ open, onOpenChange, onNotificationsRead }:
               {notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                    notification.is_read ? 'bg-gray-50' : 'bg-blue-50'
-                  } hover:bg-gray-100`}
+                  className={`p-3 rounded-lg cursor-pointer transition-colors ${getNotificationStyle(notification)}`}
                   onClick={() => handleNotificationClick(notification)}
                 >
                   <div className="flex justify-between items-start">

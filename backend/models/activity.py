@@ -22,7 +22,7 @@ class Activity(Base):
     id = Column(Integer, primary_key=True, index=True)
     description = Column(Text, nullable=False)
     activity_type = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Foreign keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)

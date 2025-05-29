@@ -859,22 +859,26 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
 
   const fetchFollowerInfo = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/projects/${projectId}/followers/info`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch follower info');
-      }
-
-      const data = await response.json();
+      const data = await fetchApi<{ is_following: boolean; follower_count: number }>(
+        `/projects/${projectId}/followers/info`
+      );
       setIsFollowing(data.is_following);
       setFollowerCount(data.follower_count);
     } catch (error) {
       console.error('Error fetching follower info:', error);
+      // Try alternative endpoint if first one fails
+      try {
+        const data = await fetchApi<{ is_following: boolean; follower_count: number }>(
+          `/followers/${projectId}/info`
+        );
+        setIsFollowing(data.is_following);
+        setFollowerCount(data.follower_count);
+      } catch (fallbackError) {
+        console.error('Error fetching follower info from fallback endpoint:', fallbackError);
+        // Set default values on error
+        setIsFollowing(false);
+        setFollowerCount(0);
+      }
     }
   };
 

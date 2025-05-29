@@ -117,10 +117,10 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
         }).then((res) => res.json()),
       ]);
 
-      console.log('Task Metrics Response:', taskMetrics);
-      console.log('Task Trend Response:', taskTrend);
-      console.log('AI Insights Response:', aiInsights);
-      console.log('Resource Metrics Response:', resourceMetrics);
+      console.log('Task Metrics Response:', JSON.stringify(taskMetrics, null, 2));
+      console.log('Task Trend Response:', JSON.stringify(taskTrend, null, 2));
+      console.log('AI Insights Response:', JSON.stringify(aiInsights, null, 2));
+      console.log('Resource Metrics Response:', JSON.stringify(resourceMetrics, null, 2));
 
       // Ensure aiInsights has all required properties with fallbacks
       const safeAiInsights = {

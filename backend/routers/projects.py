@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from models.project import Project as ProjectModel, ProjectMember
+from models.project import Project as ProjectModel, ProjectMember, ProjectRole
 from models.task_stage import TaskStage
 from schemas.project import (
     ProjectCreate, 
@@ -23,10 +23,31 @@ from crud.tag import tag as tag_crud
 from crud import activity
 from schemas.activity import ActivityCreate
 from services.notification_service import NotificationService
+from services.permission_service import PermissionService
+from pydantic import BaseModel, validator, conint
+from enum import Enum
+
+# Add new schema for member role update
+class ProjectMemberUpdate(BaseModel):
+    role: conint(ge=1, le=3)  # Constrained integer between 1 and 3
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "role": 1  # 1=manager, 2=member, 3=viewer
+            }
+        }
+
+    @validator('role')
+    def validate_role(cls, v):
+        if v not in [1, 2, 3]:
+            raise ValueError("Role must be 1 (manager), 2 (member), or 3 (viewer)")
+        return ProjectRole(v)  # Convert to enum
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 notification_service = NotificationService()
+permission_service = PermissionService()
 
 # Helper function to check if a user has assigned tasks in a project
 def user_has_project_tasks(db: Session, project_id: int, user_id: int) -> bool:
@@ -376,30 +397,240 @@ async def get_project_tags(
     """Get all unique project tags"""
     return project_crud.get_all_tags(db)
 
-@router.get("/{project_id}/members")
+@router.get("/{project_id}/members", response_model=List[dict])
 async def get_project_members(
     project_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get all users that can be assigned to tasks"""
+    """Get all project members with their roles"""
     # Check if project exists
     project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Get all active users
-    users = db.query(User).filter(User.is_active == True).all()
-    
-    # Return user data in the format needed by the frontend
+    # Check if user has access to view members
+    if not permission_service.can_modify_project(db, current_user["id"], project_id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Get all project members with their roles
+    project_members = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id
+    ).all()
+
+    # Get all users that are members
+    member_users = db.query(User).filter(
+        User.id.in_([pm.user_id for pm in project_members])
+    ).all()
+
+    # Create a mapping of user_id to user details
+    user_map = {user.id: user for user in member_users}
+
+    # Return member data with roles
     return [
         {
-            "id": user.id,
-            "name": user.full_name or user.username,
-            "profile_image_url": user.profile_image_url
+            "id": pm.user_id,
+            "name": user_map[pm.user_id].full_name or user_map[pm.user_id].username,
+            "profile_image_url": user_map[pm.user_id].profile_image_url,
+            "role": pm.role.value
         }
-        for user in users
+        for pm in project_members
+        if pm.user_id in user_map
     ]
+
+@router.put("/{project_id}/members/{user_id}/role", response_model=dict)
+async def update_project_member_role(
+    project_id: int,
+    user_id: int,
+    member_update: ProjectMemberUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update a project member's role.
+    
+    Available roles:
+    - manager: Full project management permissions
+    - member: Regular project member permissions
+    - viewer: Read-only access
+    
+    Example request body:
+    ```json
+    {
+        "role": 1
+    }
+    ```
+    """
+    # Check if project exists
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Only project owner or superuser can update roles
+    if not (current_user.get("is_superuser", False) or project.owner_id == current_user["id"]):
+        raise HTTPException(status_code=403, detail="Only project owner or superuser can update member roles")
+
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get or create project member
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id
+    ).first()
+
+    if not project_member:
+        project_member = ProjectMember(
+            project_id=project_id,
+            user_id=user_id,
+            role=member_update.role  # This is already an integer from the schema validation
+        )
+        db.add(project_member)
+    else:
+        project_member.role = member_update.role  # This is already an integer from the schema validation
+
+    db.commit()
+    db.refresh(project_member)
+
+    # Create activity log
+    activity_data = ActivityCreate(
+        project_id=project_id,
+        user_id=current_user["id"],
+        activity_type="member_role_update",
+        description=f"Updated role of {user.full_name or user.username} to {ProjectRole(member_update.role).name.lower()}"
+    )
+    activity.create_activity(db, activity_data)
+
+    # Return updated member data
+    return {
+        "id": user.id,
+        "name": user.full_name or user.username,
+        "profile_image_url": user.profile_image_url,
+        "role": project_member.role.value
+    }
+
+@router.post("/{project_id}/members/{user_id}", response_model=dict)
+async def add_project_member(
+    project_id: int,
+    user_id: int,
+    member_update: ProjectMemberUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Add a new member to the project with a specific role.
+    
+    Available roles:
+    - manager: Full project management permissions
+    - member: Regular project member permissions
+    - viewer: Read-only access
+    
+    Example request body:
+    ```json
+    {
+        "role": 1
+    }
+    ```
+    """
+    # Check if project exists
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Only project owner or superuser can add members
+    if not (current_user.get("is_superuser", False) or project.owner_id == current_user["id"]):
+        raise HTTPException(status_code=403, detail="Only project owner or superuser can add members")
+
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if user is already a member
+    existing_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id
+    ).first()
+
+    if existing_member:
+        raise HTTPException(status_code=400, detail="User is already a project member")
+
+    # Create new project member
+    project_member = ProjectMember(
+        project_id=project_id,
+        user_id=user_id,
+        role=member_update.role  # This is already an integer from the schema validation
+    )
+    db.add(project_member)
+    db.commit()
+    db.refresh(project_member)
+
+    # Create activity log
+    activity_data = ActivityCreate(
+        project_id=project_id,
+        user_id=current_user["id"],
+        activity_type="member_added",
+        description=f"Added {user.full_name or user.username} as {ProjectRole(member_update.role).name.lower()}"
+    )
+    activity.create_activity(db, activity_data)
+
+    # Return member data
+    return {
+        "id": user.id,
+        "name": user.full_name or user.username,
+        "profile_image_url": user.profile_image_url,
+        "role": project_member.role.value
+    }
+
+@router.delete("/{project_id}/members/{user_id}")
+async def remove_project_member(
+    project_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Remove a member from the project"""
+    # Check if project exists
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Only project owner or superuser can remove members
+    if not (current_user.get("is_superuser", False) or project.owner_id == current_user["id"]):
+        raise HTTPException(status_code=403, detail="Only project owner or superuser can remove members")
+
+    # Check if user exists and is a member
+    project_member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id
+    ).first()
+
+    if not project_member:
+        raise HTTPException(status_code=404, detail="User is not a project member")
+
+    # Cannot remove the project owner
+    if project.owner_id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot remove the project owner")
+
+    # Get user info for activity log
+    user = db.query(User).filter(User.id == user_id).first()
+
+    # Remove member
+    db.delete(project_member)
+    db.commit()
+
+    # Create activity log
+    activity_data = ActivityCreate(
+        project_id=project_id,
+        user_id=current_user["id"],
+        activity_type="member_removed",
+        description=f"Removed {user.full_name or user.username} from project"
+    )
+    activity.create_activity(db, activity_data)
+
+    return {"status": "success", "message": "Member removed successfully"}
 
 @router.post("/{project_id}/tags/{tag_id}", response_model=ProjectSchema)
 async def add_tag_to_project(

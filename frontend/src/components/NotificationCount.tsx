@@ -34,7 +34,7 @@ export const NotificationCount = () => {
     fetchNotificationCount();
 
     // Set up polling for notification count
-    const interval = setInterval(fetchNotificationCount, 30000); // Poll every 30 seconds
+    const interval = setInterval(fetchNotificationCount, 10000); // Poll every 10 seconds for more responsive updates
 
     return () => clearInterval(interval);
   }, [token]);

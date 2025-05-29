@@ -8,7 +8,7 @@ import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, Ch
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
-import { API_BASE_URL } from "@/lib/constants";
+import { API_BASE_URL, DEFAULT_AVATAR_URL } from "@/lib/constants";
 import { useAuthStore } from "@/store/authStore";
 import { toast } from "react-hot-toast";
 import {
@@ -39,6 +39,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
+import { patchApi, postApi } from "@/lib/api-helper";
 
 interface Stage {
   id: string;
@@ -99,6 +100,7 @@ interface Task {
   state: TaskState;
   tags: Tag[];
   comments: Comment[];
+  planned_hours?: number;
 }
 
 type ActivityType = 'task_update' | 'comment' | 'log_note' | 'message';
@@ -154,6 +156,7 @@ interface TaskUpdateFields {
   state?: TaskState;
   description?: string;
   stage_id?: number;
+  planned_hours?: number;
 }
 
 interface LogNote {
@@ -431,6 +434,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const [originalStageName, setOriginalStageName] = useState<string>("");
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const activityFeedRef = useRef<HTMLDivElement>(null);
+  const [allocatedTime, setAllocatedTime] = useState<string>("");
+  const [isAllocatedTimeChanged, setIsAllocatedTimeChanged] = useState(false);
 
   // Add scroll handler to show/hide scroll to latest button
   const handleActivityScroll = useCallback(() => {
@@ -519,6 +524,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           setDeadline(data.deadline);
           setCurrentStage(data.stage_id);
           setCurrentStatus(data.state);
+          setAllocatedTime(data.planned_hours?.toString() || "");
         } else {
           setError("Failed to load task details");
         }
@@ -731,9 +737,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       isDeadlineChanged || 
       isAssigneesChanged ||
       isStatusChanged ||
-      isStageChanged
+      isStageChanged ||
+      isAllocatedTimeChanged
     );
-  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged, isStageChanged]);
+  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged, isStageChanged, isAllocatedTimeChanged]);
 
   // Update currentStatus when task details are loaded
   useEffect(() => {
@@ -757,6 +764,14 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     if (task?.tags) {
       console.log('Setting tags from task:', task.tags);
       setSelectedTags(task.tags);
+    }
+  }, [task]);
+
+  // Update allocatedTime when task details are loaded
+  useEffect(() => {
+    if (task?.planned_hours !== undefined) {
+      setAllocatedTime(task.planned_hours.toString());
+      setIsAllocatedTimeChanged(false);
     }
   }, [task]);
 
@@ -954,67 +969,87 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
     try {
       const updatedFields: TaskUpdateFields = {};
-      const optimisticActivity = {
-        id: Date.now(), // Temporary ID
-        activity_type: 'task_update' as const,
-        description: '',
-        created_at: new Date().toISOString(),
-        user: useAuthStore.getState().user,
-        uniqueId: `temp-${Date.now()}`
-      };
+      const activities = [];
 
       if (isNameChanged) {
         updatedFields.name = taskName;
-        optimisticActivity.description = `Changed task title from "${task?.name}" to "${taskName}"`;
+        activities.push({
+          activity_type: 'task_update',
+          description: `Changed task title from "${task?.name}" to "${taskName}"`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
       }
       if (isDeadlineChanged) {
         updatedFields.deadline = deadline ? new Date(deadline).toISOString() : null;
-        optimisticActivity.description = `Updated task deadline to ${deadline ? new Date(deadline).toLocaleString() : 'none'}`;
+        const oldDeadline = task?.deadline ? new Date(task.deadline).toLocaleString() : 'none';
+        const newDeadline = deadline ? new Date(deadline).toLocaleString() : 'none';
+        activities.push({
+          activity_type: 'task_update',
+          description: `Updated task deadline from ${oldDeadline} to ${newDeadline}`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
       }
       if (isAssigneesChanged) {
         updatedFields.assigned_to = selectedAssignees.length > 0 ? selectedAssignees[0].id : null;
-        optimisticActivity.description = `Updated task assignees`;
+        const oldAssignee = task?.assignee?.full_name || 'none';
+        const newAssignee = selectedAssignees.length > 0 ? selectedAssignees[0].full_name : 'none';
+        activities.push({
+          activity_type: 'task_update',
+          description: `Changed task assignee from ${oldAssignee} to ${newAssignee}`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
       }
       if (isDescriptionChanged) {
         updatedFields.description = description;
-        optimisticActivity.description = `Updated task description`;
+        activities.push({
+          activity_type: 'task_update',
+          description: `Updated task description`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
       }
       if (isStatusChanged) {
         updatedFields.state = currentStatus;
-        optimisticActivity.description = `Changed task status to ${currentStatus}`;
+        const oldStatus = task?.state || 'none';
+        activities.push({
+          activity_type: 'task_update',
+          description: `Changed task status from ${oldStatus} to ${currentStatus}`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
+      }
+      if (isAllocatedTimeChanged) {
+        updatedFields.planned_hours = parseFloat(allocatedTime);
+        const oldTime = task?.planned_hours || 0;
+        const newTime = parseFloat(allocatedTime);
+        activities.push({
+          activity_type: 'task_update',
+          description: `Updated allocated time from ${oldTime} hours to ${newTime} hours`,
+          task_id: Number(resolvedParams.taskId),
+          project_id: Number(id),
+          user_id: useAuthStore.getState().user?.id
+        });
       }
 
-      // Optimistically update the activities cache
-      queryClient.setQueryData(['activities', resolvedParams.taskId], (old: Activity[] = []) => {
-        return [optimisticActivity, ...old];
-      });
+      // First update the task details using patchApi helper
+      await patchApi(`/tasks/${resolvedParams.taskId}`, updatedFields);
 
-      // First update the task details
-      const taskResponse = await fetch(`${API_BASE_URL}/tasks/${resolvedParams.taskId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updatedFields),
-      });
-
-      if (!taskResponse.ok) {
-        const errorData = await taskResponse.json();
-        throw new Error(errorData.detail || 'Failed to update task');
+      // Create activities for all changes
+      for (const activityData of activities) {
+        await postApi('/activities/', activityData);
       }
 
       // If stage was changed, handle stage update
       if (isStageChanged && newStageId) {
         try {
-          // Validate token first
-          const isAuthenticated = await checkAuth();
-          if (!isAuthenticated) {
-            toast.error("Session expired. Please log in again.");
-            router.push('/auth/login');
-            return;
-          }
-
           // Get the new stage name
           const newStage = stages.find((s: TaskStage) => s.id.toString() === newStageId)?.name || 'Unknown Stage';
 
@@ -1025,94 +1060,28 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
             toStage: newStage
           });
 
-          // Use the stages endpoint to move the task
-          const stageResponse = await fetch(`${API_BASE_URL}/stages/${newStageId}/tasks/${resolvedParams.taskId}`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            }
-          });
-
-          console.log('Stage update response status:', stageResponse.status);
-          
-          let responseData;
-          try {
-            responseData = await stageResponse.json();
-            console.log('Stage update response data:', responseData);
-          } catch (e) {
-            console.error('Error parsing response:', e);
-            responseData = { detail: 'Failed to parse server response' };
-          }
-
-          if (!stageResponse.ok) {
-            let errorMessage = 'Failed to update task stage';
-            
-            if (responseData) {
-              if (typeof responseData.detail === 'string') {
-                errorMessage = responseData.detail;
-              } else if (Array.isArray(responseData.detail)) {
-                errorMessage = responseData.detail.map((err: any) => err.msg || err.message || String(err)).join(', ');
-              } else if (typeof responseData === 'object') {
-                errorMessage = Object.values(responseData).map(val => String(val)).join(', ');
-              }
-            }
-            
-            throw new Error(errorMessage);
-          }
+          // Use postApi helper for stage change
+          await postApi(`/stages/${newStageId}/tasks/${resolvedParams.taskId}`, {});
 
           // Create activity log for stage change
-          const activityResponse = await fetch(`${API_BASE_URL}/activities/`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              task_id: Number(resolvedParams.taskId),
-              project_id: Number(id),
-              activity_type: 'task_update',
-              description: `Changed task stage from "${originalStageName}" to "${newStage}"`,
-              user_id: useAuthStore.getState().user?.id,
-              created_at: new Date().toISOString()
-            })
+          await postApi('/activities/', {
+            task_id: Number(resolvedParams.taskId),
+            project_id: Number(id),
+            activity_type: 'task_update',
+            description: `Changed task stage from "${originalStageName}" to "${newStage}"`,
+            user_id: useAuthStore.getState().user?.id,
+            created_at: new Date().toISOString()
           });
-
-          if (!activityResponse.ok) {
-            const activityError = await activityResponse.json().catch(() => null);
-            console.error('Failed to create activity log:', activityError);
-          } else {
-            console.log('Activity log created successfully for stage change');
-          }
 
           // Update local state
           setCurrentStage(newStageId);
-          setOriginalStageName(""); // Reset the original stage name
+          setOriginalStageName("");
           
           // Reset stage change flag
           setIsStageChanged(false);
           setNewStageId(null);
-
-          // Refresh all relevant data
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ['stages', id] }),
-            queryClient.invalidateQueries({ queryKey: ['tasks', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['task-comments', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['task-activities', resolvedParams.taskId] }),
-            queryClient.invalidateQueries({ queryKey: ['tags'] })
-          ]);
-          
-          toast.success('Task stage updated successfully');
         } catch (error) {
           console.error('Stage update error:', error);
-          
-          // Check if it's an authentication error
-          if (error instanceof Error && error.message.toLowerCase().includes('unauthorized')) {
-            toast.error("Session expired. Please log in again.");
-            router.push('/auth/login');
-            return;
-          }
-          
           toast.error(error instanceof Error ? error.message : 'Failed to update task stage');
           throw error;
         }
@@ -1125,6 +1094,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setIsDescriptionChanged(false);
       setIsStatusChanged(false);
       setIsStageChanged(false);
+      setIsAllocatedTimeChanged(false);
       setNewStageId(null);
 
       // Refresh all data
@@ -1137,8 +1107,6 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
       toast.success('Task updated successfully');
     } catch (error) {
-      // Revert optimistic update on error
-      await queryClient.invalidateQueries({ queryKey: ['activities', resolvedParams.taskId] });
       console.error('Error updating task:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to update task');
     }
@@ -2648,8 +2616,27 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Allocated Time</label>
                   <div className="flex items-center gap-2">
-                    <Input type="time" defaultValue="00:00" />
-                    <span className="text-gray-500">(0%)</span>
+                    <Input 
+                      type="number" 
+                      min="0"
+                      step="0.5"
+                      value={allocatedTime}
+                      onChange={(e) => {
+                        const newTime = e.target.value;
+                        setAllocatedTime(newTime);
+                        setIsAllocatedTimeChanged(newTime !== task?.planned_hours?.toString());
+                      }}
+                      className="w-24"
+                    />
+                    <span className="text-gray-500">hours</span>
+                    {isAllocatedTimeChanged && (
+                      <Button
+                        size="sm"
+                        onClick={handleSaveChanges}
+                      >
+                        Save
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <div>
@@ -2660,7 +2647,8 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                     onChange={(e) => {
                       const newDeadline = e.target.value;
                       setDeadline(newDeadline);
-                      setIsDeadlineChanged(newDeadline !== task?.deadline);
+                      const taskDeadline = task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : null;
+                      setIsDeadlineChanged(newDeadline !== taskDeadline);
                     }}
                   />
                 </div>
