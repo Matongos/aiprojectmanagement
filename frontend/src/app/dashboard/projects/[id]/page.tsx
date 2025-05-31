@@ -80,6 +80,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Stage } from '@/types/stage';
 
 interface TaskStatus {
   id: string;
@@ -228,67 +229,59 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
   const [isLoadingFollowers, setIsLoadingFollowers] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followerCount, setFollowerCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchProjectAndStages = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      // Fetch project details
+      const projectResponse = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!projectResponse.ok) {
+        throw new Error(`Failed to fetch project: ${projectResponse.status}`);
+      }
+
+      const projectData = await projectResponse.json();
+
+      // Fetch stages for the project
+      const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!stagesResponse.ok) {
+        throw new Error(`Failed to fetch stages: ${stagesResponse.status}`);
+      }
+
+      const stagesData: Stage[] = await stagesResponse.json();
+
+      // Sort stages by order
+      const sortedStages = stagesData.sort((a, b) => a.order - b.order);
+
+      setProject(projectData);
+      setStages(sortedStages);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching project and stages:', error);
+      setError(error instanceof Error ? error.message : 'An error occurred');
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchProjectAndStages = async () => {
-      if (!projectId || !token) return;
-      
-      try {
-        setLoading(true);
-        
-        // Fetch project details
-        const projectResponse = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!projectResponse.ok) {
-          throw new Error(`Failed to fetch project: ${projectResponse.statusText}`);
-        }
-
-        const projectData = await projectResponse.json();
-        setProject(projectData);
-
-        // Fetch stages for the project
-        const stagesResponse = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!stagesResponse.ok) {
-          throw new Error(`Failed to fetch stages: ${stagesResponse.statusText}`);
-        }
-
-        const stagesData = await stagesResponse.json();
-        if (Array.isArray(stagesData)) {
-          setStages(stagesData);
-          // Initialize folded stages from backend data
-          const foldedStagesSet = new Set(
-            stagesData
-              .filter(stage => stage.fold)
-              .map(stage => stage.id)
-          );
-          setFoldedStages(foldedStagesSet);
-        } else {
-          console.error("Received invalid stages data:", stagesData);
-          setStages([]);
-        }
-
-      } catch (error) {
-        console.error("Error fetching project data:", error);
-        toast.error(error instanceof Error ? error.message : "Failed to load project data");
-        setStages([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchProjectAndStages();
-  }, [projectId, token]);
+  }, [projectId]);
 
   // Fetch users for assignee selection
   useEffect(() => {

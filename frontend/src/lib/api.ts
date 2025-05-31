@@ -2,6 +2,8 @@
 import { API_BASE_URL } from './constants';
 import { fetchApi } from './api-helper';
 import { useAuthStore } from '@/store/authStore';
+import { Task } from '@/types/task';
+import { Stage } from '@/types/stage';
 
 export interface Project {
   id: number;
@@ -32,9 +34,9 @@ export const getRecentProjects = async (): Promise<Project[]> => {
     const data = await fetchApi<Project[]>('/projects?sort=-created_at&limit=5');
     
     // Get user tasks to check which projects the user has tasks in
-    let userTasks: any[] = [];
+    let userTasks: Task[] = [];
     try {
-      userTasks = await fetchApi<any[]>('/tasks/');
+      userTasks = await fetchApi<Task[]>('/tasks/');
     } catch (taskError) {
       console.error('Error fetching user tasks:', taskError);
       // Continue with empty user tasks instead of failing the whole operation
@@ -67,9 +69,19 @@ export const getRecentProjects = async (): Promise<Project[]> => {
   }
 };
 
-export async function getUpcomingTasks(): Promise<any[]> {
+export interface UpcomingTask {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  due_date: string;
+  project_id: string;
+  project_name: string;
+}
+
+export async function getUpcomingTasks(): Promise<UpcomingTask[]> {
   try {
-    return await fetchApi<any[]>('/tasks/upcoming');
+    return await fetchApi<UpcomingTask[]>('/tasks/upcoming');
   } catch (error) {
     console.error('Error fetching upcoming tasks:', error);
     // Return mock data for now
@@ -118,7 +130,7 @@ export async function getUpcomingTasks(): Promise<any[]> {
 export const getTaskAttachments = async (taskId: number) => {
   const response = await fetch(`/api/tasks/${taskId}/attachments`, {
     headers: {
-      'Authorization': `Bearer ${getToken()}`
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
     }
   });
   
@@ -141,7 +153,7 @@ export const uploadTaskAttachment = async (taskId: number, file: File, descripti
   const response = await fetch('/api/file-attachments', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${getToken()}`
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
     },
     body: formData
   });
@@ -157,7 +169,7 @@ export const deleteFileAttachment = async (fileId: number) => {
   const response = await fetch(`/api/file-attachments/${fileId}`, {
     method: 'DELETE',
     headers: {
-      'Authorization': `Bearer ${getToken()}`
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
     }
   });
   
@@ -176,4 +188,110 @@ export const getProjectById = async (projectId: number): Promise<Project> => {
     console.error('Error fetching project details:', error);
     throw error;
   }
+};
+
+const getAuthHeaders = () => ({
+  'Authorization': `Bearer ${localStorage.getItem('token')}`,
+  'Content-Type': 'application/json',
+});
+
+export interface TaskSummary {
+  total: number;
+  completed: number;
+  active: number;
+  cancelled: number;
+  completion_rate: number;
+  tasks_by_state: {
+    in_progress: number;
+    completed: number;
+    cancelled: number;
+  };
+}
+
+export interface CompletionTimeMetrics {
+  averageCompletionTime: number;
+  trend: number;
+  period: string;
+  insights: string[];
+}
+
+export interface ProductivityMetrics {
+  productivity_score: number;
+  completion_rate: number;
+  avg_completion_time: number;
+  period: string;
+  metrics: {
+    total_tasks: number;
+    completed_tasks: number;
+    time_score: number;
+  };
+}
+
+export const getTaskSummary = async (projectId?: number): Promise<TaskSummary> => {
+  const url = projectId 
+    ? `${API_BASE_URL}/analytics/tasks/summary?project_id=${projectId}`
+    : `${API_BASE_URL}/analytics/tasks/summary`;
+  const response = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch task summary');
+  }
+  return response.json();
+};
+
+export const getCompletionTimeMetrics = async (days: number = 30): Promise<CompletionTimeMetrics> => {
+  const response = await fetch(`${API_BASE_URL}/analytics/tasks/completion-time?days=${days}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch completion time metrics');
+  }
+  return response.json();
+};
+
+export const getProductivityMetrics = async (days: number = 30): Promise<ProductivityMetrics> => {
+  const response = await fetch(`${API_BASE_URL}/analytics/tasks/productivity?days=${days}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch productivity metrics');
+  }
+  return response.json();
+};
+
+export interface TasksResponse {
+  active_tasks: number;
+  tasks_by_state: Record<string, number>;
+}
+
+export async function getActiveTasksCount(): Promise<TasksResponse> {
+  const response = await fetch(`${API_BASE_URL}/analytics/tasks/active`, {
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch active tasks count');
+  }
+
+  return response.json();
+}
+
+export const getProjectStages = async (projectId: number): Promise<Stage[]> => {
+  const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch project stages');
+  }
+
+  const stages = await response.json();
+  return stages.sort((a: Stage, b: Stage) => a.order - b.order);
 }; 

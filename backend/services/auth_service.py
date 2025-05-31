@@ -27,7 +27,7 @@ except Exception as e:
 # JWT settings
 SECRET_KEY = os.getenv("JWT_SECRET", "development_secret_please_change_in_production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # Changed to 24 hours (24 * 60 minutes)
 
 # Create a direct engine for database operations - use environment variables
 try:

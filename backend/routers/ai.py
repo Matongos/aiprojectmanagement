@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from database import get_db
 from services.ai_service import get_ai_service
+from services.ollama_client import get_ollama_client
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -74,4 +75,7 @@ async def analyze_project_risks(
     analysis = await ai_service.analyze_project_risks(project_id)
     if not analysis:
         raise HTTPException(status_code=404, detail="Project not found")
-    return analysis 
+    return analysis
+
+# Export the get_ollama_client function
+__all__ = ['router', 'get_ollama_client'] 

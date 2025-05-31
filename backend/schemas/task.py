@@ -122,6 +122,7 @@ class Task(TaskBase):
     company: Optional[dict] = None
     assignee: Optional[dict] = None
     tags: Optional[List[Tag]] = Field(default=[], description="List of associated tags")
+    is_active: bool = Field(default=True, description="Whether task is active")
 
     class Config:
         from_attributes = True
@@ -172,6 +173,7 @@ class TaskResponse(BaseModel):
     progress: Optional[float] = 0.0
     created_at: datetime
     updated_at: Optional[datetime] = None
+    is_active: bool = Field(default=True, description="Whether task is active")
 
     class Config:
         from_attributes = True

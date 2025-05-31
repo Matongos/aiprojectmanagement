@@ -39,7 +39,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
-import { patchApi, postApi } from "@/lib/api-helper";
+import { patchApi, postApi, putApi } from "@/lib/api-helper";
 
 interface Stage {
   id: string;
@@ -1040,7 +1040,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
 
       // First update the task details using patchApi helper
-      await patchApi(`/tasks/${resolvedParams.taskId}`, updatedFields);
+      await putApi(`/tasks/${resolvedParams.taskId}`, updatedFields);
 
       // Create activities for all changes
       for (const activityData of activities) {

@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { API_BASE_URL } from '@/lib/constants';
 
+interface TaskTrendItem {
+  date: string;
+  count: number;
+}
+
+interface TaskTrendResponse {
+  created_tasks: TaskTrendItem[];
+  completed_tasks: TaskTrendItem[];
+}
+
 interface DashboardMetrics {
   totalTasks: number;
   completedTasks: number;
@@ -102,51 +112,79 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
   fetchMetrics: async (token: string) => {
     set({ loading: true, error: null });
     try {
-      const [taskMetrics, taskTrend, aiInsights, resourceMetrics] = await Promise.all([
+      if (!token) {
+        throw new Error('No authentication token available');
+      }
+
+      // Fetch task metrics and trend data (these endpoints exist)
+      const [taskMetrics, taskTrendResponse] = await Promise.all([
         fetch(`${API_BASE_URL}/analytics/tasks/summary`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).then((res) => res.json()),
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errorText = await res.text();
+            console.error('Task summary response not OK:', errorText);
+            throw new Error(`Failed to fetch task summary: ${res.status} ${res.statusText}`);
+          }
+          return res.json();
+        }),
         fetch(`${API_BASE_URL}/analytics/tasks/trend?days=30`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).then((res) => res.json()),
-        fetch(`${API_BASE_URL}/ai/projects/risks`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).then((res) => res.json()),
-        fetch(`${API_BASE_URL}/ai/resources/optimization`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).then((res) => res.json()),
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errorText = await res.text();
+            console.error('Task trend response not OK:', errorText);
+            throw new Error(`Failed to fetch task trend: ${res.status} ${res.statusText}`);
+          }
+          const data = await res.json();
+          console.log('Task trend response:', data); // Debug log
+          return data as TaskTrendResponse;
+        }),
       ]);
 
-      console.log('Task Metrics Response:', JSON.stringify(taskMetrics, null, 2));
-      console.log('Task Trend Response:', JSON.stringify(taskTrend, null, 2));
-      console.log('AI Insights Response:', JSON.stringify(aiInsights, null, 2));
-      console.log('Resource Metrics Response:', JSON.stringify(resourceMetrics, null, 2));
+      // Transform task trend data into the expected format
+      const taskTrend = {
+        labels: [] as string[],
+        created: [] as number[],
+        completed: [] as number[]
+      };
 
-      // Ensure aiInsights has all required properties with fallbacks
+      if (taskTrendResponse && Array.isArray(taskTrendResponse.created_tasks) && Array.isArray(taskTrendResponse.completed_tasks)) {
+        // Get all unique dates from both created and completed tasks
+        const allDates = new Set([
+          ...taskTrendResponse.created_tasks.map(t => t.date),
+          ...taskTrendResponse.completed_tasks.map(t => t.date)
+        ]);
+
+        // Sort dates chronologically
+        taskTrend.labels = Array.from(allDates).sort();
+
+        // Map the counts for each date
+        taskTrend.created = taskTrend.labels.map(date => 
+          taskTrendResponse.created_tasks.find(t => t.date === date)?.count || 0
+        );
+        taskTrend.completed = taskTrend.labels.map(date => 
+          taskTrendResponse.completed_tasks.find(t => t.date === date)?.count || 0
+        );
+      } else {
+        console.warn('Invalid task trend response format:', taskTrendResponse);
+      }
+
+      // Use default values for AI insights since those endpoints don't exist yet
       const safeAiInsights = {
-        riskLevel: aiInsights?.riskLevel || defaultMetrics.aiInsights.riskLevel,
-        suggestions: Array.isArray(aiInsights?.suggestions) 
-          ? aiInsights.suggestions 
-          : defaultMetrics.aiInsights.suggestions,
-        predictedDelays: typeof aiInsights?.predictedDelays === 'number'
-          ? aiInsights.predictedDelays
-          : defaultMetrics.aiInsights.predictedDelays,
-        taskPriorities: {
-          ...defaultMetrics.aiInsights.taskPriorities,
-          ...aiInsights?.taskPriorities
-        },
-        resourceUtilization: {
-          ...defaultMetrics.aiInsights.resourceUtilization,
-          ...resourceMetrics
-        },
-        performanceMetrics: {
-          ...defaultMetrics.aiInsights.performanceMetrics,
-          ...aiInsights?.performanceMetrics
-        },
-        milestoneRisk: {
-          ...defaultMetrics.aiInsights.milestoneRisk,
-          ...aiInsights?.milestoneRisk
-        }
+        riskLevel: 'Low',
+        suggestions: ['System is still gathering data for AI insights'],
+        predictedDelays: 0,
+        taskPriorities: defaultMetrics.aiInsights.taskPriorities,
+        resourceUtilization: defaultMetrics.aiInsights.resourceUtilization,
+        performanceMetrics: defaultMetrics.aiInsights.performanceMetrics,
+        milestoneRisk: defaultMetrics.aiInsights.milestoneRisk
       };
 
       const updatedMetrics = {
@@ -155,15 +193,10 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
         completedTasks: taskMetrics?.tasks_by_status?.done || 0,
         averageCompletionTime: taskMetrics?.avg_completion_time_hours || 0,
         tasksByState: taskMetrics?.tasks_by_status || defaultMetrics.tasksByState,
-        taskTrend: {
-          labels: Array.isArray(taskTrend) ? taskTrend.map((t: any) => t.date) : [],
-          created: Array.isArray(taskTrend) ? taskTrend.map((t: any) => t.created) : [],
-          completed: Array.isArray(taskTrend) ? taskTrend.map((t: any) => t.completed) : [],
-        },
+        taskTrend,
         aiInsights: safeAiInsights,
+        productivityScore: taskMetrics?.productivity_score || 0,
       };
-
-      console.log('Updated Metrics:', updatedMetrics);
 
       set({
         metrics: updatedMetrics,
@@ -172,7 +205,7 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
     } catch (error) {
       console.error('Failed to fetch metrics:', error);
       set({ 
-        error: 'Failed to fetch metrics', 
+        error: error instanceof Error ? error.message : 'Failed to fetch metrics', 
         loading: false,
         metrics: defaultMetrics,
       });

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Dict
 from datetime import datetime, timedelta
+from pydantic import BaseModel
 
 from database import get_db
 from models.metrics import ProjectMetrics, TaskMetrics, ResourceMetrics
@@ -14,11 +15,21 @@ from schemas.metrics import (
     ResourceMetrics as ResourceMetricsSchema
 )
 from routers.auth import get_current_user
+from services.metrics_service import MetricsService
+from auth.auth_bearer import JWTBearer
+from auth.auth_handler import decodeJWT
+
+# Add response model for completion time metrics
+class CompletionTimeMetrics(BaseModel):
+    averageCompletionTime: float
+    trend: float
+    insights: List[str]
+    period: str
 
 router = APIRouter(
     prefix="/metrics",
     tags=["metrics"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(JWTBearer())]
 )
 
 @router.get("/task/{task_id}")
@@ -170,4 +181,72 @@ def update_all_metrics(db: Session):
 def trigger_metrics_update(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Trigger a background update of all metrics"""
     background_tasks.add_task(update_all_metrics, db)
-    return {"message": "Metrics update scheduled"} 
+    return {"message": "Metrics update scheduled"}
+
+@router.get("/dashboard")
+async def get_dashboard_metrics(db: Session = Depends(get_db), token: str = Depends(JWTBearer())) -> Dict:
+    """Get dashboard metrics including productivity score and completion time."""
+    try:
+        # Get user from token
+        payload = decodeJWT(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+            
+        # Calculate metrics
+        productivity_score = MetricsService.calculate_productivity_score(db, user_id)
+        completion_time = MetricsService.calculate_average_completion_time(db, user_id)
+        
+        return {
+            "productivityScore": productivity_score,
+            "averageCompletionTime": completion_time["average_hours"],
+            "completionTimeTrend": completion_time["trend"],
+            "insights": completion_time["insights"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/completion-time", response_model=CompletionTimeMetrics)
+async def get_completion_time_metrics(
+    days: int = 30,
+    db: Session = Depends(get_db), 
+    token: str = Depends(JWTBearer())
+) -> CompletionTimeMetrics:
+    """
+    Get average completion time metrics with AI insights.
+    
+    Parameters:
+    - days: Number of days to look back for metrics (default: 30)
+    
+    Returns:
+    - averageCompletionTime: Average time in hours to complete tasks
+    - trend: Percentage change in completion time compared to previous period
+    - insights: List of AI-generated insights about completion patterns
+    - period: Description of the time period analyzed
+    """
+    try:
+        # Get user from token
+        payload = decodeJWT(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+            
+        # Calculate completion time metrics
+        completion_time = MetricsService.calculate_average_completion_time(db, user_id, days)
+        
+        return CompletionTimeMetrics(
+            averageCompletionTime=completion_time["average_hours"],
+            trend=completion_time["trend"],
+            insights=completion_time["insights"],
+            period=f"Last {days} days"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 

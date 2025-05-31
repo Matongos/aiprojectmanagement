@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from 'react';
-import { Chart, ChartConfiguration } from 'chart.js/auto';
+import { Chart, ChartConfiguration, ChartOptions } from 'chart.js/auto';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface ProjectMetricsChartProps {
@@ -18,9 +18,16 @@ interface ProjectMetricsChartProps {
   title: string;
   type: 'line' | 'bar' | 'pie' | 'doughnut';
   height?: number;
+  options?: ChartOptions;
 }
 
-export function ProjectMetricsChart({ data, title, type, height = 300 }: ProjectMetricsChartProps) {
+export function ProjectMetricsChart({ 
+  data, 
+  title, 
+  type, 
+  height = 300,
+  options: customOptions 
+}: ProjectMetricsChartProps) {
   const chartRef = useRef<HTMLCanvasElement>(null);
   const chartInstance = useRef<Chart | null>(null);
 
@@ -35,26 +42,28 @@ export function ProjectMetricsChart({ data, title, type, height = 300 }: Project
     const ctx = chartRef.current.getContext('2d');
     if (!ctx) return;
 
+    const defaultOptions: ChartOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top' as const,
+        },
+        title: {
+          display: false,
+        },
+      },
+      scales: type !== 'pie' && type !== 'doughnut' ? {
+        y: {
+          beginAtZero: true,
+        },
+      } : undefined,
+    };
+
     const config: ChartConfiguration = {
       type,
       data,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'top' as const,
-          },
-          title: {
-            display: false,
-          },
-        },
-        scales: type !== 'pie' && type !== 'doughnut' ? {
-          y: {
-            beginAtZero: true,
-          },
-        } : undefined,
-      },
+      options: customOptions || defaultOptions,
     };
 
     chartInstance.current = new Chart(ctx, config);
@@ -64,7 +73,7 @@ export function ProjectMetricsChart({ data, title, type, height = 300 }: Project
         chartInstance.current.destroy();
       }
     };
-  }, [data, type]);
+  }, [data, type, customOptions]);
 
   return (
     <Card>

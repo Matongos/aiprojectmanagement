@@ -175,9 +175,12 @@ class AIService:
         """
         
         # Get AI analysis
+        system_prompt = "You are an AI task analyzer. Always respond in valid JSON format matching the schema provided. Be specific and detailed in your analysis."
+        full_prompt = f"{system_prompt}\n\n{prompt}\n\nProvide your response in valid JSON format only."
+        
         response = await self.ollama_client.generate(
             model="codellama",
-            prompt=prompt,
+            prompt=full_prompt,
             stream=False
         )
         
@@ -197,17 +200,35 @@ class AIService:
                     "success_factors": []
                 })
             }
-        except Exception as e:
+        except json.JSONDecodeError as e:
             print(f"Error parsing AI response: {str(e)}")
-            # Return default values if parsing fails
+            print(f"Raw response: {response.text}")
+            # Extract meaningful information even from non-JSON response
+            raw_text = response.text
             return {
                 "complexity": 5,
-                "risk_factors": ["Unable to analyze risks"],
+                "risk_factors": ["AI response parsing error - please try again"],
                 "time_accuracy": 0.5,
-                "suggestions": ["Retry analysis"],
+                "suggestions": [
+                    "Retry analysis",
+                    f"Raw AI response: {raw_text[:200]}..." if len(raw_text) > 200 else raw_text
+                ],
                 "patterns": {
-                    "type": "unknown",
-                    "common_issues": [],
+                    "type": "analysis_error",
+                    "common_issues": ["AI response format error"],
+                    "success_factors": []
+                }
+            }
+        except Exception as e:
+            print(f"Unexpected error during analysis: {str(e)}")
+            return {
+                "complexity": 5,
+                "risk_factors": [f"Analysis error: {str(e)}"],
+                "time_accuracy": 0.5,
+                "suggestions": ["Contact support if error persists"],
+                "patterns": {
+                    "type": "error",
+                    "common_issues": [str(e)],
                     "success_factors": []
                 }
             }

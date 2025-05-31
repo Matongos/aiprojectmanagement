@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint, Enum as SQLEnum
 from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.sql import func
 from datetime import datetime

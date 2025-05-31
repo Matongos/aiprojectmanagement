@@ -4,9 +4,12 @@ from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta, time
 from models.task import Task
 from models.project import Project
-from schemas.task import TaskCreate
+from models.task_stage import TaskStage
+from models.metrics import TaskMetrics
+from schemas.task import TaskCreate, TaskState
 from .permission_service import PermissionService
 from fastapi import HTTPException
+from sqlalchemy.sql import func
 
 class TaskService:
     def __init__(self):
@@ -71,7 +74,7 @@ class TaskService:
         # Set all default values
         task_dict.update({
             "created_by": current_user_id,
-            "state": "in_progress",  # Default state
+            "state": TaskState.IN_PROGRESS,  # Default state
             "priority": "normal",    # Default priority
             "description": "",       # Default empty description
             "planned_hours": 0.0,    # Default planned hours
@@ -101,7 +104,7 @@ class TaskService:
         return task
 
     def update_task_state(self, db: Session, task: Task, new_state: str, current_user_id: int) -> Task:
-        """Update task state and set end_date if task is done"""
+        """Update task state and handle completion status"""
         # Check project permissions
         if task.project_id:
             if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
@@ -111,7 +114,9 @@ class TaskService:
                 )
 
         task.state = new_state
-        if new_state == "done":
+        
+        # Update task based on state
+        if new_state == TaskState.DONE:
             # Set end date to current time if during work hours (8am-4pm)
             now = datetime.utcnow()
             if now.weekday() < 5 and time(8, 0) <= now.time() <= time(16, 0):
@@ -123,9 +128,174 @@ class TaskService:
                     end_date -= timedelta(days=1)
                 task.end_date = end_date.replace(hour=16, minute=0, second=0, microsecond=0)
             task.progress = 100.0
+        
         db.commit()
         db.refresh(task)
         return task
+
+    def update_task_stage(self, db: Session, task: Task, new_stage_id: int, current_user_id: int) -> Task:
+        """Update task stage and handle completion status based on stage type"""
+        # Check project permissions
+        if task.project_id:
+            if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have permission to update tasks in this project"
+                )
+        
+        # Get the new stage
+        new_stage = db.query(TaskStage).filter(TaskStage.id == new_stage_id).first()
+        if not new_stage:
+            raise HTTPException(status_code=404, detail="Stage not found")
+        
+        # Check if the stage name indicates completion
+        completion_stage_names = {'done', 'completed', 'end', 'closed', 'complete', 'finished'}
+        is_completion_stage = any(name in new_stage.name.lower() for name in completion_stage_names)
+        
+        task.stage_id = new_stage_id
+        task.date_last_stage_update = func.now()
+        
+        # Update task status if moving to a completion stage
+        if is_completion_stage:
+            task.state = TaskState.DONE
+            # Set end date
+            now = datetime.utcnow()
+            if now.weekday() < 5 and time(8, 0) <= now.time() <= time(16, 0):
+                task.end_date = now
+            else:
+                end_date = now
+                while end_date.weekday() >= 5:
+                    end_date -= timedelta(days=1)
+                task.end_date = end_date.replace(hour=16, minute=0, second=0, microsecond=0)
+            task.progress = 100.0
+        
+        db.commit()
+        db.refresh(task)
+        return task
+
+    def update_task(self, db: Session, task_id: int, task_data: dict, current_user_id: int) -> Tuple[Dict[str, Any], Optional[str]]:
+        """
+        Update a task.
+        
+        Args:
+            db: Database session
+            task_id: ID of the task to update
+            task_data: Updated task data
+            current_user_id: ID of the user making the update
+            
+        Returns:
+            Tuple containing (updated_task_dict, error_message)
+        """
+        try:
+            # Check if task exists
+            task = db.query(Task).filter(Task.id == task_id).first()
+            if not task:
+                return None, f"Task with ID {task_id} not found"
+
+            # Check project permissions
+            if task.project_id:
+                if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
+                    return None, "You don't have permission to update tasks in this project"
+            
+            # Validate project exists if specified
+            if task_data.get("project_id"):
+                check_query = text("SELECT id FROM projects WHERE id = :project_id")
+                project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
+                if not project:
+                    return None, f"Project with ID {task_data['project_id']} not found"
+            
+            # Validate assignee exists if specified
+            if task_data.get("assigned_to"):
+                check_query = text("SELECT id FROM users WHERE id = :assigned_to")
+                assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
+                if not assignee:
+                    return None, f"User with ID {task_data['assigned_to']} not found"
+            
+            # Validate milestone exists if specified
+            if task_data.get("milestone_id"):
+                check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
+                milestone = db.execute(check_query, {"milestone_id": task_data["milestone_id"]}).fetchone()
+                if not milestone:
+                    return None, f"Milestone with ID {task_data['milestone_id']} not found"
+            
+            # Build update query dynamically
+            update_fields = []
+            params = {"task_id": task_id}
+            
+            # Map of field names to their column names
+            field_map = {
+                "name": "name",
+                "description": "description",
+                "state": "state",
+                "priority": "priority",
+                "start_date": "start_date",
+                "deadline": "deadline",
+                "end_date": "end_date",
+                "planned_hours": "planned_hours",
+                "project_id": "project_id",
+                "stage_id": "stage_id",
+                "assigned_to": "assigned_to",
+                "milestone_id": "milestone_id",
+                "company_id": "company_id",
+                "parent_id": "parent_id",
+                "is_recurring": "is_recurring",
+                "tags": "tags",
+                "email_cc": "email_cc",
+                "email_from": "email_from",
+                "displayed_image_id": "displayed_image_id",
+                "progress": "progress"
+            }
+            
+            for field, column in field_map.items():
+                if field in task_data and task_data[field] is not None:
+                    update_fields.append(f"{column} = :{field}")
+                    params[field] = task_data[field]
+            
+            if not update_fields:
+                return get_task_by_id(db, task_id), None
+            
+            # Add updated_at timestamp
+            update_fields.append("updated_at = CURRENT_TIMESTAMP")
+            
+            # Build and execute update query
+            update_query = text(f"""
+                UPDATE tasks 
+                SET {', '.join(update_fields)}
+                WHERE id = :task_id
+                RETURNING id, name, description, state, priority, deadline, 
+                          planned_hours, assigned_to, created_by, project_id,
+                          created_at, updated_at, progress, stage_id
+            """)
+            
+            result = db.execute(update_query, params).fetchone()
+            db.commit()
+            
+            if not result:
+                return None, "Failed to update task"
+            
+            # Convert result to dictionary with all required fields
+            task = {
+                "id": result.id,
+                "name": result.name,
+                "description": result.description,
+                "state": result.state,
+                "priority": result.priority,
+                "deadline": result.deadline,
+                "planned_hours": result.planned_hours,
+                "assigned_to": result.assigned_to,
+                "created_by": result.created_by,
+                "project_id": result.project_id,
+                "created_at": result.created_at,
+                "updated_at": result.updated_at,
+                "progress": result.progress if hasattr(result, 'progress') else 0.0,
+                "stage_id": result.stage_id
+            }
+            
+            return task, None
+        
+        except Exception as e:
+            db.rollback()
+            return None, f"Error updating task: {str(e)}"
 
 def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     """
@@ -140,8 +310,8 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     """
     query = text("""
     SELECT 
-        t.id, t.title, t.description, t.status, t.priority, t.due_date,
-        t.estimated_hours, t.created_by, t.assignee_id, t.project_id,
+        t.id, t.name, t.description, t.state, t.priority, t.deadline,
+        t.planned_hours, t.created_by, t.assigned_to, t.project_id,
         t.created_at, t.updated_at,
         array_agg(DISTINCT jsonb_build_object(
             'id', tg.id,
@@ -153,7 +323,9 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     LEFT JOIN task_tag tt ON t.id = tt.task_id
     LEFT JOIN tags tg ON tt.tag_id = tg.id
     WHERE t.id = :task_id
-    GROUP BY t.id
+    GROUP BY t.id, t.name, t.description, t.state, t.priority, t.deadline,
+             t.planned_hours, t.created_by, t.assigned_to, t.project_id,
+             t.created_at, t.updated_at
     """)
     
     result = db.execute(query, {"task_id": task_id}).fetchone()
@@ -163,14 +335,14 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     
     task_dict = {
         "id": result[0],
-        "title": result[1],
+        "name": result[1],
         "description": result[2],
-        "status": result[3],
+        "state": result[3],
         "priority": result[4],
-        "due_date": result[5],
-        "estimated_hours": result[6],
+        "deadline": result[5],
+        "planned_hours": result[6],
         "created_by": result[7],
-        "assignee_id": result[8],
+        "assigned_to": result[8],
         "project_id": result[9],
         "created_at": result[10],
         "updated_at": result[11],
@@ -256,116 +428,6 @@ def get_tasks(db: Session, skip: int = 0, limit: int = 100, filters: Dict[str, A
         })
     
     return tasks
-
-def update_task(db: Session, task_id: int, task_data: dict, current_user_id: int) -> Tuple[Dict[str, Any], Optional[str]]:
-    """
-    Update a task.
-    
-    Args:
-        db: Database session
-        task_id: ID of the task to update
-        task_data: Updated task data
-        
-    Returns:
-        Tuple containing (updated_task_dict, error_message)
-    """
-    try:
-        # Check if task exists
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            return None, f"Task with ID {task_id} not found"
-
-        # Check project permissions
-        if task.project_id:
-            permission_service = PermissionService()
-            if not permission_service.can_modify_project(db, current_user_id, task.project_id):
-                return None, "You don't have permission to update tasks in this project"
-        
-        # Validate project exists if specified
-        if task_data.get("project_id"):
-            check_query = text("SELECT id FROM projects WHERE id = :project_id")
-            project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
-            if not project:
-                return None, f"Project with ID {task_data['project_id']} not found"
-        
-        # Validate assignee exists if specified
-        if task_data.get("assigned_to"):
-            check_query = text("SELECT id FROM users WHERE id = :assigned_to")
-            assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
-            if not assignee:
-                return None, f"User with ID {task_data['assigned_to']} not found"
-        
-        # Validate milestone exists if specified
-        if task_data.get("milestone_id"):
-            check_query = text("SELECT id FROM milestones WHERE id = :milestone_id")
-            milestone = db.execute(check_query, {"milestone_id": task_data["milestone_id"]}).fetchone()
-            if not milestone:
-                return None, f"Milestone with ID {task_data['milestone_id']} not found"
-        
-        # Build update query dynamically
-        update_fields = []
-        params = {"task_id": task_id}
-        
-        # Map of field names to their column names
-        field_map = {
-            "title": "title",
-            "description": "description",
-            "status": "status",
-            "priority": "priority",
-            "date_start": "date_start",
-            "date_deadline": "date_deadline",
-            "date_end": "date_end",
-            "estimated_hours": "estimated_hours",
-            "project_id": "project_id",
-            "stage_id": "stage_id",
-            "assigned_to": "assigned_to",
-            "milestone_id": "milestone_id",
-            "company_id": "company_id",
-            "parent_id": "parent_id",
-            "is_recurring": "is_recurring",
-            "tags": "tags",
-            "email_cc": "email_cc",
-            "email_from": "email_from",
-            "displayed_image_id": "displayed_image_id"
-        }
-        
-        for field, column in field_map.items():
-            if field in task_data and task_data[field] is not None:
-                update_fields.append(f"{column} = :{field}")
-                params[field] = task_data[field]
-        
-        if not update_fields:
-            return get_task_by_id(db, task_id), None
-        
-        # Add updated_at timestamp
-        update_fields.append("updated_at = CURRENT_TIMESTAMP")
-        
-        # If assignee is being updated, update date_assign
-        if "assigned_to" in task_data:
-            update_fields.append("date_assign = CURRENT_TIMESTAMP")
-        
-        # Build and execute update query
-        update_query = text(f"""
-            UPDATE tasks 
-            SET {', '.join(update_fields)}
-            WHERE id = :task_id
-            RETURNING *
-        """)
-        
-        result = db.execute(update_query, params).fetchone()
-        db.commit()
-        
-        if not result:
-            return None, "Failed to update task"
-        
-        # Convert result to dictionary
-        task = dict(result._mapping)
-        
-        return task, None
-    
-    except Exception as e:
-        db.rollback()
-        return None, f"Error updating task: {str(e)}"
 
 def delete_task(db: Session, task_id: int, current_user_id: int) -> Optional[str]:
     """

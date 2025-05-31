@@ -12,7 +12,10 @@ from .activity import Activity
 from .comment import Comment
 from .time_entry import TimeEntry
 from .message import Message
-from .tag import Tag
+from .tag import Tag, task_tag
+from .notification import Notification
+from .log_note import LogNote
+from .metrics import TaskMetrics
 
 __all__ = [
     'Base',
@@ -29,5 +32,9 @@ __all__ = [
     'Comment',
     'TimeEntry',
     'Message',
-    'Tag'
+    'Tag',
+    'task_tag',
+    'Notification',
+    'LogNote',
+    'TaskMetrics'
 ] 

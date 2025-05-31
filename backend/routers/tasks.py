@@ -20,6 +20,7 @@ from services.notification_service import NotificationService
 from services.task_service import TaskService
 from models.project import Project
 from schemas.tag import Tag as TagSchema
+from services.permission_service import PermissionService
 
 router = APIRouter(
     prefix="/tasks",
@@ -33,112 +34,38 @@ file_service = FileService()
 task_service = TaskService()
 notification_service = NotificationService()
 
-@router.post("/", response_model=TaskSchema, status_code=status.HTTP_201_CREATED)
-def create_task(
-    task: TaskCreate,
+@router.post("/", response_model=Dict[str, Any])
+async def create_task(
+    task_data: TaskCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new task with default values for optional fields"""
+    """Create a new task"""
     try:
-        # Convert 0 values to None for foreign keys
-        if task.assigned_to == 0:
-            task.assigned_to = None
-        if task.parent_id == 0:
-            task.parent_id = None
-        if task.milestone_id == 0:
-            task.milestone_id = None
-        if task.company_id == 0:
-            task.company_id = None
-
-        # Validate project exists
-        project = db.query(Project).filter(Project.id == task.project_id).first()
-        if not project:
-            raise HTTPException(status_code=404, detail=f"Project with ID {task.project_id} not found")
-
-        # Validate stage exists
-        stage = db.query(TaskStage).filter(TaskStage.id == task.stage_id).first()
-        if not stage:
-            raise HTTPException(status_code=404, detail=f"Stage with ID {task.stage_id} not found")
-
-        # Create task using service
-        created_task = task_service.create_task(db, task, current_user["id"])
-
-        # Create base task dictionary for serialization
+        task_service = TaskService()
+        created_task = task_service.create_task(db, task_data, current_user["id"])
+        
+        # Convert to dictionary and add additional fields
         task_dict = {
             "id": created_task.id,
-            "name": created_task.name,
+            "title": created_task.name,
             "description": created_task.description,
-            "priority": created_task.priority,
             "state": created_task.state,
-            "project_id": created_task.project_id,
-            "stage_id": created_task.stage_id,
-            "assigned_to": created_task.assigned_to,
-            "parent_id": created_task.parent_id,
-            "milestone_id": created_task.milestone_id,
-            "company_id": created_task.company_id,
-            "start_date": created_task.start_date,
-            "end_date": created_task.end_date,
+            "priority": created_task.priority,
             "deadline": created_task.deadline,
             "planned_hours": created_task.planned_hours,
+            "assigned_to": created_task.assigned_to,
             "created_by": created_task.created_by,
-            "progress": created_task.progress if created_task.progress is not None else 0.0,
+            "project_id": created_task.project_id,
             "created_at": created_task.created_at,
             "updated_at": created_task.updated_at,
-            "date_last_stage_update": created_task.date_last_stage_update,
-            "assignee": None,
-            "milestone": None,
-            "company": None,
-            "depends_on_ids": [],
-            "subtask_ids": [],
-            "attachments": [],
-            "tags": []
+            "progress": created_task.progress,
+            "stage_id": created_task.stage_id
         }
-
-        # Handle assignee
-        if hasattr(created_task, 'assignee') and created_task.assignee:
-            task_dict['assignee'] = {
-                'id': created_task.assignee.id,
-                'username': created_task.assignee.username,
-                'email': created_task.assignee.email,
-                'full_name': created_task.assignee.full_name,
-                'profile_image_url': getattr(created_task.assignee, 'profile_image_url', None)
-            }
-
-        # Handle milestone
-        if hasattr(created_task, 'milestone') and created_task.milestone:
-            task_dict['milestone'] = {
-                'id': created_task.milestone.id,
-                'name': created_task.milestone.name,
-                'description': created_task.milestone.description,
-                'due_date': created_task.milestone.due_date.isoformat() if created_task.milestone.due_date else None,
-                'is_completed': created_task.milestone.is_completed,
-                'is_active': getattr(created_task.milestone, 'is_active', True)
-            }
-
-        # Handle company
-        if hasattr(created_task, 'company') and created_task.company:
-            task_dict['company'] = {
-                'id': created_task.company.id,
-                'name': created_task.company.name
-            }
-
-        # Handle tags
-        if hasattr(created_task, 'tags') and created_task.tags:
-            task_dict['tags'] = [
-                {
-                    'id': tag.id,
-                    'name': tag.name,
-                    'color': tag.color,
-                    'active': tag.active
-                }
-                for tag in created_task.tags
-            ]
-
-        return TaskSchema.model_validate(task_dict)
-
+        
+        return task_dict
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/", response_model=List[TaskSchema])
 async def read_tasks(
@@ -382,144 +309,67 @@ async def read_task(
             detail=f"Error fetching task: {str(e)}"
         )
 
-@router.patch("/{task_id}", response_model=TaskSchema)
+@router.put("/{task_id}", response_model=Dict[str, Any])
 async def update_task(
     task_id: int,
-    task_update: TaskUpdate,
+    task_data: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: Dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
-    """Update a task."""
+    """Update a task"""
     try:
-        # Get existing task
-        db_task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
-        if not db_task:
+        task_service = TaskService()
+        
+        # Get the task first to check permissions
+        task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+        if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        
-        # Check permissions
-        if not current_user["is_superuser"] and db_task.assigned_to != current_user["id"] and db_task.created_by != current_user["id"]:
+            
+        # Check if user has permission to update the task
+        if not current_user["is_superuser"] and task.created_by != current_user["id"]:
             raise HTTPException(status_code=403, detail="Not enough permissions")
-
-        # Store original values for activity log
-        original_deadline = db_task.deadline
-        original_start_date = db_task.start_date
-        original_end_date = db_task.end_date
-        original_assigned_to = db_task.assigned_to
-
-        # Update task fields
-        update_data = task_update.model_dump(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(db_task, field, value)
         
-        db.commit()
-        db.refresh(db_task)
-
-        # Create notification for task assignment
-        if 'assigned_to' in update_data and original_assigned_to != db_task.assigned_to and db_task.assigned_to is not None:
-            # Get assignee details
-            assignee = db.query(User).filter(User.id == db_task.assigned_to).first()
-            if assignee:
-                # Create notification for the new assignee
-                notification_service.create_notification(
-                    db=db,
-                    notification_data={
-                        "title": "New Task Assignment",
-                        "content": f"You have been assigned to task: {db_task.name}",
-                        "type": "task_assignment",
-                        "reference_type": "task",
-                        "reference_id": task_id,
-                        "user_id": db_task.assigned_to,
-                        "is_read": False
-                    }
-                )
-
-        # Create activity logs for date changes
-        if 'deadline' in update_data and original_deadline != db_task.deadline:
-            old_deadline = original_deadline.strftime('%Y-%m-%d %H:%M') if original_deadline else 'none'
-            new_deadline = db_task.deadline.strftime('%Y-%m-%d %H:%M') if db_task.deadline else 'none'
-            activity_data = ActivityCreate(
-                activity_type="task_update",
-                description=f"Updated task deadline from {old_deadline} to {new_deadline}",
-                task_id=task_id,
-                project_id=db_task.project_id,
-                user_id=current_user["id"]
-            )
-            activity.create_activity(db, activity_data)
-
-            # Create notification for deadline change
-            if db_task.assigned_to and db_task.assigned_to != current_user["id"]:
-                notification_service.create_notification(
-                    db=db,
-                    notification_data={
-                        "title": "Task Deadline Updated",
-                        "content": f"The deadline for task '{db_task.name}' has been updated from {old_deadline} to {new_deadline}",
-                        "type": "task_update",
-                        "reference_type": "task",
-                        "reference_id": task_id,
-                        "user_id": db_task.assigned_to,
-                        "is_read": False
-                    }
-                )
-
-        # Create response dictionary with proper assignee handling
-        response_data = {
-            "id": db_task.id,
-            "name": db_task.name,
-            "description": db_task.description,
-            "priority": db_task.priority,
-            "state": db_task.state,
-            "project_id": db_task.project_id,
-            "stage_id": db_task.stage_id,
-            "assigned_to": db_task.assigned_to,
-            "parent_id": db_task.parent_id,
-            "milestone_id": db_task.milestone_id,
-            "company_id": db_task.company_id,
-            "start_date": db_task.start_date,
-            "end_date": db_task.end_date,
-            "deadline": db_task.deadline,
-            "planned_hours": db_task.planned_hours,
-            "created_by": db_task.created_by,
-            "progress": db_task.progress if db_task.progress is not None else 0.0,
-            "created_at": db_task.created_at,
-            "updated_at": db_task.updated_at,
-            "date_last_stage_update": db_task.date_last_stage_update,
-            "assignee": None,
-            "milestone": None,
-            "company": None,
-            "depends_on_ids": [],
-            "subtask_ids": [],
-            "attachments": []
+        # Convert task_data to dict and ensure state is properly handled
+        update_data = task_data.model_dump(exclude_unset=True)
+        
+        # Update task using service
+        updated_task, error = task_service.update_task(db, task_id, update_data, current_user["id"])
+        
+        if error:
+            print(f"Error updating task: {error}")  # Add logging
+            raise HTTPException(status_code=400, detail=error)
+            
+        if not updated_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        # Convert to dictionary and add additional fields
+        task_dict = {
+            "id": updated_task["id"],
+            "name": updated_task["name"],
+            "description": updated_task["description"],
+            "state": updated_task["state"],
+            "priority": updated_task["priority"],
+            "deadline": updated_task["deadline"],
+            "planned_hours": updated_task["planned_hours"],
+            "assigned_to": updated_task["assigned_to"],
+            "created_by": updated_task["created_by"],
+            "project_id": updated_task["project_id"],
+            "created_at": updated_task["created_at"],
+            "updated_at": updated_task["updated_at"]
         }
-
-        # Handle assignee
-        if hasattr(db_task, 'assignee') and db_task.assignee:
-            response_data["assignee"] = {
-                'id': db_task.assignee.id,
-                'username': db_task.assignee.username,
-                'email': db_task.assignee.email,
-                'full_name': db_task.assignee.full_name,
-                'profile_image_url': getattr(db_task.assignee, 'profile_image_url', None)
-            }
-
-        # Handle milestone
-        if hasattr(db_task, 'milestone') and db_task.milestone:
-            response_data["milestone"] = {
-                'id': db_task.milestone.id,
-                'name': db_task.milestone.name,
-                'description': db_task.milestone.description,
-                'due_date': db_task.milestone.due_date.isoformat() if db_task.milestone.due_date else None,
-                'is_completed': db_task.milestone.is_completed,
-                'is_active': getattr(db_task.milestone, 'is_active', True)
-            }
-
-        return TaskSchema.model_validate(response_data)
-
+        
+        # Add optional fields if they exist
+        if "stage_id" in updated_task:
+            task_dict["stage_id"] = updated_task["stage_id"]
+        
+        return task_dict
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating task: {str(e)}"
-        )
+        print(f"Error updating task: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
@@ -744,7 +594,9 @@ async def update_task_state(
             "milestone": None,
             "company": None,
             "depends_on_ids": [],
-            "subtask_ids": []
+            "subtask_ids": [],
+            "is_active": updated_task.is_active if hasattr(updated_task, 'is_active') else True,
+            "completion_status": updated_task.completion_status if hasattr(updated_task, 'completion_status') else CompletionStatus.NOT_COMPLETED
         }
         
         # Handle assignee
