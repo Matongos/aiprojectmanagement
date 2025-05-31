@@ -44,7 +44,7 @@ async def create_task(
     try:
         task_service = TaskService()
         created_task = task_service.create_task(db, task_data, current_user["id"])
-        
+
         # Convert to dictionary and add additional fields
         task_dict = {
             "id": created_task.id,
@@ -324,11 +324,11 @@ async def update_task(
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-            
+        
         # Check if user has permission to update the task
         if not current_user["is_superuser"] and task.created_by != current_user["id"]:
             raise HTTPException(status_code=403, detail="Not enough permissions")
-        
+
         # Convert task_data to dict and ensure state is properly handled
         update_data = task_data.model_dump(exclude_unset=True)
         
@@ -357,7 +357,7 @@ async def update_task(
             "created_at": updated_task["created_at"],
             "updated_at": updated_task["updated_at"]
         }
-        
+
         # Add optional fields if they exist
         if "stage_id" in updated_task:
             task_dict["stage_id"] = updated_task["stage_id"]

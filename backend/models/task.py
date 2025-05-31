@@ -31,7 +31,7 @@ class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
         CheckConstraint(
-            "state IN ('in_progress', 'changes_requested', 'approved', 'canceled', 'done')",
+            "state IN ('null', 'in_progress', 'changes_requested', 'approved', 'canceled', 'done')",
             name='valid_task_states'
         ),
         {'extend_existing': True}
@@ -41,7 +41,7 @@ class Task(Base):
     name = Column(String, nullable=False)  # Task name (not title)
     description = Column(Text, nullable=True)
     priority = Column(String(50), default='normal')
-    state = Column(String(50), default=TaskState.IN_PROGRESS)
+    state = Column(String(50), default=TaskState.NULL)
     
     # Foreign Keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)

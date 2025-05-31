@@ -1,57 +1,53 @@
-import aiohttp
+import httpx
+from typing import Optional, Dict, Any
 import json
-from typing import Dict, Optional, Any
+import os
 
 class OllamaClient:
     def __init__(self, base_url: str = "http://localhost:11434"):
         self.base_url = base_url
-        self.session = None
-
-    async def _ensure_session(self):
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
+        self.client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
 
     async def generate(
         self,
-        model: str,
         prompt: str,
+        model: str = "llama2",
+        system_prompt: Optional[str] = None,
         stream: bool = False,
-        options: Optional[Dict[str, Any]] = None
-    ):
-        """Generate a response from Ollama"""
-        await self._ensure_session()
-        
-        url = f"{self.base_url}/api/generate"
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": stream,
-            **(options or {})
-        }
-        
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Generate a response from the Ollama model"""
         try:
-            async with self.session.post(url, json=payload) as response:
-                if stream:
-                    return response  # Return the response object for streaming
-                else:
-                    text = await response.text()
-                    return type('Response', (), {'text': text})()
+            data = {
+                "model": model,
+                "prompt": prompt,
+                "stream": stream,
+                **kwargs
+            }
+            
+            if system_prompt:
+                data["system"] = system_prompt
+
+            response = await self.client.post("/api/generate", json=data)
+            response.raise_for_status()
+            
+            return response.json()
+
         except Exception as e:
-            print(f"Error calling Ollama API: {str(e)}")
-            # Return a dummy response object with empty text
-            return type('Response', (), {'text': '{}'})()
+            print(f"Error generating response from Ollama: {str(e)}")
+            return {"error": str(e)}
 
     async def close(self):
-        """Close the client session"""
-        if self.session:
-            await self.session.close()
-            self.session = None
+        """Close the HTTP client"""
+        await self.client.aclose()
 
+# Singleton instance
 _ollama_client = None
 
 def get_ollama_client() -> OllamaClient:
-    """Get or create a singleton Ollama client"""
+    """Get or create singleton Ollama client instance"""
     global _ollama_client
     if _ollama_client is None:
-        _ollama_client = OllamaClient()
+        base_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
+        _ollama_client = OllamaClient(base_url=base_url)
     return _ollama_client 

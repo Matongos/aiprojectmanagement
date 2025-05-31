@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers, ai_router
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -16,6 +16,9 @@ from config import settings
 from contextlib import asynccontextmanager
 import bcrypt
 from passlib.context import CryptContext
+import asyncio
+from workers.task_scheduler import start_scheduler
+from workers.metrics_worker import start_metrics_worker
 
 # Create bcrypt context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -46,17 +49,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8003",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8003",
-        "http://localhost:8000"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "Authorization", "Content-Type"],
-    expose_headers=["Content-Disposition", "Content-Type"]  # Expose necessary headers for file download
+    allow_headers=["*"],
 )
 
 # Mount static files
@@ -83,7 +79,7 @@ app.include_router(log_notes.router)
 app.include_router(time_entries.router)
 app.include_router(messages.router)
 app.include_router(vectors.router)
-app.include_router(ai.router)
+app.include_router(ai_router.router)
 app.include_router(websockets.router)
 app.include_router(followers.router)
 
@@ -210,9 +206,14 @@ async def root():
         "redoc": "/redoc"
     }
 
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks when the application starts"""
+    # Start task scheduler in the background
+    asyncio.create_task(start_scheduler())
+    # Start metrics worker in the background
+    asyncio.create_task(start_metrics_worker())
+
 if __name__ == "__main__":
-    # Start the task scheduler
-    TaskScheduler.start_scheduler()
-    
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8003)

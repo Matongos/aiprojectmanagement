@@ -1,7 +1,8 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, text, Text, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
+from typing import List
 
 from .base import Base
 from .message import Message
@@ -22,11 +23,21 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     profile_image_url = Column(String, nullable=True)
     job_title = Column(String, nullable=True)
-    bio = Column(String, nullable=True)
+    bio = Column(Text, nullable=True)
     email_notifications_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=text('now()'))
     updated_at = Column(DateTime(timezone=True), onupdate=text('now()'))
 
+    # New fields for expertise and notes
+    profession = Column(String, nullable=True)
+    expertise = Column(ARRAY(String), nullable=True)
+    skills = Column(ARRAY(String), nullable=True)
+    experience_level = Column(String, nullable=True)  # junior, mid, senior, expert
+    notes = Column(Text, nullable=True)
+    certifications = Column(ARRAY(String), nullable=True)
+    preferred_working_hours = Column(String, nullable=True)
+    specializations = Column(ARRAY(String), nullable=True)
+    
     # Relationships using string references to avoid circular imports
     roles = relationship("Role", secondary="user_role", back_populates="users", lazy="joined")
     assigned_tasks = relationship("Task", foreign_keys="Task.assigned_to", back_populates="assignee")
@@ -63,7 +74,8 @@ class User(Base):
         "Project",
         secondary="project_members",
         back_populates="members",
-        overlaps="project_memberships,project_members,project"
+        overlaps="project_memberships,project_members,project",
+        viewonly=True
     )
     metrics = relationship("ResourceMetrics", back_populates="user")
 

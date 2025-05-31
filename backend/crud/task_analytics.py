@@ -78,8 +78,9 @@ class TaskAnalytics:
         completion_times = []
         for task in completed_tasks:
             if task.start_date and task.end_date:
-                time_diff = task.end_date - task.start_date
-                completion_times.append(time_diff.total_seconds() / 3600)  # hours
+                # Calculate total hours between dates
+                hours = (task.end_date - task.start_date).total_seconds() / 3600
+                completion_times.append(hours)
         
         avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
         
@@ -213,18 +214,10 @@ class TaskAnalytics:
             
             completion_times = []
             for task in completed_tasks:
-                # Calculate business days between start and end date
-                current_date = task.start_date
-                business_days = 0
-                while current_date <= task.end_date:
-                    # Check if it's a weekday (Monday = 0, Sunday = 6)
-                    if current_date.weekday() < 5:  # Monday to Friday
-                        business_days += 1
-                    current_date += timedelta(days=1)
-                
-                # Convert business days to working hours (8 hours per day)
-                working_hours = business_days * 8
-                completion_times.append(working_hours)
+                if task.start_date and task.end_date:
+                    # Calculate total hours between dates
+                    hours = (task.end_date - task.start_date).total_seconds() / 3600
+                    completion_times.append(hours)
             
             avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
             

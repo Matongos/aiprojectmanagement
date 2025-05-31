@@ -5,9 +5,30 @@ from sqlalchemy import pool
 
 from alembic import context
 
+import os
+import sys
+from dotenv import load_dotenv
+
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Import all models here
+from models.base import Base
+from models.user import User
+from models.project import Project
+from models.task import Task
+from models.vector_embedding import VectorEmbedding
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Get database URL from environment variable
+database_url = os.getenv('DATABASE_URL', 'postgresql://panashe:panashe@localhost:5432/aiprojectmanagement')
+config.set_main_option('sqlalchemy.url', database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -16,9 +37,7 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

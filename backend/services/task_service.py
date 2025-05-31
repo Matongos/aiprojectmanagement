@@ -8,6 +8,8 @@ from models.task_stage import TaskStage
 from models.metrics import TaskMetrics
 from schemas.task import TaskCreate, TaskState
 from .permission_service import PermissionService
+from .scheduled_tasks import ScheduledTaskService
+from workers.metrics_worker import metrics_worker
 from fastapi import HTTPException
 from sqlalchemy.sql import func
 
@@ -45,6 +47,16 @@ class TaskService:
                     status_code=403,
                     detail="You don't have permission to create tasks in this project"
                 )
+            
+            # Get project deadline
+            project = db.query(Project).filter(Project.id == task_data.project_id).first()
+            if project and project.end_date and task_data.deadline:
+                task_deadline = task_data.deadline
+                if task_deadline > project.end_date:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Task deadline cannot exceed project deadline"
+                    )
 
         # Convert task data to dict and remove tag_ids
         task_dict = task_data.dict()
@@ -113,24 +125,31 @@ class TaskService:
                     detail="You don't have permission to update tasks in this project"
                 )
 
+        # Set start date when task moves to IN_PROGRESS for the first time
+        if new_state == TaskState.IN_PROGRESS and task.state == TaskState.NULL:
+            task.start_date = datetime.utcnow()
+            
+            # Also check if project should start
+            project = task.project
+            if project and not project.start_date:
+                project.start_date = datetime.utcnow()
+                db.add(project)
+
         task.state = new_state
         
         # Update task based on state
         if new_state == TaskState.DONE:
-            # Set end date to current time if during work hours (8am-4pm)
-            now = datetime.utcnow()
-            if now.weekday() < 5 and time(8, 0) <= now.time() <= time(16, 0):
-                task.end_date = now
-            else:
-                # Set to 4pm of the last workday
-                end_date = now
-                while end_date.weekday() >= 5:
-                    end_date -= timedelta(days=1)
-                task.end_date = end_date.replace(hour=16, minute=0, second=0, microsecond=0)
+            task.end_date = datetime.utcnow()
             task.progress = 100.0
         
         db.commit()
         db.refresh(task)
+
+        # After state change, mark task and project for immediate metrics update
+        metrics_worker.mark_entity_changed("task", task.id)
+        if task.project_id:
+            metrics_worker.mark_entity_changed("project", task.project_id)
+        
         return task
 
     def update_task_stage(self, db: Session, task: Task, new_stage_id: int, current_user_id: int) -> Task:
@@ -171,6 +190,12 @@ class TaskService:
         
         db.commit()
         db.refresh(task)
+
+        # After stage change, mark task and project for immediate metrics update
+        metrics_worker.mark_entity_changed("task", task.id)
+        if task.project_id:
+            metrics_worker.mark_entity_changed("project", task.project_id)
+        
         return task
 
     def update_task(self, db: Session, task_id: int, task_data: dict, current_user_id: int) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -197,6 +222,15 @@ class TaskService:
                 if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
                     return None, "You don't have permission to update tasks in this project"
             
+            # Check start_date permission if it's being updated
+            if "start_date" in task_data:
+                if not ScheduledTaskService.can_set_start_date(db, current_user_id, task.project_id):
+                    return None, "Only superusers and project managers can set task start dates"
+                    
+                # Validate start_date is in the future
+                if task_data["start_date"] and task_data["start_date"] < datetime.utcnow():
+                    return None, "Start date must be in the future"
+
             # Validate project exists if specified
             if task_data.get("project_id"):
                 check_query = text("SELECT id FROM projects WHERE id = :project_id")
@@ -290,6 +324,11 @@ class TaskService:
                 "progress": result.progress if hasattr(result, 'progress') else 0.0,
                 "stage_id": result.stage_id
             }
+            
+            # After successful update, mark task and project for immediate metrics update
+            metrics_worker.mark_entity_changed("task", task_id)
+            if task.project_id:
+                metrics_worker.mark_entity_changed("project", task.project_id)
             
             return task, None
         

@@ -49,7 +49,7 @@ class CompletionTimeMetrics(BaseModel):
     warningInsights: List[str]
 
 def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """Calculate business hours between two dates using 8-hour workdays, excluding weekends"""
+    """Calculate hours between two dates using 24-hour days"""
     if not start_date or not end_date:
         return 0
     
@@ -57,69 +57,9 @@ def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
     start_date = start_date.replace(tzinfo=None)
     end_date = end_date.replace(tzinfo=None)
     
-    # Adjust weekend dates to nearest business day
-    # If start is on weekend, move to next Monday
-    while start_date.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
-        start_date += timedelta(days=1)
-        if start_date > end_date:
-            return 0
-    
-    # If end is on weekend, move to previous Friday
-    while end_date.weekday() >= 5:
-        end_date -= timedelta(days=1)
-    
-    # If same day, just calculate hours within the 8-hour workday
-    if start_date.date() == end_date.date():
-        # Ensure we're within business hours (9:00-17:00)
-        start_hour = max(9, start_date.hour)
-        end_hour = min(17, end_date.hour)
-        hours = end_hour - start_hour
-        if hours < 0:
-            return 0
-        # Add partial hour from minutes
-        if start_date.hour == start_hour:
-            hours -= start_date.minute / 60.0
-        if end_date.hour == end_hour:
-            hours += end_date.minute / 60.0
-        return min(hours, 8.0)  # Cap at 8 hours per day
-    
-    # Calculate business days between dates
-    total_days = (end_date.date() - start_date.date()).days + 1
-    business_days = 0
-    current_date = start_date.date()
-    
-    # Count actual business days, excluding weekends
-    for _ in range(total_days):
-        if current_date.weekday() < 5:  # Monday = 0, Friday = 4
-            business_days += 1
-        current_date += timedelta(days=1)
-    
-    # Calculate partial hours for start and end days
-    start_day_hours = 0
-    end_day_hours = 0
-    
-    # Start day partial hours (if starts during business hours)
-    if start_date.weekday() < 5:
-        if start_date.hour < 9:
-            start_day_hours = 8  # Full day
-        elif start_date.hour < 17:
-            start_day_hours = 17 - start_date.hour - (start_date.minute / 60.0)
-            start_day_hours = min(8.0, max(0, start_day_hours))
-    
-    # End day partial hours (if ends during business hours)
-    if end_date.weekday() < 5:
-        if end_date.hour >= 17:
-            end_day_hours = 8  # Full day
-        elif end_date.hour >= 9:
-            end_day_hours = end_date.hour - 9 + (end_date.minute / 60.0)
-            end_day_hours = min(8.0, max(0, end_day_hours))
-    
-    # Calculate total business hours
-    total_hours = (business_days - 2) * 8.0  # Full days in between
-    total_hours += start_day_hours  # Start day
-    total_hours += end_day_hours    # End day
-    
-    return max(0, total_hours)
+    # Calculate total hours between dates
+    total_hours = (end_date - start_date).total_seconds() / 3600
+    return max(total_hours, 0)
 
 @router.get("/project/{project_id}/completion", response_model=Dict[str, Any])
 async def get_project_completion_rate(
@@ -134,15 +74,9 @@ async def get_project_completion_rate(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # Get task counts using updated case syntax
         metrics = db.query(
             func.count(Task.id).label('total_tasks'),
-            func.sum(
-                case(
-                    (Task.state == TaskState.DONE, 1),
-                    else_=0
-                )
-            ).label('completed_tasks')
+            func.sum(case((Task.state == TaskState.DONE, 1), else_=0)).label('completed_tasks')
         ).filter(Task.project_id == project_id).first()
 
         total_tasks = metrics.total_tasks or 0
@@ -546,7 +480,7 @@ async def get_completion_time_metrics(
             Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED]),
             Task.updated_at <= datetime.utcnow() - timedelta(days=7)
         ).scalar()
-        
+
         # Get tasks near deadline
         tasks_near_deadline = db.query(func.count(Task.id)).filter(
             Task.state != TaskState.DONE,
@@ -637,7 +571,7 @@ async def get_active_tasks_count(
         active_count = db.query(func.count(Task.id)).filter(
             Task.state == TaskState.IN_PROGRESS
         ).scalar()
-        
+    
         return {"active_tasks": active_count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -666,7 +600,7 @@ async def get_productivity_metrics(
         )
         
         avg_time_per_task = total_time / total_completed if total_completed > 0 else 0
-        
+
         return {
             "completed_tasks": total_completed,
             "total_time_spent": round(total_time, 2),
@@ -676,4 +610,4 @@ async def get_productivity_metrics(
         raise HTTPException(
             status_code=500,
             detail=f"Error getting productivity metrics: {str(e)}"
-        ) 
+        )

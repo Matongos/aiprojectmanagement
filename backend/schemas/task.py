@@ -7,6 +7,7 @@ from .tag import Tag
 from enum import Enum
 
 class TaskState(str, Enum):
+    NULL = "null"
     IN_PROGRESS = "in_progress"
     CHANGES_REQUESTED = "changes_requested"
     APPROVED = "approved"
@@ -55,7 +56,7 @@ class TaskBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Task name (required)")
     description: Optional[str] = Field(default="", description="Task description")
     priority: Optional[TaskPriority] = Field(default=TaskPriority.NORMAL, description="Task priority")
-    state: Optional[TaskState] = Field(default=TaskState.IN_PROGRESS, description="Task state")
+    state: Optional[TaskState] = Field(default=TaskState.NULL, description="Task state")
     project_id: int = Field(..., description="Project ID (required)")
     stage_id: int = Field(..., description="Stage ID (required)")
     parent_id: Optional[int] = Field(default=None, description="Parent task ID")

@@ -61,8 +61,8 @@ class UserProfileUpdate(BaseModel):
     job_title: Optional[str] = None
     bio: Optional[str] = None
 
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "username": "newusername",
                 "email": "newemail@example.com",
@@ -74,6 +74,7 @@ class UserProfileUpdate(BaseModel):
                 "bio": "New bio text"
             }
         }
+    }
 
 # Routes
 @router.get("/", response_model=List[UserResponse])

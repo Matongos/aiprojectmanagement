@@ -109,12 +109,13 @@ class Project(Base):
 
     # Relationships
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_projects")
-    project_members = relationship("ProjectMember", back_populates="project", overlaps="members")
+    project_members = relationship("ProjectMember", back_populates="project", overlaps="members,user")
     members = relationship(
         "User",
         secondary="project_members",
         back_populates="member_of_projects",
-        overlaps="project_memberships,project_members"
+        overlaps="project_memberships,project_members,user",
+        viewonly=True  # Make this a read-only relationship
     )
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
     stages = relationship("TaskStage", back_populates="project", cascade="all, delete-orphan")
@@ -158,10 +159,10 @@ class Project(Base):
             from .metrics import ProjectMetrics
             self.metrics = ProjectMetrics(project_id=self.id)
         
-        # Calculate schedule variance
+        # Calculate schedule variance in hours
         if self.start_date and self.end_date:
-            planned_duration = (self.end_date - self.start_date).days
-            actual_duration = (datetime.now() - self.start_date).days
+            planned_duration = (self.end_date - self.start_date).total_seconds() / 3600  # hours
+            actual_duration = (datetime.now() - self.start_date).total_seconds() / 3600  # hours
             self.metrics.schedule_variance = actual_duration - planned_duration
         
         # Calculate milestone completion rate
@@ -170,20 +171,25 @@ class Project(Base):
             completed_milestones = sum(1 for m in self.milestones if m.is_completed)
             self.metrics.milestone_completion_rate = completed_milestones / total_milestones
         
-        # Calculate resource utilization
+        # Calculate resource utilization using actual hours
         total_planned_hours = sum(task.planned_hours for task in self.tasks)
-        total_actual_hours = sum(sum(entry.hours for entry in task.time_entries) for task in self.tasks)
+        total_actual_hours = sum(
+            sum((entry.end_time - entry.start_time).total_seconds() / 3600 
+                for entry in task.time_entries 
+                if entry.start_time and entry.end_time)
+            for task in self.tasks
+        )
         if total_planned_hours > 0:
             self.metrics.resource_utilization = total_actual_hours / total_planned_hours
         
-        # Calculate team load
+        # Calculate team load in hours per person
         active_members = len(self.members)
         if active_members > 0:
             self.metrics.team_load = total_actual_hours / active_members
         
-        # Calculate velocity and throughput
+        # Calculate velocity (tasks per week) and throughput
         completed_tasks = sum(1 for task in self.tasks if task.state == 'done')
-        total_weeks = max(1, (datetime.now() - self.start_date).days / 7) if self.start_date else 1
+        total_weeks = max(1, (datetime.now() - self.start_date).total_seconds() / (3600 * 24 * 7)) if self.start_date else 1
         self.metrics.velocity = completed_tasks / total_weeks
         self.metrics.throughput = completed_tasks
 
