@@ -374,7 +374,6 @@ async def update_task(
     """Update a task"""
     try:
         task_service = TaskService()
-        permission_service = PermissionService()
         
         # Get the task first to check permissions
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
@@ -386,51 +385,46 @@ async def update_task(
         
         # Special permission check for priority updates
         if "priority" in update_data:
-            # Only superusers and project managers can update priority
-            if not current_user["is_superuser"] and not permission_service.can_modify_project(db, current_user["id"], task.project_id):
-                raise HTTPException(status_code=403, detail="Only project managers and superusers can update task priority")
-        
-        # For other updates, check if user has permission to update the task
-        if not current_user["is_superuser"] and task.created_by != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
+            permission_service = PermissionService()
+            if not permission_service.can_modify_project(db, current_user["id"], task.project_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only project managers or superusers can change task priority"
+                )
 
-        # Update task using service
+        # Update the task using the task service
         updated_task, error = task_service.update_task(db, task_id, update_data, current_user["id"])
         
         if error:
-            print(f"Error updating task: {error}")  # Add logging
             raise HTTPException(status_code=400, detail=error)
-            
+        
         if not updated_task:
             raise HTTPException(status_code=404, detail="Task not found")
-            
-        # Convert to dictionary and add additional fields
-        task_dict = {
-            "id": updated_task["id"],
-            "name": updated_task["name"],
-            "description": updated_task["description"],
-            "state": updated_task["state"],
-            "priority": updated_task["priority"],
-            "deadline": updated_task["deadline"],
-            "planned_hours": updated_task["planned_hours"],
-            "assigned_to": updated_task["assigned_to"],
-            "created_by": updated_task["created_by"],
-            "project_id": updated_task["project_id"],
-            "created_at": updated_task["created_at"],
-            "updated_at": updated_task["updated_at"]
-        }
 
-        # Add optional fields if they exist
-        if "stage_id" in updated_task:
-            task_dict["stage_id"] = updated_task["stage_id"]
+        # Create activity log for the update
+        changes = []
+        if "state" in update_data:
+            changes.append(f"state to {update_data['state']}")
+        if "priority" in update_data:
+            changes.append(f"priority to {update_data['priority']}")
+        if "assigned_to" in update_data:
+            assignee = db.query(User).filter(User.id == update_data["assigned_to"]).first()
+            changes.append(f"assignee to {assignee.full_name if assignee else 'unassigned'}")
         
-        return task_dict
+        if changes:
+            activity_data = ActivityCreate(
+                task_id=task_id,
+                project_id=task.project_id,
+                user_id=current_user["id"],
+                activity_type="task_update",
+                description=f"Updated task {', '.join(changes)}"
+            )
+            activity.create_activity(db, activity_data)
+
+        return updated_task
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error updating task: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

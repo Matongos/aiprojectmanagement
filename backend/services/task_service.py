@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from models.task import Task
-from models.project import Project
+from models.project import Project, ProjectMember, ProjectRole
 from models.task_stage import TaskStage
 from models.metrics import TaskMetrics
 from schemas.task import TaskCreate, TaskState
@@ -16,6 +16,27 @@ from sqlalchemy.sql import func
 class TaskService:
     def __init__(self):
         self.permission_service = PermissionService()
+
+    def ensure_project_membership(self, db: Session, user_id: int, project_id: int) -> None:
+        """
+        Ensure the user is a project member when assigned a task.
+        If they're not already a member, add them as a regular member.
+        """
+        # Check if user is already a project member
+        existing_member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id
+        ).first()
+
+        # If not a member, add them as a regular member
+        if not existing_member:
+            new_member = ProjectMember(
+                project_id=project_id,
+                user_id=user_id,
+                role=ProjectRole.MEMBER  # Add as regular member
+            )
+            db.add(new_member)
+            db.commit()
 
     def create_task(
         self,
@@ -76,6 +97,10 @@ class TaskService:
             "start_date": start_date,  # Always set start date for new tasks
             "end_date": None,        # Default no end date
         })
+
+        # If there's an assignee, ensure they're a project member
+        if task_dict.get('assigned_to') and task_dict.get('project_id'):
+            self.ensure_project_membership(db, task_dict['assigned_to'], task_dict['project_id'])
 
         # Create task with all fields
         task = Task(**task_dict)
@@ -201,6 +226,17 @@ class TaskService:
                 if not self.permission_service.can_modify_project(db, current_user_id, task_project_id):
                     return None, "You don't have permission to update tasks in this project"
             
+            # If assigning to a new user, ensure they are a project member
+            if "assigned_to" in task_data and task_data["assigned_to"]:
+                # Validate assignee exists
+                check_query = text("SELECT id FROM users WHERE id = :assigned_to")
+                assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
+                if not assignee:
+                    return None, f"User with ID {task_data['assigned_to']} not found"
+                
+                # Ensure the assignee is a project member
+                self.ensure_project_membership(db, task_data["assigned_to"], task_project_id)
+            
             # Handle state changes
             if "state" in task_data:
                 if task_data["state"] == TaskState.DONE:
@@ -230,13 +266,6 @@ class TaskService:
                 project = db.execute(check_query, {"project_id": task_data["project_id"]}).fetchone()
                 if not project:
                     return None, f"Project with ID {task_data['project_id']} not found"
-            
-            # Validate assignee exists if specified
-            if task_data.get("assigned_to"):
-                check_query = text("SELECT id FROM users WHERE id = :assigned_to")
-                assignee = db.execute(check_query, {"assigned_to": task_data["assigned_to"]}).fetchone()
-                if not assignee:
-                    return None, f"User with ID {task_data['assigned_to']} not found"
             
             # Validate milestone exists if specified
             if task_data.get("milestone_id"):
