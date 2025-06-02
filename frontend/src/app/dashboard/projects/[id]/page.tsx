@@ -102,7 +102,7 @@ interface Task {
   name: string;
   description: string;
   state: TaskState;
-  priority: 'low' | 'medium' | 'high';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
   due_date: string | null;
   created_at: string;
   assignee: {
@@ -196,6 +196,29 @@ const StatusIndicator = ({ state }: { state: TaskState }) => {
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
+  );
+};
+
+// Add PriorityStars component after the imports
+const PriorityStars = ({ priority }: { priority: string }) => {
+  const getStarCount = (priority: string) => {
+    switch (priority?.toLowerCase()) {
+      case 'low': return 1;
+      case 'normal': return 2;
+      case 'high': return 3;
+      case 'urgent': return 4;
+      default: return 0;
+    }
+  };
+
+  const starCount = getStarCount(priority);
+  
+  return (
+    <div className="flex items-center gap-0.5">
+      {[...Array(starCount)].map((_, i) => (
+        <Star key={i} className="h-3 w-3 text-yellow-400 fill-yellow-400" />
+      ))}
+    </div>
   );
 };
 
@@ -1450,9 +1473,10 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                   }}
                                 >
                                   <div className="p-3">
-                                    {/* Task Name at Top */}
-                                    <div className="mb-3">
+                                    {/* Task Name and Priority Stars */}
+                                    <div className="mb-3 flex items-center justify-between">
                                       <h3 className="font-medium text-sm">{task.name}</h3>
+                                      <PriorityStars priority={task.priority} />
                                     </div>
 
                                     {/* Task Details */}
@@ -1518,6 +1542,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
             <thead>
               <tr className="border-b">
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Priority</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stage</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Assignee</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Due Date</th>
@@ -1546,16 +1571,26 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                         <StatusIndicator state={task.state} />
                       </div>
                     </td>
+                    <td className="px-4 py-3">
+                      <PriorityStars priority={task.priority} />
+                    </td>
                     <td className="px-4 py-3 text-sm">{stage.name}</td>
                     <td className="px-4 py-3">
-                      {task.assignee && (
+                      {task.assignee ? (
                         <div className="flex items-center">
                           <Avatar className="h-6 w-6">
-                            <AvatarImage src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} />
-                            <AvatarFallback>{task.assignee.name[0]}</AvatarFallback>
+                            <AvatarImage 
+                              src={task.assignee.profile_image_url || DEFAULT_AVATAR_URL} 
+                              alt={task.assignee.name || ''} 
+                            />
+                            <AvatarFallback>
+                              {task.assignee.name ? task.assignee.name[0] : '?'}
+                            </AvatarFallback>
                           </Avatar>
                           <span className="ml-2 text-sm">{task.assignee.name}</span>
                         </div>
+                      ) : (
+                        <span className="text-sm text-gray-500">Unassigned</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm">
