@@ -2,11 +2,33 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Bool
 from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.sql import func
 from datetime import datetime
+import enum
 from .base import Base
 from .task_stage import TaskStage
 from schemas.task import TaskState
 from .tag import task_tag  # Import the association table
 from .metrics import TaskMetrics
+
+class TaskType(str, enum.Enum):
+    """Task type enumeration"""
+    DEVELOPMENT = "development"
+    DESIGN = "design"
+    TESTING = "testing"
+    DOCUMENTATION = "documentation"
+    RESEARCH = "research"
+    PLANNING = "planning"
+    REVIEW = "review"
+    BUG_FIX = "bug_fix"
+    MAINTENANCE = "maintenance"
+    OTHER = "other"
+
+class TaskState(str, enum.Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELED = "canceled"
+    CHANGES_REQUESTED = "changes_requested"
+    APPROVED = "approved"
 
 # Association table for task dependencies
 task_dependencies = Table(
@@ -41,7 +63,8 @@ class Task(Base):
     name = Column(String, nullable=False)  # Task name (not title)
     description = Column(Text, nullable=True)
     priority = Column(String(50), default='normal')
-    state = Column(String(50), default=TaskState.NULL)
+    state = Column(String(50), default=TaskState.TODO)
+    task_type = Column(String(50), nullable=True, default=TaskType.OTHER.value)  # Using String instead of Enum
     
     # Foreign Keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
@@ -101,6 +124,9 @@ class Task(Base):
 
     # Add metrics relationship
     metrics = relationship("TaskMetrics", back_populates="task", uselist=False, cascade="all, delete-orphan")
+    
+    # Add predictions relationship
+    predictions = relationship("TaskPrediction", back_populates="task", cascade="all, delete-orphan")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

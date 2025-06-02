@@ -138,6 +138,18 @@ class CRUDTask(CRUDBase[Task, TaskCreate, TaskUpdate]):
         db.refresh(db_obj)
         return db_obj
 
+    def get_tasks_by_stage(
+        self, db: Session, *, stage_id: int, skip: int = 0, limit: int = 100
+    ) -> List[Task]:
+        """Get all tasks in a specific stage"""
+        return (
+            db.query(self.model)
+            .filter(Task.stage_id == stage_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
 def create_task(db: Session, *, obj_in: TaskCreate, created_by: int) -> Task:
     """Create a new task"""
     # Convert depends_on_ids to actual task objects

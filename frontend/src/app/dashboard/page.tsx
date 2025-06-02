@@ -16,6 +16,7 @@ import { API_BASE_URL } from "@/lib/constants";
 import { getRecentProjects } from "@/lib/api";
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { Project } from "@/types/project";
+import { WeatherWidget } from "@/components/weather/WeatherWidget";
 
 interface Comment {
   id: number;
@@ -93,6 +94,13 @@ interface CompletionMetrics {
   warningInsights: string[];
 }
 
+interface DashboardCompletionRate {
+  completion_rate: number;
+  total_tasks: number;
+  completed_tasks: number;
+  is_superuser_view: boolean;
+}
+
 export default function DashboardPage() {
   const { user, token } = useAuthStore();
   const { metrics, loading, error, fetchMetrics } = useDashboardStore();
@@ -119,6 +127,30 @@ export default function DashboardPage() {
     setConnectionStatus(wsStatus);
   }, [wsStatus]);
 
+  // Add completion rate query
+  const { data: completionRateData, isLoading: isLoadingCompletionRate } = useQuery<DashboardCompletionRate>({
+    queryKey: ["dashboard-completion-rate"],
+    queryFn: async () => {
+      if (!token) {
+        throw new Error("Authentication token is missing");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/analytics/dashboard/completion-rate`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch completion rate');
+      }
+
+      return response.json();
+    },
+    enabled: !!token,
+  });
+
   // Add task summary query
   const { data: taskSummaryData, isLoading: isLoadingTaskSummary, error: taskSummaryError } = useQuery<TaskSummary>({
     queryKey: ["task-summary"],
@@ -127,11 +159,7 @@ export default function DashboardPage() {
         throw new Error("Authentication token is missing");
       }
 
-      // Note: No project_id means get summary for all accessible tasks
-      const url = `${API_BASE_URL}/analytics/tasks/summary`;
-      console.log("Fetching task summary from:", url);
-      
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/analytics/tasks/summary`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -139,25 +167,12 @@ export default function DashboardPage() {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Task summary error response:", errorText);
-        throw new Error(`Failed to fetch task summary: ${response.status} ${errorText}`);
+        throw new Error('Failed to fetch task summary');
       }
 
-      const data = await response.json();
-      console.log("Task summary response:", data);
-      
-      if (!data || typeof data.total === 'undefined') {
-        console.error("Invalid task summary data:", data);
-        throw new Error("Invalid data structure received from API");
-      }
-
-      return data as TaskSummary;
+      return response.json();
     },
     enabled: !!token,
-    retry: 1,
-    gcTime: 60000,
-    staleTime: 30000,
   });
 
   // Fetch latest comments
@@ -374,38 +389,46 @@ export default function DashboardPage() {
 
   return (
     <div className="container mx-auto p-6">
-      {/* Header with Search and Connection Status */}
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-2xl font-semibold mb-1">Welcome, {user?.full_name || 'User'}!</h1>
-          <p className="text-gray-600">Here is your agenda for today</p>
+      {/* Header with Search, Weather, and Connection Status */}
+      <div className="flex flex-col gap-4 mb-8">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-semibold mb-1">Welcome, {user?.full_name || 'User'}!</h1>
+            <p className="text-gray-600">Here is your agenda for today</p>
+          </div>
+          <div className="flex items-center gap-4">
+            {/* Connection Status Indicator */}
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${
+                connectionStatus === 'connected' 
+                  ? 'bg-green-500' 
+                  : connectionStatus === 'connecting' 
+                  ? 'bg-yellow-500' 
+                  : 'bg-red-500'
+              }`} />
+              <span className="text-sm text-gray-600">
+                {connectionStatus === 'connected' 
+                  ? 'Live Updates Active' 
+                  : connectionStatus === 'connecting' 
+                  ? 'Connecting...' 
+                  : 'Offline'}
+              </span>
+            </div>
+            {/* Search */}
+            <div className="relative w-64">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+              <Input
+                placeholder="Search..."
+                className="pl-10 w-full"
+              />
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-4">
-          {/* Connection Status Indicator */}
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${
-              connectionStatus === 'connected' 
-                ? 'bg-green-500' 
-                : connectionStatus === 'connecting' 
-                ? 'bg-yellow-500' 
-                : 'bg-red-500'
-            }`} />
-            <span className="text-sm text-gray-600">
-              {connectionStatus === 'connected' 
-                ? 'Live Updates Active' 
-                : connectionStatus === 'connecting' 
-                ? 'Connecting...' 
-                : 'Offline'}
-            </span>
-          </div>
-          {/* Search */}
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-            <Input
-              placeholder="Search..."
-              className="pl-10 w-full"
-            />
-          </div>
+        
+        {/* Weather and Quick Actions Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <WeatherWidget />
+          {/* You can add more quick action widgets here */}
         </div>
       </div>
 
@@ -430,10 +453,10 @@ export default function DashboardPage() {
         />
         <KPICard
           title="Completed Tasks"
-          value={taskSummaryData?.completed ?? 0}
-          trend={taskSummaryData?.completion_rate ?? 0}
-          description="Completion rate"
-          isLoading={isLoadingTaskSummary}
+          value={completionRateData?.completed_tasks ?? 0}
+          trend={completionRateData?.completion_rate ?? 0}
+          description={`${completionRateData?.is_superuser_view ? 'Overall' : 'Your'} completion rate: ${completionRateData?.completion_rate?.toFixed(1)}%`}
+          isLoading={isLoadingCompletionRate}
         />
         <KPICard
           title="Average Completion Time"

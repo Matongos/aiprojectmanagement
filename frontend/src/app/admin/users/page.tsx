@@ -33,6 +33,17 @@ interface User {
   profile_image_url?: string;
   job_title?: string;
   bio?: string;
+  profession?: string;
+  expertise?: string[];
+  skills?: string[];
+  experience_level?: string;
+  notes?: string;
+  certifications?: string[];
+  preferred_working_hours?: string;
+  specializations?: string[];
+  created_at: string;
+  updated_at?: string;
+  email_notifications_enabled?: boolean;
 }
 
 export default function UsersPage() {
@@ -310,6 +321,9 @@ function AdminUsersContent() {
               <TableHead>Username</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Full Name</TableHead>
+              <TableHead>Job Title</TableHead>
+              <TableHead>Experience</TableHead>
+              <TableHead>Skills</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Role</TableHead>
               <TableHead>Actions</TableHead>
@@ -321,6 +335,30 @@ function AdminUsersContent() {
                 <TableCell>{user.username}</TableCell>
                 <TableCell>{user.email}</TableCell>
                 <TableCell>{user.full_name}</TableCell>
+                <TableCell>{user.job_title || '-'}</TableCell>
+                <TableCell>
+                  <div>
+                    <div>{user.experience_level || '-'}</div>
+                    <div className="text-xs text-gray-500">{user.profession || '-'}</div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {user.skills?.slice(0, 3).map((skill, index) => (
+                      <span
+                        key={index}
+                        className="px-2 py-1 bg-gray-100 text-gray-700 rounded-full text-xs"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                    {user.skills && user.skills.length > 3 && (
+                      <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-full text-xs">
+                        +{user.skills.length - 3}
+                      </span>
+                    )}
+                  </div>
+                </TableCell>
                 <TableCell>
                   <span
                     className={`px-2 py-1 rounded-full text-xs ${

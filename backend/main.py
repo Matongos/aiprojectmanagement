@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers, ai_router
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers, ai_router, weather
 from database import engine, Base
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -82,6 +82,7 @@ app.include_router(vectors.router)
 app.include_router(ai_router.router)
 app.include_router(websockets.router)
 app.include_router(followers.router)
+app.include_router(weather.router)
 
 # Add a simplified token endpoint
 @app.post("/token")
@@ -213,6 +214,10 @@ async def startup_event():
     asyncio.create_task(start_scheduler())
     # Start metrics worker in the background
     asyncio.create_task(start_metrics_worker())
+    # Start weather cache update loop
+    from services.weather_cache_service import get_weather_cache_service
+    weather_cache = get_weather_cache_service()
+    asyncio.create_task(weather_cache.start_weather_update_loop())
 
 if __name__ == "__main__":
     import uvicorn

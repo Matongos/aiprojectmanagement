@@ -80,13 +80,13 @@ async def read_tasks(
     """Get tasks with optional filtering"""
     try:
         if project_id:
-            tasks = task_crud.get_project_tasks(db, project_id, skip, limit)
+            tasks = task_crud.get_by_project(db, project_id=project_id, skip=skip, limit=limit)
         elif stage_id:
-            tasks = task_crud.get_tasks_by_stage(db, stage_id, skip, limit)
+            tasks = task_crud.get_tasks_by_stage(db, stage_id=stage_id, skip=skip, limit=limit)
         elif search:
             tasks = task_crud.search_tasks(db, search_term=search, skip=skip, limit=limit)
         else:
-            tasks = task_crud.get_user_tasks(db, current_user["id"], skip, limit)
+            tasks = task_crud.get_user_tasks(db, current_user["id"], skip=skip, limit=limit)
             
         if not current_user["is_superuser"]:
             tasks = [t for t in tasks if t.assigned_to == current_user["id"] or t.created_by == current_user["id"]]
@@ -184,8 +184,37 @@ async def read_my_tasks(
         # Convert tasks to ensure proper serialization
         result = []
         for task in tasks:
-            task_dict = TaskSchema.model_validate(task).model_dump()
-            # Ensure assignee is a dict if it exists
+            # Create base task dictionary
+            task_dict = {
+                "id": task.id,
+                "name": task.name,
+                "description": task.description,
+                "priority": task.priority,
+                "state": task.state,
+                "project_id": task.project_id,
+                "stage_id": task.stage_id,
+                "assigned_to": task.assigned_to,
+                "parent_id": task.parent_id,
+                "milestone_id": task.milestone_id,
+                "company_id": task.company_id,
+                "start_date": task.start_date,
+                "end_date": task.end_date,
+                "deadline": task.deadline,
+                "planned_hours": task.planned_hours,
+                "created_by": task.created_by,
+                "progress": task.progress if task.progress is not None else 0.0,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+                "date_last_stage_update": task.date_last_stage_update,
+                "assignee": None,
+                "milestone": None,
+                "company": None,
+                "depends_on_ids": [],
+                "subtask_ids": [],
+                "attachments": []
+            }
+            
+            # Handle assignee
             if hasattr(task, 'assignee') and task.assignee:
                 task_dict['assignee'] = {
                     'id': task.assignee.id,
@@ -194,6 +223,32 @@ async def read_my_tasks(
                     'full_name': task.assignee.full_name,
                     'profile_image_url': getattr(task.assignee, 'profile_image_url', None)
                 }
+            
+            # Handle milestone
+            if hasattr(task, 'milestone') and task.milestone:
+                task_dict['milestone'] = {
+                    'id': task.milestone.id,
+                    'name': task.milestone.name,
+                    'description': task.milestone.description,
+                    'due_date': task.milestone.due_date.isoformat() if task.milestone.due_date else None,
+                    'is_completed': task.milestone.is_completed,
+                    'is_active': getattr(task.milestone, 'is_active', True)
+                }
+            
+            # Handle company
+            if hasattr(task, 'company') and task.company:
+                task_dict['company'] = {
+                    'id': task.company.id,
+                    'name': task.company.name
+                }
+            
+            # Handle dependencies and subtasks
+            if hasattr(task, 'depends_on') and task.depends_on:
+                task_dict["depends_on_ids"] = [dep.id for dep in task.depends_on]
+            
+            if hasattr(task, 'children') and task.children:
+                task_dict["subtask_ids"] = [child.id for child in task.children]
+            
             result.append(TaskSchema.model_validate(task_dict))
             
         return result
@@ -319,19 +374,26 @@ async def update_task(
     """Update a task"""
     try:
         task_service = TaskService()
+        permission_service = PermissionService()
         
         # Get the task first to check permissions
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         
-        # Check if user has permission to update the task
-        if not current_user["is_superuser"] and task.created_by != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-
         # Convert task_data to dict and ensure state is properly handled
         update_data = task_data.model_dump(exclude_unset=True)
         
+        # Special permission check for priority updates
+        if "priority" in update_data:
+            # Only superusers and project managers can update priority
+            if not current_user["is_superuser"] and not permission_service.can_modify_project(db, current_user["id"], task.project_id):
+                raise HTTPException(status_code=403, detail="Only project managers and superusers can update task priority")
+        
+        # For other updates, check if user has permission to update the task
+        if not current_user["is_superuser"] and task.created_by != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+
         # Update task using service
         updated_task, error = task_service.update_task(db, task_id, update_data, current_user["id"])
         

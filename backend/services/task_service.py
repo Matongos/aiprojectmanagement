@@ -1,7 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from models.task import Task
 from models.project import Project
 from models.task_stage import TaskStage
@@ -16,22 +16,6 @@ from sqlalchemy.sql import func
 class TaskService:
     def __init__(self):
         self.permission_service = PermissionService()
-
-    @staticmethod
-    def get_next_workday_8am(from_date: datetime) -> datetime:
-        """Get the next workday at 8am from a given date"""
-        # Set time to 8am
-        next_day = from_date.replace(hour=8, minute=0, second=0, microsecond=0)
-        
-        # If it's already past 8am, move to next day
-        if from_date.time() >= time(8, 0):
-            next_day += timedelta(days=1)
-        
-        # Skip weekends
-        while next_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-            next_day += timedelta(days=1)
-        
-        return next_day
 
     def create_task(
         self,
@@ -68,20 +52,14 @@ class TaskService:
         task_dict.pop('tags', None)  # Remove tags string field
         task_dict.pop('is_recurring', None)  # Remove is_recurring field
         
-        # Calculate start date (next workday at 8am)
-        start_date = self.get_next_workday_8am(datetime.utcnow())
+        # Always set start_date to current time for new tasks since they start in IN_PROGRESS
+        start_date = datetime.utcnow()
         
         # If no deadline is set, get project deadline and subtract one day
         if not task_dict.get('deadline') and task_dict.get('project_id'):
             project = db.query(Project).filter(Project.id == task_dict['project_id']).first()
             if project and project.end_date:
-                # Set deadline to one day before project end date
-                project_end = project.end_date
-                task_deadline = (project_end - timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
-                # Ensure deadline is not on weekend
-                while task_deadline.weekday() >= 5:
-                    task_deadline -= timedelta(days=1)
-                task_dict['deadline'] = task_deadline
+                task_dict['deadline'] = project.end_date - timedelta(days=1)
         
         # Set all default values
         task_dict.update({
@@ -95,7 +73,7 @@ class TaskService:
             "assigned_to": None,     # Default no assignee
             "milestone_id": None,    # Default no milestone
             "company_id": None,      # Default no company
-            "start_date": start_date,  # Set start date to next workday at 8am
+            "start_date": start_date,  # Always set start date for new tasks
             "end_date": None,        # Default no end date
         })
 
@@ -125,8 +103,8 @@ class TaskService:
                     detail="You don't have permission to update tasks in this project"
                 )
 
-        # Set start date when task moves to IN_PROGRESS for the first time
-        if new_state == TaskState.IN_PROGRESS and task.state == TaskState.NULL:
+        # Handle start time when task becomes active
+        if not task.start_date and new_state in [TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED]:
             task.start_date = datetime.utcnow()
             
             # Also check if project should start
@@ -135,13 +113,19 @@ class TaskService:
                 project.start_date = datetime.utcnow()
                 db.add(project)
 
-        task.state = new_state
-        
-        # Update task based on state
+        # Handle state changes
         if new_state == TaskState.DONE:
+            # Handle completion
+            if not task.start_date:
+                task.start_date = task.created_at or datetime.utcnow()
             task.end_date = datetime.utcnow()
             task.progress = 100.0
+        elif task.state == TaskState.DONE and new_state != TaskState.DONE:
+            # Handle un-completion
+            task.end_date = None
+            task.progress = 0.0
         
+        task.state = new_state
         db.commit()
         db.refresh(task)
 
@@ -177,15 +161,7 @@ class TaskService:
         # Update task status if moving to a completion stage
         if is_completion_stage:
             task.state = TaskState.DONE
-            # Set end date
-            now = datetime.utcnow()
-            if now.weekday() < 5 and time(8, 0) <= now.time() <= time(16, 0):
-                task.end_date = now
-            else:
-                end_date = now
-                while end_date.weekday() >= 5:
-                    end_date -= timedelta(days=1)
-                task.end_date = end_date.replace(hour=16, minute=0, second=0, microsecond=0)
+            task.end_date = datetime.utcnow()
             task.progress = 100.0
         
         db.commit()
@@ -217,14 +193,31 @@ class TaskService:
             if not task:
                 return None, f"Task with ID {task_id} not found"
 
+            # Store project_id for later use
+            task_project_id = task.project_id
+
             # Check project permissions
-            if task.project_id:
-                if not self.permission_service.can_modify_project(db, current_user_id, task.project_id):
+            if task_project_id:
+                if not self.permission_service.can_modify_project(db, current_user_id, task_project_id):
                     return None, "You don't have permission to update tasks in this project"
+            
+            # Handle state changes
+            if "state" in task_data:
+                if task_data["state"] == TaskState.DONE:
+                    # When changing to DONE state
+                    task_data["end_date"] = datetime.utcnow()
+                    # Ensure start_date exists before setting end_date
+                    if not task.start_date:
+                        task_data["start_date"] = task.created_at or datetime.utcnow()
+                    task_data["progress"] = 100.0
+                elif task.state == TaskState.DONE and task_data["state"] != TaskState.DONE:
+                    # When changing from DONE to another state
+                    task_data["end_date"] = None
+                    task_data["progress"] = 0.0  # Reset progress when task is no longer done
             
             # Check start_date permission if it's being updated
             if "start_date" in task_data:
-                if not ScheduledTaskService.can_set_start_date(db, current_user_id, task.project_id):
+                if not ScheduledTaskService.can_set_start_date(db, current_user_id, task_project_id):
                     return None, "Only superusers and project managers can set task start dates"
                     
                 # Validate start_date is in the future
@@ -298,7 +291,7 @@ class TaskService:
                 WHERE id = :task_id
                 RETURNING id, name, description, state, priority, deadline, 
                           planned_hours, assigned_to, created_by, project_id,
-                          created_at, updated_at, progress, stage_id
+                          created_at, updated_at, progress, stage_id, end_date
             """)
             
             result = db.execute(update_query, params).fetchone()
@@ -308,7 +301,7 @@ class TaskService:
                 return None, "Failed to update task"
             
             # Convert result to dictionary with all required fields
-            task = {
+            updated_task = {
                 "id": result.id,
                 "name": result.name,
                 "description": result.description,
@@ -322,15 +315,15 @@ class TaskService:
                 "created_at": result.created_at,
                 "updated_at": result.updated_at,
                 "progress": result.progress if hasattr(result, 'progress') else 0.0,
-                "stage_id": result.stage_id
+                "stage_id": result.stage_id,
+                "end_date": result.end_date
             }
             
             # After successful update, mark task and project for immediate metrics update
             metrics_worker.mark_entity_changed("task", task_id)
-            if task.project_id:
-                metrics_worker.mark_entity_changed("project", task.project_id)
+            metrics_worker.mark_entity_changed("project", task_project_id)  # Use stored project_id
             
-            return task, None
+            return updated_task, None
         
         except Exception as e:
             db.rollback()

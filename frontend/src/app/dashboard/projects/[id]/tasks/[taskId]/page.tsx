@@ -4,7 +4,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, ChevronUp, Users } from "lucide-react";
+import { MessageSquare, Star, MoreHorizontal, ChevronRight, Search, Settings, ChevronLeft, X, User, Paperclip, Pencil, ChevronUp, Users, ChevronDown, Check } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -16,6 +16,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -40,6 +42,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { patchApi, postApi, putApi } from "@/lib/api-helper";
+import { TaskPriority } from "@/types/task";
 
 interface Stage {
   id: string;
@@ -101,6 +104,7 @@ interface Task {
   tags: Tag[];
   comments: Comment[];
   planned_hours?: number;
+  priority?: TaskPriority;
 }
 
 type ActivityType = 'task_update' | 'comment' | 'log_note' | 'message';
@@ -157,6 +161,7 @@ interface TaskUpdateFields {
   description?: string;
   stage_id?: number;
   planned_hours?: number;
+  project_id: number;
 }
 
 interface LogNote {
@@ -227,6 +232,26 @@ interface Message {
   sender: User;
   task_id: number;
 }
+
+// Add priority configuration
+const priorityConfig = {
+  [TaskPriority.LOW]: {
+    color: 'bg-blue-500',
+    label: 'Low'
+  },
+  [TaskPriority.NORMAL]: {
+    color: 'bg-yellow-500',
+    label: 'Normal'
+  },
+  [TaskPriority.HIGH]: {
+    color: 'bg-orange-500',
+    label: 'High'
+  },
+  [TaskPriority.URGENT]: {
+    color: 'bg-red-500',
+    label: 'Urgent'
+  }
+} as const;
 
 export default function TaskDetails({ params }: TaskDetailsProps) {
   const router = useRouter();
@@ -436,6 +461,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const activityFeedRef = useRef<HTMLDivElement>(null);
   const [allocatedTime, setAllocatedTime] = useState<string>("");
   const [isAllocatedTimeChanged, setIsAllocatedTimeChanged] = useState(false);
+  // Add priority state and change handler
+  const [currentPriority, setCurrentPriority] = useState<TaskPriority>(TaskPriority.NORMAL);
+  const [isPriorityChanged, setIsPriorityChanged] = useState(false);
 
   // Add scroll handler to show/hide scroll to latest button
   const handleActivityScroll = useCallback(() => {
@@ -525,6 +553,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           setCurrentStage(data.stage_id);
           setCurrentStatus(data.state);
           setAllocatedTime(data.planned_hours?.toString() || "");
+          if (data.priority) {
+            setCurrentPriority(data.priority as TaskPriority);
+            setIsPriorityChanged(false);
+          }
         } else {
           setError("Failed to load task details");
         }
@@ -738,9 +770,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       isAssigneesChanged ||
       isStatusChanged ||
       isStageChanged ||
+      isPriorityChanged ||
       isAllocatedTimeChanged
     );
-  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged, isStageChanged, isAllocatedTimeChanged]);
+  }, [isNameChanged, isDeadlineChanged, isAssigneesChanged, isStatusChanged, isStageChanged, isPriorityChanged, isAllocatedTimeChanged]);
 
   // Update currentStatus when task details are loaded
   useEffect(() => {
@@ -828,9 +861,27 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     const currentStageName = stages.find((s: TaskStage) => s.id.toString() === currentStage)?.name || "Unknown Stage";
     setOriginalStageName(currentStageName);
     
+    // Check if we need to reset the state to IN_PROGRESS
+    if (task?.state === TaskState.CHANGES_REQUESTED || task?.state === TaskState.APPROVED) {
+      setCurrentStatus(TaskState.IN_PROGRESS);
+      setIsStatusChanged(true);
+      
+      // Add activity for automatic state change
+      postApi('/activities/', {
+        task_id: Number(taskId),
+        project_id: task.project_id,
+        activity_type: 'task_update',
+        description: `Task state automatically changed to IN_PROGRESS due to stage change (from ${task.state})`,
+        user_id: useAuthStore.getState().user?.id,
+        created_at: new Date().toISOString()
+      }).catch(error => {
+        console.error('Failed to create activity for automatic state change:', error);
+      });
+    }
+    
     setNewStageId(stageId.toString());
     setIsStageChanged(true);
-      setCurrentStage(stageId.toString());
+    setCurrentStage(stageId.toString());
   };
 
   // Type-safe filter functions
@@ -968,7 +1019,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     if (!resolvedParams.taskId || !token) return;
 
     try {
-      const updatedFields: TaskUpdateFields = {};
+      const updatedFields: TaskUpdateFields = {
+        project_id: task?.project_id || Number(id)  // Get project_id from task or fallback to route id
+      };
       const activities = [];
 
       if (isNameChanged) {
@@ -977,7 +1030,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Changed task title from "${task?.name}" to "${taskName}"`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -989,7 +1042,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Updated task deadline from ${oldDeadline} to ${newDeadline}`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -1001,7 +1054,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Changed task assignee from ${oldAssignee} to ${newAssignee}`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -1011,7 +1064,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Updated task description`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -1022,7 +1075,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Changed task status from ${oldStatus} to ${currentStatus}`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -1034,7 +1087,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           activity_type: 'task_update',
           description: `Updated allocated time from ${oldTime} hours to ${newTime} hours`,
           task_id: Number(resolvedParams.taskId),
-          project_id: Number(id),
+          project_id: task?.project_id || Number(id),
           user_id: useAuthStore.getState().user?.id
         });
       }
@@ -1066,7 +1119,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
           // Create activity log for stage change
           await postApi('/activities/', {
             task_id: Number(resolvedParams.taskId),
-            project_id: Number(id),
+            project_id: task?.project_id || Number(id),
             activity_type: 'task_update',
             description: `Changed task stage from "${originalStageName}" to "${newStage}"`,
             user_id: useAuthStore.getState().user?.id,
@@ -2322,6 +2375,128 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     );
   };
 
+  // Add function to check if user can modify priority
+  const canModifyPriority = (task: Task | null | undefined) => {
+    if (!task) return false;
+    
+    const user = useAuthStore.getState().user;
+    if (!user) return false;
+    
+    // Superusers can modify priority
+    if (user.is_superuser) return true;
+    
+    // Project managers can modify priority
+    const projectRole = user.project_roles?.[task.project_id];
+    return projectRole === 'manager';
+  };
+
+  // Add priority change handler
+  const handlePriorityChange = async (newPriority: TaskPriority) => {
+    if (!task || !token || !taskId) return;
+    
+    try {
+      // Store the original priority for activity log
+      const oldPriority = task.priority || TaskPriority.NORMAL;
+      
+      // Update task priority
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          priority: newPriority.toLowerCase()
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Failed to update task priority');
+      }
+
+      // Update local state
+      setCurrentPriority(newPriority);
+      setIsPriorityChanged(true);
+
+      // Create activity for priority change
+      try {
+        await fetch(`${API_BASE_URL}/activities`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            activity_type: 'task_update',
+            description: `Changed priority from ${priorityConfig[oldPriority]?.label || 'Normal'} to ${priorityConfig[newPriority].label}`,
+            task_id: Number(taskId),
+            project_id: task.project_id,
+            user_id: useAuthStore.getState().user?.id,
+            created_at: new Date().toISOString()
+          }),
+        });
+        
+        // Refresh task data
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['task', taskId] }),
+          queryClient.invalidateQueries({ queryKey: ['activities', taskId] })
+        ]);
+
+        toast.success('Task priority updated successfully');
+      } catch (activityError) {
+        // If activity creation fails, log it but don't fail the whole operation
+        console.error('Failed to create activity for priority change:', activityError);
+        // Still show success toast since the priority was updated
+        toast.success('Task priority updated successfully (activity log failed)');
+      }
+
+    } catch (error) {
+      console.error('Error updating priority:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update task priority');
+    }
+  };
+
+  // Modify the priority dropdown to be read-only for non-managers
+  const PriorityDropdown = () => {
+    const canModify = canModifyPriority(task);
+    
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            className={`flex items-center gap-2 ${
+              canModify ? 'cursor-pointer hover:bg-gray-50' : 'cursor-default'
+            }`}
+            disabled={!canModify}
+          >
+            <span className={`w-2 h-2 rounded-full ${priorityConfig[currentPriority]?.color || priorityConfig[TaskPriority.NORMAL].color}`} />
+            <span className="capitalize">{(priorityConfig[currentPriority]?.label || priorityConfig[TaskPriority.NORMAL].label)}</span>
+            {canModify && <ChevronDown className="h-4 w-4 opacity-50" />}
+          </Button>
+        </DropdownMenuTrigger>
+        {canModify && (
+          <DropdownMenuContent align="end" className="w-[200px]">
+            {Object.entries(priorityConfig).map(([priority, config]) => (
+              <DropdownMenuItem
+                key={priority}
+                onClick={() => handlePriorityChange(priority as TaskPriority)}
+                className="flex items-center gap-2"
+              >
+                <span className={`w-2 h-2 rounded-full ${config.color}`} />
+                <span>{config.label}</span>
+                {priority === currentPriority && (
+                  <Check className="h-4 w-4 ml-auto" />
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        )}
+      </DropdownMenu>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation with Stages and Actions */}
@@ -2651,6 +2826,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                       setIsDeadlineChanged(newDeadline !== taskDeadline);
                     }}
                   />
+                </div>
+                <div>
+                  <h3 className="font-medium mb-2">Priority</h3>
+                  <PriorityDropdown />
                 </div>
               </div>
 

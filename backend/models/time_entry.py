@@ -1,7 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from datetime import datetime
 from .base import Base
 
 class TimeEntry(Base):
@@ -21,10 +20,6 @@ class TimeEntry(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     
-    # AI Analysis Fields
-    productivity_score = Column(Float, nullable=True)
-    efficiency_metrics = Column(JSON, nullable=True)
-    
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -36,32 +31,8 @@ class TimeEntry(Base):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if self.start_time and self.end_time:
-            self.duration = (self.end_time - self.start_time).total_seconds() / 3600
-        elif self.start_time and not self.end_time:
-            self.is_running = True
-            self.duration = 0
-
-    def stop_timer(self):
-        """Stop the running timer and calculate duration"""
-        if self.is_running:
-            self.end_time = datetime.utcnow()
-            self.duration = (self.end_time - self.start_time).total_seconds() / 3600
-            self.is_running = False
-            return True
-        return False
-
-    def update_duration(self):
-        """Update duration based on start and end times"""
-        if self.start_time and self.end_time:
-            self.duration = (self.end_time - self.start_time).total_seconds() / 3600
-            return True
-        return False
-
-    def calculate_productivity_score(self):
-        """AI-assisted productivity score calculation"""
-        # This will be implemented with AI integration
-        pass
+        if self.duration is None:
+            self.duration = 0.0
 
     def __repr__(self):
         return f"<TimeEntry {self.id}: {self.duration} hours>" 

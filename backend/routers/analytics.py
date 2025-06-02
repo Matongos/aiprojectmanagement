@@ -15,8 +15,11 @@ from models.task import Task
 from models.activity import Activity
 from models import TimeEntry
 from models.project import Project
+from models.ml_models import SuccessPattern, MLModel, HistoricalPattern
 from schemas.task import TaskState
+from services.ml_service import get_ml_service
 from .ai import get_ollama_client
+from services.analytics_service import AnalyticsService
 
 router = APIRouter(
     prefix="/analytics",
@@ -48,18 +51,39 @@ class CompletionTimeMetrics(BaseModel):
     criticalInsights: List[str]
     warningInsights: List[str]
 
-def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """Calculate hours between two dates using 24-hour days"""
-    if not start_date or not end_date:
-        return 0
-    
-    # Convert to UTC to ensure consistent calculation
-    start_date = start_date.replace(tzinfo=None)
-    end_date = end_date.replace(tzinfo=None)
-    
-    # Calculate total hours between dates
-    total_hours = (end_date - start_date).total_seconds() / 3600
-    return max(total_hours, 0)
+@router.get("/dashboard/completion-rate", response_model=Dict[str, Any])
+async def get_dashboard_completion_rate(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get completion rate for dashboard based on user role"""
+    try:
+        # Base query for tasks
+        query = db.query(
+            func.count(Task.id).label('total_tasks'),
+            func.sum(case((Task.state == TaskState.DONE, 1), else_=0)).label('completed_tasks')
+        )
+
+        # Apply filters based on user role
+        if not current_user.get("is_superuser"):
+            # Regular users only see their assigned tasks
+            query = query.filter(Task.assigned_to == current_user["id"])
+        
+        # Execute query
+        metrics = query.first()
+
+        total_tasks = metrics.total_tasks or 0
+        completed_tasks = metrics.completed_tasks or 0
+        completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+
+        return {
+            "completion_rate": round(completion_rate, 2),
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "is_superuser_view": current_user.get("is_superuser", False)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/project/{project_id}/completion", response_model=Dict[str, Any])
 async def get_project_completion_rate(
@@ -69,11 +93,24 @@ async def get_project_completion_rate(
 ):
     """Get project completion rate statistics"""
     try:
-        # Verify project exists
+        # Verify project exists and user has access
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
+        # For non-superusers, verify project access
+        if not current_user.get("is_superuser"):
+            has_access = db.query(Project).join(
+                Project.members
+            ).filter(
+                Project.id == project_id,
+                Project.members.any(user_id=current_user["id"])
+            ).first() is not None
+            
+            if not has_access:
+                raise HTTPException(status_code=403, detail="No access to this project")
+
+        # Get task metrics for the project
         metrics = db.query(
             func.count(Task.id).label('total_tasks'),
             func.sum(case((Task.state == TaskState.DONE, 1), else_=0)).label('completed_tasks')
@@ -83,10 +120,22 @@ async def get_project_completion_rate(
         completed_tasks = metrics.completed_tasks or 0
         completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
 
+        # Get additional project metrics
+        tasks_by_state = db.query(
+            Task.state,
+            func.count(Task.id).label('count')
+        ).filter(
+            Task.project_id == project_id
+        ).group_by(Task.state).all()
+
+        state_distribution = {state: count for state, count in tasks_by_state}
+
         return {
             "completion_rate": round(completion_rate, 2),
             "total_tasks": total_tasks,
-            "completed_tasks": completed_tasks
+            "completed_tasks": completed_tasks,
+            "tasks_by_state": state_distribution,
+            "project_name": project.name
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -122,13 +171,22 @@ async def get_project_task_distribution(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/user/productivity", response_model=Dict[str, Any])
-async def get_user_productivity(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get current user's productivity metrics"""
-    return await get_specific_user_productivity(current_user["id"], db, current_user)
+@router.get("/user/productivity")
+def get_user_productivity(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Get current user's productivity metrics
+    """
+    try:
+        analytics_service = AnalyticsService(db)
+        return analytics_service.get_user_productivity(current_user["id"])
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 @router.get("/user/{user_id}/productivity", response_model=Dict[str, Any])
 async def get_specific_user_productivity(
@@ -188,6 +246,12 @@ async def get_task_summary(
         # Base query for all tasks
         query = db.query(Task)
 
+        # Apply filters based on user role
+        if not current_user.get("is_superuser"):
+            # Regular users only see their assigned tasks
+            query = query.filter(Task.assigned_to == current_user["id"])
+        # Superusers see all tasks, so no additional filter needed
+
         # If project_id is specified, apply project-specific filters
         if project_id:
             print(f"Filtering for specific project: {project_id}")
@@ -198,7 +262,7 @@ async def get_task_summary(
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             
-            # For non-superusers, verify project access when viewing specific project
+            # For non-superusers, verify project access
             if not current_user.get("is_superuser"):
                 has_access = db.query(Project).join(
                     Project.members
@@ -210,11 +274,11 @@ async def get_task_summary(
                 if not has_access:
                     raise HTTPException(status_code=403, detail="No access to this project")
 
-        # Calculate metrics for all tasks or project-specific tasks
+        # Calculate metrics for filtered tasks
         metrics = query.with_entities(
             func.count(Task.id).label('total'),
             func.sum(case((Task.state == TaskState.DONE, 1), else_=0)).label('completed'),
-            func.sum(case((Task.state.in_([TaskState.IN_PROGRESS]), 1), else_=0)).label('active'),
+            func.sum(case((Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED]), 1), else_=0)).label('active'),
             func.sum(case((Task.state == TaskState.CANCELED, 1), else_=0)).label('cancelled'),
             func.sum(case((Task.state == TaskState.CHANGES_REQUESTED, 1), else_=0)).label('changes_requested'),
             func.sum(case((Task.state == TaskState.APPROVED, 1), else_=0)).label('approved')
@@ -244,13 +308,13 @@ async def get_task_summary(
         return {
             "total": total,
             "completed": completed,
-            "active": active,
+            "active": active,  # active now includes IN_PROGRESS, CHANGES_REQUESTED, and APPROVED
             "cancelled": cancelled,
             "changes_requested": changes_requested,
             "approved": approved,
             "completion_rate": round(completion_rate, 2),
             "tasks_by_state": {
-                "in_progress": active,
+                "in_progress": active - changes_requested - approved,  # Just IN_PROGRESS tasks
                 "completed": completed,
                 "cancelled": cancelled,
                 "changes_requested": changes_requested,
@@ -413,47 +477,38 @@ async def get_completion_time_metrics(
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
         
         # Get completed tasks for different time periods
-        completed_tasks_period = db.query(Task).filter(
+        base_query = db.query(Task)
+        if not current_user.get("is_superuser"):
+            base_query = base_query.filter(Task.assigned_to == current_user["id"])
+
+        completed_tasks_period = base_query.filter(
             Task.state == TaskState.DONE,
             Task.updated_at >= start_date
         ).all()
         
-        completed_tasks_7days = db.query(Task).filter(
+        completed_tasks_7days = base_query.filter(
             Task.state == TaskState.DONE,
             Task.updated_at >= seven_days_ago
         ).all()
         
-        completed_tasks_30days = db.query(Task).filter(
+        completed_tasks_30days = base_query.filter(
             Task.state == TaskState.DONE,
             Task.updated_at >= thirty_days_ago
         ).all()
-        
+
         # Calculate metrics for each period
         def calculate_period_metrics(tasks):
             completion_times = []
             tasks_over_planned = 0
             
             for task in tasks:
-                # Find when the task was first assigned
-                assignment_date = task.start_date
-                if not assignment_date:
-                    # Get first assignment from activities
-                    first_assignment = db.query(Activity).filter(
-                        Activity.task_id == task.id,
-                        Activity.field_name == 'assigned_to',
-                        Activity.new_value.isnot(None)
-                    ).order_by(Activity.created_at.asc()).first()
+                # Use task's start_date and end_date for completion time calculation
+                if task.start_date and task.end_date:
+                    # Calculate total hours between start and end (24-hour basis)
+                    completion_time = (task.end_date - task.start_date).total_seconds() / 3600
+                    completion_times.append(completion_time)
                     
-                    if first_assignment:
-                        assignment_date = first_assignment.created_at
-                    else:
-                        assignment_date = task.created_at
-                        
-                if assignment_date and task.updated_at:
-                    business_hours = calculate_business_hours(assignment_date, task.updated_at)
-                    completion_times.append(business_hours)
-                    
-                    if task.planned_hours and business_hours > task.planned_hours:
+                    if task.planned_hours and completion_time > task.planned_hours:
                         tasks_over_planned += 1
             
             avg_time = sum(completion_times) / len(completion_times) if completion_times else 0
@@ -476,24 +531,36 @@ async def get_completion_time_metrics(
         trend = ((avg_completion_time - previous_avg) / previous_avg) if previous_avg > 0 else 0
         
         # Get tasks needing attention (unchanged for 7 business days)
-        tasks_needing_attention = db.query(func.count(Task.id)).filter(
+        attention_query = db.query(func.count(Task.id))
+        if not current_user.get("is_superuser"):
+            attention_query = attention_query.filter(Task.assigned_to == current_user["id"])
+        
+        tasks_needing_attention = attention_query.filter(
             Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED]),
             Task.updated_at <= datetime.utcnow() - timedelta(days=7)
         ).scalar()
 
         # Get tasks near deadline
-        tasks_near_deadline = db.query(func.count(Task.id)).filter(
+        deadline_query = db.query(func.count(Task.id))
+        if not current_user.get("is_superuser"):
+            deadline_query = deadline_query.filter(Task.assigned_to == current_user["id"])
+        
+        tasks_near_deadline = deadline_query.filter(
             Task.state != TaskState.DONE,
             Task.deadline <= datetime.utcnow() + timedelta(days=3),
             Task.deadline > datetime.utcnow()
         ).scalar()
         
         # Get task summary for AI analysis
+        active_query = db.query(func.count(Task.id))
+        if not current_user.get("is_superuser"):
+            active_query = active_query.filter(Task.assigned_to == current_user["id"])
+            
         task_summary = {
             "total": total_tasks,
             "completed": tasks_30days,
-            "active": db.query(func.count(Task.id)).filter(
-                Task.state == TaskState.IN_PROGRESS
+            "active": active_query.filter(
+                Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED])
             ).scalar(),
             "completion_rate": (tasks_30days / total_tasks * 100) if total_tasks > 0 else 0
         }
@@ -568,8 +635,17 @@ async def get_active_tasks_count(
 ):
     """Get count of active tasks"""
     try:
-        active_count = db.query(func.count(Task.id)).filter(
-            Task.state == TaskState.IN_PROGRESS
+        # Base query
+        query = db.query(func.count(Task.id))
+
+        # Apply filters based on user role
+        if not current_user.get("is_superuser"):
+            # Regular users only see their assigned tasks
+            query = query.filter(Task.assigned_to == current_user["id"])
+        
+        # Apply active states filter
+        active_count = query.filter(
+            Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED])
         ).scalar()
     
         return {"active_tasks": active_count}
@@ -610,4 +686,165 @@ async def get_productivity_metrics(
         raise HTTPException(
             status_code=500,
             detail=f"Error getting productivity metrics: {str(e)}"
+        )
+
+@router.get("/ml/task/{task_id}/predict-completion", response_model=Dict[str, Any])
+async def predict_task_completion(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Predict task completion time using ML model"""
+    try:
+        ml_service = get_ml_service(db)
+        return await ml_service.predict_task_completion_time(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/ml/project/{project_id}/team-performance", response_model=Dict[str, Any])
+async def analyze_team_performance(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get ML-powered team performance analysis"""
+    try:
+        ml_service = get_ml_service(db)
+        return await ml_service.analyze_team_performance(project_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/ml/project/{project_id}/historical-patterns", response_model=Dict[str, Any])
+async def get_historical_patterns(
+    project_id: int,
+    pattern_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get historical patterns identified in project data"""
+    try:
+        query = db.query(HistoricalPattern)
+        if pattern_type:
+            query = query.filter(HistoricalPattern.pattern_type == pattern_type)
+        patterns = query.order_by(HistoricalPattern.confidence.desc()).all()
+        
+        return {
+            "project_id": project_id,
+            "patterns": [
+                {
+                    "name": p.pattern_name,
+                    "description": p.pattern_description,
+                    "type": p.pattern_type,
+                    "confidence": p.confidence,
+                    "support": p.support,
+                    "data": p.pattern_data
+                }
+                for p in patterns
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/ml/success-patterns", response_model=Dict[str, Any])
+async def get_success_patterns(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get identified success patterns across projects"""
+    try:
+        patterns = db.query(SuccessPattern).order_by(
+            SuccessPattern.impact_score.desc()
+        ).all()
+        
+        return {
+            "patterns": [
+                {
+                    "type": p.pattern_type,
+                    "data": p.pattern_data,
+                    "confidence": p.confidence_score,
+                    "impact": p.impact_score,
+                    "occurrences": p.occurrence_count
+                }
+                for p in patterns
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/ml/models/performance", response_model=Dict[str, Any])
+async def get_ml_model_performance(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get performance metrics for active ML models"""
+    try:
+        models = db.query(MLModel).filter(
+            MLModel.is_active == True
+        ).order_by(MLModel.last_trained.desc()).all()
+        
+        return {
+            "models": [
+                {
+                    "name": m.model_name,
+                    "type": m.model_type,
+                    "version": m.model_version,
+                    "performance": m.performance_metrics,
+                    "feature_importance": m.feature_importance,
+                    "last_trained": m.last_trained.isoformat() if m.last_trained else None
+                }
+                for m in models
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/projects/{project_id}/average-completion-time")
+async def get_project_average_completion_time(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Calculate the average completion time for tasks in a project.
+    Returns both the raw average in seconds and a human-readable format.
+    Uses 24-hour time calculation (all hours count).
+    """
+    try:
+        # Get all completed tasks in the project with valid start and end dates
+        completed_tasks = db.query(Task).filter(
+            Task.project_id == project_id,
+            Task.state == TaskState.DONE,
+            Task.start_date.isnot(None),
+            Task.end_date.isnot(None)
+        ).all()
+        
+        if not completed_tasks:
+            return {
+                "average_completion_time_seconds": 0,
+                "average_completion_time_human": "No completed tasks found",
+                "total_tasks_analyzed": 0
+            }
+        
+        # Calculate completion time for each task (in seconds)
+        completion_times = [
+            (task.end_date - task.start_date).total_seconds()
+            for task in completed_tasks
+        ]
+        
+        # Calculate average
+        avg_seconds = sum(completion_times) / len(completion_times)
+        
+        # Convert to human-readable format
+        avg_hours = avg_seconds / 3600
+        
+        return {
+            "average_completion_time_seconds": avg_seconds,
+            "average_completion_time_human": f"{round(avg_hours, 2)} hours",
+            "total_tasks_analyzed": len(completed_tasks)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating average completion time: {str(e)}"
         )

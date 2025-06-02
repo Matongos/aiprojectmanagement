@@ -145,6 +145,7 @@ class Project(Base):
     # Add new relationships for metrics
     metrics = relationship("ProjectMetrics", back_populates="project", uselist=False)
     resource_metrics = relationship("ResourceMetrics", back_populates="project")
+    performance_metrics = relationship("TeamPerformanceMetrics", back_populates="project", cascade="all, delete-orphan")
 
     def calculate_progress(self):
         """Calculate project progress based on task completion."""
