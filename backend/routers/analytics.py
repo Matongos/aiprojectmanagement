@@ -354,14 +354,18 @@ async def get_task_trend(
 ):
     """Get task creation and completion trend data"""
     try:
-        start_date = datetime.utcnow() - timedelta(days=days)
+        # Get current time in UTC
+        now = datetime.now(timezone.utc)
+        # Calculate start date
+        start_date = now - timedelta(days=days)
         
         # Get daily task creation counts
         created_tasks_query = db.query(
             func.date_trunc('day', Task.created_at).label('date'),
             func.count(Task.id).label('count')
         ).filter(
-            Task.created_at >= start_date
+            Task.created_at >= start_date,
+            Task.created_at <= now
         ).group_by(text('date')).order_by(text('date')).all()
 
         # Get daily task completion counts
@@ -370,7 +374,8 @@ async def get_task_trend(
             func.count(Task.id).label('count')
         ).filter(
             Task.state == TaskState.DONE,
-            Task.updated_at >= start_date
+            Task.updated_at >= start_date,
+            Task.updated_at <= now
         ).group_by(text('date')).order_by(text('date')).all()
 
         # Convert to the expected format
@@ -378,12 +383,12 @@ async def get_task_trend(
         completed_tasks = []
 
         # Create a dictionary to store counts by date
-        created_by_date = {date: count for date, count in created_tasks_query}
-        completed_by_date = {date: count for date, count in completed_tasks_query}
+        created_by_date = {date.date(): count for date, count in created_tasks_query}
+        completed_by_date = {date.date(): count for date, count in completed_tasks_query}
 
         # Generate a list of all dates in the range
         current_date = start_date
-        while current_date <= datetime.utcnow():
+        while current_date <= now:
             date_str = current_date.strftime("%Y-%m-%d")
             
             # Get counts for this date (0 if no tasks)

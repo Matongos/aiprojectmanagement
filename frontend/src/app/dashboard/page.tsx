@@ -101,6 +101,17 @@ interface DashboardCompletionRate {
   is_superuser_view: boolean;
 }
 
+// Add new interface for task trend data
+interface TaskTrendItem {
+  date: string;
+  count: number;
+}
+
+interface TaskTrendResponse {
+  created_tasks: TaskTrendItem[];
+  completed_tasks: TaskTrendItem[];
+}
+
 export default function DashboardPage() {
   const { user, token } = useAuthStore();
   const { metrics, loading, error, fetchMetrics } = useDashboardStore();
@@ -225,6 +236,30 @@ export default function DashboardPage() {
       if (!response.ok) {
         throw new Error('Failed to fetch completion metrics');
       }
+      return response.json();
+    },
+    enabled: !!token,
+  });
+
+  // Add task trend query
+  const { data: taskTrendData, isLoading: isLoadingTaskTrend } = useQuery<TaskTrendResponse>({
+    queryKey: ["task-trend"],
+    queryFn: async () => {
+      if (!token) {
+        throw new Error("Authentication token is missing");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/analytics/tasks/trend?days=15`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch task trend data');
+      }
+
       return response.json();
     },
     enabled: !!token,
@@ -584,28 +619,76 @@ export default function DashboardPage() {
 
           {/* Task Trend Chart */}
           <Card>
+            <CardHeader>
+              <CardTitle>Task Trend</CardTitle>
+            </CardHeader>
             <CardContent className="p-4">
-              <ProjectMetricsChart
-                title="Task Trend"
-                type="line"
-                data={{
-                  labels: metrics.taskTrend?.labels || [],
-                  datasets: [
-                    {
-                      label: "Created",
-                      data: metrics.taskTrend?.created || [],
-                      borderColor: "#2563eb",
-                      fill: false,
+              {isLoadingTaskTrend ? (
+                <div className="flex items-center justify-center h-[300px]">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+                </div>
+              ) : !taskTrendData ? (
+                <div className="flex items-center justify-center h-[300px] text-gray-500">
+                  No trend data available
+                </div>
+              ) : (
+                <ProjectMetricsChart
+                  title="Task Trend"
+                  type="line"
+                  data={{
+                    labels: taskTrendData.created_tasks.map(item => item.date).reverse(),
+                    datasets: [
+                      {
+                        label: "Created Tasks",
+                        data: taskTrendData.created_tasks.map(item => item.count).reverse(),
+                        borderColor: "#2563eb",
+                        backgroundColor: ["rgba(37, 99, 235, 0.1)"],
+                        fill: true
+                      },
+                      {
+                        label: "Completed Tasks",
+                        data: taskTrendData.completed_tasks.map(item => item.count).reverse(),
+                        borderColor: "#16a34a",
+                        backgroundColor: ["rgba(22, 163, 74, 0.1)"],
+                        fill: true
+                      },
+                    ],
+                  }}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'top',
+                      },
+                      tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                      }
                     },
-                    {
-                      label: "Completed",
-                      data: metrics.taskTrend?.completed || [],
-                      borderColor: "#16a34a",
-                      fill: false,
+                    scales: {
+                      x: {
+                        title: {
+                          display: true,
+                          text: 'Date'
+                        }
+                      },
+                      y: {
+                        beginAtZero: true,
+                        title: {
+                          display: true,
+                          text: 'Number of Tasks'
+                        }
+                      }
                     },
-                  ],
-                }}
-              />
+                    interaction: {
+                      mode: 'nearest',
+                      axis: 'x',
+                      intersect: false
+                    }
+                  }}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
