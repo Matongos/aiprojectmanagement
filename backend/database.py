@@ -42,6 +42,10 @@ engine = create_engine(DATABASE_URL)
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Create all tables on startup
+def create_tables():
+    Base.metadata.create_all(bind=engine)
+
 # Dependency to get db session
 def get_db():
     db = SessionLocal()

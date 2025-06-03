@@ -16,6 +16,7 @@ from .tag import Tag, task_tag
 from .notification import Notification
 from .log_note import LogNote
 from .metrics import TaskMetrics
+from .user_metrics import UserProductivityMetrics
 
 __all__ = [
     'Base',
@@ -36,5 +37,6 @@ __all__ = [
     'task_tag',
     'Notification',
     'LogNote',
-    'TaskMetrics'
+    'TaskMetrics',
+    'UserProductivityMetrics'
 ] 

@@ -12,6 +12,7 @@ from .scheduled_tasks import ScheduledTaskService
 from workers.metrics_worker import metrics_worker
 from fastapi import HTTPException
 from sqlalchemy.sql import func
+from tasks.productivity_updater import update_user_productivity
 
 class TaskService:
     def __init__(self):
@@ -145,10 +146,19 @@ class TaskService:
                 task.start_date = task.created_at or datetime.utcnow()
             task.end_date = datetime.utcnow()
             task.progress = 100.0
+            
+            # Trigger productivity update for task assignee
+            if task.assigned_to:
+                update_user_productivity.delay(task.assigned_to)
+            
         elif task.state == TaskState.DONE and new_state != TaskState.DONE:
             # Handle un-completion
             task.end_date = None
             task.progress = 0.0
+            
+            # Trigger productivity update for task assignee
+            if task.assigned_to:
+                update_user_productivity.delay(task.assigned_to)
         
         task.state = new_state
         db.commit()

@@ -2,7 +2,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, extract, text
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
 import json
@@ -20,6 +20,9 @@ from schemas.task import TaskState
 from services.ml_service import get_ml_service
 from .ai import get_ollama_client
 from services.analytics_service import AnalyticsService
+from services.metrics_service import MetricsService
+from models.user_metrics import UserProductivityMetrics
+from tasks.productivity_updater import update_user_productivity
 
 router = APIRouter(
     prefix="/analytics",
@@ -172,16 +175,20 @@ async def get_project_task_distribution(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/user/productivity")
-def get_user_productivity(
+async def get_user_productivity(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Get current user's productivity metrics
+    Get current user's productivity metrics using the comprehensive metrics system.
     """
     try:
-        analytics_service = AnalyticsService(db)
-        return analytics_service.get_user_productivity(current_user["id"])
+        # Reuse the specific user productivity logic
+        return await get_specific_user_productivity(
+            user_id=current_user["id"],
+            db=db,
+            current_user=current_user
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -194,40 +201,51 @@ async def get_specific_user_productivity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get specific user's productivity metrics"""
+    """
+    Get specific user's productivity metrics using cached data and background updates.
+    
+    Returns detailed productivity metrics including:
+    - Overall productivity score
+    - Task completion statistics
+    - Average task complexity
+    - Time utilization
+    - Detailed task breakdown
+    """
     try:
-        # Calculate tasks completed in last 30 days
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        # Check if we have recent cached metrics
+        cached_metrics = db.query(UserProductivityMetrics).filter(
+            UserProductivityMetrics.user_id == user_id
+        ).first()
         
-        completed_tasks = db.query(func.count(Task.id)).filter(
-            Task.assigned_to == user_id,
-            Task.state == TaskState.DONE,
-            Task.updated_at >= thirty_days_ago
-        ).scalar()
-
-        # Calculate average completion time
-        task_completion_times = db.query(
-            func.avg(
-                func.extract('epoch', Task.updated_at - Task.created_at)
-            )
-        ).filter(
-            Task.assigned_to == user_id,
-            Task.state == TaskState.DONE
-        ).scalar()
-
-        avg_completion_time = round(task_completion_times / 3600, 2) if task_completion_times else 0
-
-        # Get time logged in the last 30 days
-        time_logged = db.query(func.sum(TimeEntry.duration)).filter(
-            TimeEntry.user_id == user_id,
-            TimeEntry.date >= thirty_days_ago
-        ).scalar() or 0
-
-        return {
-            "tasks_completed_30d": completed_tasks,
-            "avg_completion_time_hours": avg_completion_time,
-            "time_logged_hours": round(time_logged / 3600, 2)
-        }
+        # If we have recent metrics (less than 6 hours old), use them
+        if cached_metrics and cached_metrics.last_updated > datetime.now(cached_metrics.last_updated.tzinfo) - timedelta(hours=6):
+            return cached_metrics.to_dict()
+            
+        # If no cached metrics or they're old, trigger a background update
+        update_user_productivity.delay(user_id)
+        
+        # If we have old cached metrics, return them while the update runs
+        if cached_metrics:
+            return cached_metrics.to_dict()
+            
+        # If no cached metrics at all, calculate them synchronously this one time
+        metrics_service = MetricsService()
+        productivity_metrics = await metrics_service.calculate_productivity_score(db, user_id)
+        
+        # Store the metrics
+        new_metrics = UserProductivityMetrics(
+            user_id=user_id,
+            productivity_score=productivity_metrics["overall_score"],
+            completed_tasks=productivity_metrics["completed_tasks"],
+            total_time_spent=productivity_metrics["total_time_spent"],
+            avg_complexity=productivity_metrics["avg_complexity"],
+            task_breakdown=productivity_metrics["task_breakdown"]
+        )
+        db.add(new_metrics)
+        db.commit()
+        
+        return new_metrics.to_dict()
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -847,4 +865,256 @@ async def get_project_average_completion_time(
         raise HTTPException(
             status_code=500,
             detail=f"Error calculating average completion time: {str(e)}"
+        )
+
+@router.get("/user/productivity/all")
+async def get_all_users_productivity(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get productivity metrics for all users.
+    Only accessible by superusers/admins.
+    """
+    try:
+        # Check if user is superuser/admin
+        if not current_user.get("is_superuser"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators can view all users' productivity metrics"
+            )
+            
+        # Get all cached metrics
+        metrics = db.query(UserProductivityMetrics).all()
+        
+        # If we have no metrics at all, trigger background updates
+        if not metrics:
+            from tasks.productivity_updater import update_all_users_productivity
+            update_all_users_productivity.delay()
+            return {
+                "message": "No metrics available yet. Updates have been triggered.",
+                "metrics": []
+            }
+            
+        # Convert metrics to response format
+        users_metrics = []
+        for metric in metrics:
+            # Skip metrics older than 6 hours and trigger an update
+            if metric.last_updated < datetime.now(metric.last_updated.tzinfo) - timedelta(hours=6):
+                from tasks.productivity_updater import update_user_productivity
+                update_user_productivity.delay(metric.user_id)
+            
+            # Include metrics in response
+            users_metrics.append({
+                "user_id": metric.user_id,
+                "metrics": metric.to_dict(),
+                "last_updated": metric.last_updated.isoformat()
+            })
+            
+        return {
+            "metrics": users_metrics,
+            "total_users": len(users_metrics)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@router.get("/tasks/global-completion-metrics")
+async def get_global_completion_metrics(
+    days: Optional[int] = 30,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get global completion metrics for all completed tasks.
+    Only accessible by superusers and project managers.
+    
+    Returns:
+    - Average completion time
+    - Total completed tasks
+    - Completion metrics by project
+    - Completion metrics by user
+    - Task complexity distribution
+    """
+    try:
+        # Check if user is superuser or project manager
+        if not (current_user.get("is_superuser") or current_user.get("is_project_manager")):
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators and project managers can view global completion metrics"
+            )
+            
+        start_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Get all completed tasks with valid start and end dates
+        completed_tasks = db.query(Task).filter(
+            Task.state == TaskState.DONE,
+            Task.start_date.isnot(None),
+            Task.end_date.isnot(None),
+            Task.end_date >= start_date
+        ).all()
+        
+        if not completed_tasks:
+            return {
+                "message": "No completed tasks found in the specified period",
+                "metrics": {
+                    "average_completion_time": 0,
+                    "total_completed": 0,
+                    "by_project": {},
+                    "by_user": {},
+                    "complexity_distribution": {}
+                }
+            }
+            
+        # Calculate global metrics
+        total_time = 0
+        project_metrics = {}
+        user_metrics = {}
+        complexity_levels = {"low": 0, "medium": 0, "high": 0}
+        
+        for task in completed_tasks:
+            # Calculate completion time in hours
+            completion_time = (task.end_date - task.start_date).total_seconds() / 3600
+            total_time += completion_time
+            
+            # Group by project
+            if task.project_id not in project_metrics:
+                project_metrics[task.project_id] = {
+                    "total_tasks": 0,
+                    "total_time": 0,
+                    "avg_time": 0,
+                    "project_name": task.project.name if task.project else f"Project {task.project_id}"
+                }
+            project_metrics[task.project_id]["total_tasks"] += 1
+            project_metrics[task.project_id]["total_time"] += completion_time
+            
+            # Group by user
+            if task.assigned_to not in user_metrics:
+                user_metrics[task.assigned_to] = {
+                    "total_tasks": 0,
+                    "total_time": 0,
+                    "avg_time": 0
+                }
+            user_metrics[task.assigned_to]["total_tasks"] += 1
+            user_metrics[task.assigned_to]["total_time"] += completion_time
+            
+            # Categorize complexity
+            if task.complexity_score is not None:
+                if task.complexity_score < 0.4:
+                    complexity_levels["low"] += 1
+                elif task.complexity_score < 0.7:
+                    complexity_levels["medium"] += 1
+                else:
+                    complexity_levels["high"] += 1
+        
+        # Calculate averages
+        global_avg = total_time / len(completed_tasks)
+        
+        # Calculate project averages
+        for project in project_metrics.values():
+            project["avg_time"] = round(project["total_time"] / project["total_tasks"], 2)
+            project["total_time"] = round(project["total_time"], 2)
+            
+        # Calculate user averages
+        for user in user_metrics.values():
+            user["avg_time"] = round(user["total_time"] / user["total_tasks"], 2)
+            user["total_time"] = round(user["total_time"], 2)
+            
+        return {
+            "metrics": {
+                "average_completion_time": round(global_avg, 2),
+                "total_completed": len(completed_tasks),
+                "by_project": project_metrics,
+                "by_user": user_metrics,
+                "complexity_distribution": complexity_levels
+            },
+            "period_days": days
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@router.get("/tasks/completion-times")
+async def get_tasks_completion_times(
+    days: Optional[int] = 30,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get a list of all completed tasks with their completion times and assigned users.
+    Shows individual task completion times and overall average.
+    """
+    try:
+        # Check if user is superuser or project manager
+        if not (current_user.get("is_superuser") or current_user.get("is_project_manager")):
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators and project managers can view this data"
+            )
+            
+        start_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Get completed tasks with user information
+        completed_tasks = db.query(
+            Task,
+            User
+        ).join(
+            User,
+            Task.assigned_to == User.id
+        ).filter(
+            Task.state == TaskState.DONE,
+            Task.start_date.isnot(None),
+            Task.end_date.isnot(None),
+            Task.end_date >= start_date
+        ).order_by(Task.end_date.desc()).all()
+        
+        if not completed_tasks:
+            return {
+                "message": "No completed tasks found in the specified period",
+                "tasks": [],
+                "average_completion_time": 0,
+                "total_tasks": 0
+            }
+        
+        tasks_data = []
+        total_time = 0
+        
+        for task, user in completed_tasks:
+            # Calculate completion time in hours
+            completion_time = (task.end_date - task.start_date).total_seconds() / 3600
+            total_time += completion_time
+            
+            tasks_data.append({
+                "task_id": task.id,
+                "task_name": task.name,
+                "completion_time_hours": round(completion_time, 2),
+                "completed_date": task.end_date.isoformat(),
+                "user": {
+                    "id": user.id,
+                    "name": user.name,
+                    "email": user.email
+                },
+                "project_id": task.project_id,
+                "project_name": task.project.name if task.project else None
+            })
+        
+        average_time = total_time / len(completed_tasks)
+        
+        return {
+            "tasks": tasks_data,
+            "average_completion_time": round(average_time, 2),
+            "total_tasks": len(completed_tasks),
+            "period_days": days
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
         )

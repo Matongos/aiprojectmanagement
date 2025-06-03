@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from models.task import Task as TaskModel
 from models.task_stage import TaskStage
 from models.user import User
@@ -1186,3 +1186,101 @@ async def unfollow_task(
     db.commit()
 
     return {"message": "Successfully unfollowed task"}
+
+@router.get("/{task_id}/time-taken", response_model=Dict[str, Any])
+async def get_task_time_taken(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get the time taken by a task from start to completion.
+    Returns:
+    - time_taken_seconds: Total seconds from start to end
+    - time_taken_hours: Time taken in hours
+    - time_taken_days: Time taken in days
+    - time_taken_human: Human readable format
+    - start_date: When the task started
+    - end_date: When the task was completed
+    - is_completed: Whether the task is completed
+    - planned_hours: Originally planned hours
+    - time_accuracy: Ratio of actual time to planned time (>1 means took longer than planned)
+    """
+    try:
+        # Get task
+        task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Initialize response
+        response = {
+            "time_taken_seconds": 0,
+            "time_taken_hours": 0,
+            "time_taken_days": 0,
+            "time_taken_human": "Not started",
+            "start_date": task.start_date.replace(tzinfo=timezone.utc) if task.start_date else None,
+            "end_date": task.end_date.replace(tzinfo=timezone.utc) if task.end_date else None,
+            "is_completed": task.state == "DONE",
+            "planned_hours": task.planned_hours or 0,
+            "time_accuracy": 0
+        }
+
+        # Calculate time taken if task has started
+        if task.start_date:
+            # Ensure start_date is timezone-aware
+            start_time = task.start_date.replace(tzinfo=timezone.utc) if task.start_date.tzinfo is None else task.start_date
+            
+            # Get end time (either task end_date or current time)
+            if task.end_date:
+                end_time = task.end_date.replace(tzinfo=timezone.utc) if task.end_date.tzinfo is None else task.end_date
+            else:
+                end_time = datetime.now(timezone.utc)
+            
+            # Calculate time delta
+            time_delta = end_time - start_time
+            
+            # Calculate different time formats
+            seconds = time_delta.total_seconds()
+            hours = seconds / 3600
+            days = seconds / (3600 * 24)
+
+            # Update response with calculations
+            response.update({
+                "time_taken_seconds": round(seconds, 2),
+                "time_taken_hours": round(hours, 2),
+                "time_taken_days": round(days, 2),
+                "time_taken_human": _format_time_delta(time_delta)
+            })
+
+            # Calculate time accuracy if planned hours exist
+            if task.planned_hours and task.planned_hours > 0:
+                response["time_accuracy"] = round(hours / task.planned_hours, 2)
+
+        return response
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()  # This will help with debugging
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating task time: {str(e)}"
+        )
+
+def _format_time_delta(delta):
+    """Format timedelta into human readable string"""
+    days = delta.days
+    hours = delta.seconds // 3600
+    minutes = (delta.seconds % 3600) // 60
+
+    parts = []
+    if days > 0:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours > 0:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes > 0:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+
+    if not parts:
+        return "Less than a minute"
+    
+    return ", ".join(parts)
