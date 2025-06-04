@@ -23,6 +23,8 @@ from services.analytics_service import AnalyticsService
 from services.metrics_service import MetricsService
 from models.user_metrics import UserProductivityMetrics
 from tasks.productivity_updater import update_user_productivity
+from services.complexity_service import ComplexityService
+from models.task_stage import TaskStage
 
 router = APIRouter(
     prefix="/analytics",
@@ -53,6 +55,16 @@ class CompletionTimeMetrics(BaseModel):
     tasksNearDeadline: int
     criticalInsights: List[str]
     warningInsights: List[str]
+
+# Add new schema for dependency analysis
+class DependencyExplanation(BaseModel):
+    task_name: str
+    score: int
+    reason: str
+
+class DependencyAnalysis(BaseModel):
+    final_score: float
+    explanations: List[DependencyExplanation]
 
 @router.get("/dashboard/completion-rate", response_model=Dict[str, Any])
 async def get_dashboard_completion_rate(
@@ -688,13 +700,17 @@ async def get_productivity_metrics(
         # Get completed tasks in period
         completed_tasks = db.query(Task).filter(
             Task.state == TaskState.DONE,
-            Task.updated_at >= start_date
+            Task.updated_at >= start_date,
+            Task.start_date.isnot(None),  # Ensure we have start date
+            Task.end_date.isnot(None)     # Ensure we have end date
         ).all()
         
         # Calculate metrics
         total_completed = len(completed_tasks)
+        
+        # Calculate total time based on start and end dates
         total_time = sum(
-            sum(entry.duration for entry in task.time_entries)
+            (task.end_date - task.start_date).total_seconds() / 3600  # Convert to hours
             for task in completed_tasks
         )
         
@@ -1122,4 +1138,381 @@ async def get_tasks_completion_times(
         raise HTTPException(
             status_code=500,
             detail=str(e)
+        )
+
+@router.get("/projects/{project_id}/progress", response_model=Dict[str, Any])
+async def get_project_progress(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get overall project progress based on tasks.
+    Uses weighted average based on task complexity and allocated time.
+    """
+    try:
+        # Get current time in UTC
+        now = datetime.now(timezone.utc)
+        
+        # Get project with tasks
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Ensure project dates are timezone-aware
+        if project.start_date and project.start_date.tzinfo is None:
+            project.start_date = project.start_date.replace(tzinfo=timezone.utc)
+        if project.end_date and project.end_date.tzinfo is None:
+            project.end_date = project.end_date.replace(tzinfo=timezone.utc)
+
+        # Get all tasks for the project
+        tasks = db.query(Task).filter(Task.project_id == project_id).all()
+        if not tasks:
+            return {
+                "overall_progress": 0,
+                "total_tasks": 0,
+                "completed_tasks": 0,
+                "tasks_progress": [],
+                "progress_by_stage": {},
+                "critical_path_progress": 0,
+                "blocked_tasks": 0,
+                "health_metrics": {
+                    "on_track": True,
+                    "at_risk": False,
+                    "behind_schedule": False
+                }
+            }
+
+        # Initialize complexity service
+        complexity_service = ComplexityService()
+        
+        # Calculate weighted progress for each task
+        weighted_progress = 0
+        total_weight = 0
+        completed_tasks = 0
+        blocked_tasks = 0
+        tasks_progress = []
+        
+        for task in tasks:
+            # Get task complexity
+            try:
+                complexity_analysis = await complexity_service.analyze_task_complexity(db, task.id)
+                complexity_score = complexity_analysis.total_score
+            except Exception as e:
+                print(f"Error getting complexity for task {task.id}: {str(e)}")
+                complexity_score = 50  # Default to medium complexity
+
+            # Calculate task weight based on complexity and planned hours
+            time_weight = task.planned_hours if task.planned_hours else 8  # Default to 8 hours
+            task_weight = (complexity_score / 100) * time_weight  # Normalize complexity to 0-1 and multiply by time
+
+            # Calculate weighted progress
+            task_progress = 100 if task.state == TaskState.DONE else task.progress
+            weighted_progress += task_progress * task_weight
+            total_weight += task_weight
+
+            if task.state == TaskState.DONE:
+                completed_tasks += 1
+                
+            # Check if task is blocked
+            is_blocked = False
+            if task.depends_on:
+                incomplete_deps = [dep for dep in task.depends_on if dep.state != TaskState.DONE]
+                if incomplete_deps:
+                    blocked_tasks += 1
+                    is_blocked = True
+                    
+            # Get task stage name
+            stage_name = task.stage.name if task.stage else "No Stage"
+            
+            # Add task progress details
+            tasks_progress.append({
+                "task_id": task.id,
+                "name": task.name,
+                "progress": task_progress,
+                "state": task.state,
+                "priority": task.priority,
+                "stage": stage_name,
+                "is_blocked": is_blocked,
+                "complexity_score": complexity_score,
+                "planned_hours": time_weight,
+                "weight": round(task_weight, 2),
+                "assignee": {
+                    "id": task.assignee.id,
+                    "name": task.assignee.full_name
+                } if task.assignee else None
+            })
+                    
+        # Calculate overall progress
+        overall_progress = weighted_progress / total_weight if total_weight > 0 else 0
+        
+        # Get progress by stage
+        stages = db.query(TaskStage).filter(TaskStage.project_id == project_id).all()
+        progress_by_stage = {}
+        
+        for stage in stages:
+            stage_tasks = [t for t in tasks if t.stage_id == stage.id]
+            if stage_tasks:
+                # Calculate weighted progress for stage
+                stage_weighted_progress = 0
+                stage_total_weight = 0
+                for task in stage_tasks:
+                    task_data = next((t for t in tasks_progress if t["task_id"] == task.id), None)
+                    if task_data:
+                        stage_weighted_progress += task_data["progress"] * task_data["weight"]
+                        stage_total_weight += task_data["weight"]
+                
+                stage_progress = stage_weighted_progress / stage_total_weight if stage_total_weight > 0 else 0
+                progress_by_stage[stage.name] = {
+                    "progress": round(stage_progress, 2),
+                    "tasks_count": len(stage_tasks),
+                    "completed_tasks": len([t for t in stage_tasks if t.state == TaskState.DONE]),
+                    "total_weight": round(stage_total_weight, 2)
+                }
+            else:
+                progress_by_stage[stage.name] = {
+                    "progress": 0,
+                    "tasks_count": 0,
+                    "completed_tasks": 0,
+                    "total_weight": 0
+                }
+                
+        # Calculate critical path progress
+        critical_tasks = []
+        for task in tasks:
+            if task.depends_on or any(t.depends_on for t in tasks if task in t.depends_on):
+                critical_tasks.append(task)
+                
+        if critical_tasks:
+            critical_weighted_progress = 0
+            critical_total_weight = 0
+            for task in critical_tasks:
+                task_data = next((t for t in tasks_progress if t["task_id"] == task.id), None)
+                if task_data:
+                    critical_weighted_progress += task_data["progress"] * task_data["weight"]
+                    critical_total_weight += task_data["weight"]
+            
+            critical_path_progress = critical_weighted_progress / critical_total_weight if critical_total_weight > 0 else 0
+        else:
+            critical_path_progress = overall_progress
+        
+        # Sort tasks_progress by weight and progress
+        tasks_progress.sort(key=lambda x: (x["weight"], -x["progress"]), reverse=True)
+        
+        # Calculate health metrics
+        is_behind_schedule = False
+        if project.start_date:
+            days_since_start = (now - project.start_date).days
+            is_behind_schedule = overall_progress < 50 and days_since_start > 7
+
+        is_at_risk = blocked_tasks > 0 or (project.end_date and project.end_date < now)
+        
+        return {
+            "overall_progress": round(overall_progress, 2),
+            "total_tasks": len(tasks),
+            "completed_tasks": completed_tasks,
+            "tasks_progress": tasks_progress,
+            "progress_by_stage": progress_by_stage,
+            "critical_path_progress": round(critical_path_progress, 2),
+            "blocked_tasks": blocked_tasks,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
+            "health_metrics": {
+                "on_track": blocked_tasks == 0 and overall_progress >= 50,
+                "at_risk": is_at_risk,
+                "behind_schedule": is_behind_schedule
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch project progress: {str(e)}"
+        )
+
+@router.get("/tasks/{task_id}/dependency-analysis", response_model=DependencyAnalysis)
+async def analyze_task_dependencies(
+    task_id: int,
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Analyze task dependencies within a specific project.
+    Algorithm:
+    1. Verify project exists and user has access
+    2. Get target task and verify it's in the project
+    3. Get all active tasks in the same project
+    4. Analyze dependencies using Mistral AI
+    """
+    try:
+        print(f"\n=== Starting Dependency Analysis ===")
+        print(f"Analyzing task {task_id} in project {project_id}")
+
+        # 1. First verify project exists and user has access
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            print(f"Project {project_id} not found")
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found"
+            )
+
+        print(f"Found project: {project.name}")
+
+        # Check user has access to project if not superuser
+        if not current_user.get("is_superuser"):
+            has_access = db.query(Project).join(
+                Project.members
+            ).filter(
+                Project.id == project_id,
+                Project.members.any(user_id=current_user["id"])
+            ).first() is not None
+            
+            if not has_access:
+                print(f"User {current_user['id']} does not have access to project {project_id}")
+                raise HTTPException(
+                    status_code=403,
+                    detail="No access to this project"
+                )
+
+        # 2. Get target task and verify it belongs to this project
+        target_task = db.query(Task).filter(
+            Task.id == task_id,
+            Task.project_id == project_id  # Explicitly check project
+        ).first()
+        
+        if not target_task:
+            print(f"Task {task_id} not found in project {project_id}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Task {task_id} not found in project {project_id}"
+            )
+
+        print(f"Found target task: {target_task.name} (State: {target_task.state})")
+
+        # Get ALL tasks in project first (for debugging)
+        all_project_tasks = db.query(Task).filter(
+            Task.project_id == project_id,
+            Task.id != task_id
+        ).all()
+
+        print(f"\nAll tasks in project (excluding target):")
+        for t in all_project_tasks:
+            print(f"- Task {t.id}: {t.name} (State: {t.state})")
+
+        # 3. Get all active tasks in the same project (excluding target task)
+        active_tasks = db.query(Task).filter(
+            Task.project_id == project_id,  # Filter by project first
+            Task.id != task_id,  # Exclude target task
+            Task.state.in_(['in_progress', 'approved', 'changes_requested'])
+        ).all()
+
+        print(f"\nActive tasks found: {len(active_tasks)}")
+        if active_tasks:
+            print("Active tasks:")
+            for t in active_tasks:
+                print(f"- Task {t.id}: {t.name} (State: {t.state})")
+        else:
+            print("States of all tasks in project:")
+            task_states = db.query(Task.state, func.count(Task.id)).filter(
+                Task.project_id == project_id
+            ).group_by(Task.state).all()
+            for state, count in task_states:
+                print(f"- {state}: {count} tasks")
+
+            return DependencyAnalysis(
+                final_score=0.0,
+                explanations=[]
+            )
+
+        # 4. Analyze each active task using Mistral
+        client = get_ollama_client()
+        explanations = []
+        total_score = 0
+
+        for task in active_tasks:
+            # Prepare AI input
+            analysis_input = {
+                "target_task": {
+                    "name": target_task.name,
+                    "description": target_task.description or "",
+                    "project": project.name  # Include project context
+                },
+                "candidate_task": {
+                    "name": task.name,
+                    "description": task.description or "",
+                    "project": project.name  # Include project context
+                }
+            }
+
+            # Create AI prompt with project context
+            prompt = f"""Given the following two tasks in project "{project.name}":
+
+Task under evaluation: "{analysis_input['target_task']['name']}"
+Description: "{analysis_input['target_task']['description']}"
+
+Candidate task: "{analysis_input['candidate_task']['name']}"
+Description: "{analysis_input['candidate_task']['description']}"
+
+Does the candidate task logically depend on the evaluated task within the context of project "{project.name}"?
+Respond in JSON format with three fields:
+- depends: true/false
+- reasoning: 1-2 sentence explanation
+- score: 0-100 (where 0 means not dependent, 100 means strongly dependent)
+
+Example response:
+{{
+    "depends": true,
+    "reasoning": "Task A cannot proceed without Task B's backend logic.",
+    "score": 90
+}}
+
+Return ONLY valid JSON."""
+
+            # Get AI analysis
+            try:
+                response = await client.generate(
+                    model="mistral",
+                    prompt=prompt,
+                    max_tokens=200,
+                    temperature=0.1
+                )
+                
+                # Parse response
+                analysis_text = response.response if hasattr(response, 'response') else str(response)
+                analysis = json.loads(analysis_text)
+
+                # Add to results
+                score = int(analysis.get('score', 0))
+                total_score += score
+                
+                explanations.append(DependencyExplanation(
+                    task_name=task.name,
+                    score=score,
+                    reason=analysis.get('reasoning', 'No reasoning provided')
+                ))
+
+            except Exception as e:
+                print(f"Error analyzing task {task.id}: {str(e)}")
+                continue
+
+        # 5. Calculate final score
+        if explanations:
+            # Scale the average score down to 0-10 range
+            final_score = round((total_score / len(explanations)) / 10, 2)
+        else:
+            final_score = 0.0
+
+        # 6. Return results
+        return DependencyAnalysis(
+            final_score=final_score,
+            explanations=sorted(explanations, key=lambda x: x.score, reverse=True)
+        )
+
+    except Exception as e:
+        print(f"Error in dependency analysis: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error analyzing task dependencies: {str(e)}"
         )

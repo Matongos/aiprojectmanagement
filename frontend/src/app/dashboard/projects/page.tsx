@@ -44,6 +44,7 @@ interface Project {
   members: { id: number; user: { profile_image_url?: string; name: string } }[];
   creator_id?: number;
   has_user_tasks?: boolean;
+  progress: number;
 }
 
 const statusConfig: Record<ProjectStatus | 'default', { label: string; color: string; description: string }> = {
@@ -60,6 +61,30 @@ const stageConfig: Record<NonNullable<ProjectStage>, { label: string; color: str
   'in_progress': { label: 'In Progress', color: 'bg-blue-500' },
   'done': { label: 'Done', color: 'bg-green-500' },
   'cancelled': { label: 'Cancelled', color: 'bg-red-500' }
+};
+
+const ProgressIndicator = ({ progress }: { progress: number }) => {
+  const getProgressColor = (value: number) => {
+    if (value >= 80) return 'text-green-600 bg-green-50';
+    if (value >= 50) return 'text-blue-600 bg-blue-50';
+    if (value >= 30) return 'text-yellow-600 bg-yellow-50';
+    return 'text-gray-600 bg-gray-50';
+  };
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger>
+          <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${getProgressColor(progress)}`}>
+            {Math.round(progress)}%
+          </div>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Project Progress: {Math.round(progress)}%</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 };
 
 export default function ProjectsPage() {
@@ -545,6 +570,7 @@ function ProjectsContent() {
                         </TooltipProvider>
                       </div>
                     )}
+                    <ProgressIndicator progress={project.progress || 0} />
                     <span className={`text-sm ${projectAccess ? 'text-gray-600' : 'text-gray-400'}`}>
                       {project.task_count || 0} Tasks
                     </span>

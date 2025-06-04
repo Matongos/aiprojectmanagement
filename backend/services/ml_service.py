@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -74,7 +74,7 @@ class MLService:
             return 0.0
             
         # Get user's completed tasks in last 90 days
-        ninety_days_ago = datetime.utcnow() - timedelta(days=90)
+        ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
         completed_tasks = self.db.query(Task).filter(
             Task.assigned_to == task.assignee.id,
             Task.state == 'done',
@@ -89,11 +89,13 @@ class MLService:
             ).first()
             
             if project_member and project_member.role:
+                # Convert ProjectRole enum to string using to_string method
+                role_str = project_member.role.to_string()
                 role_multiplier = {
-                    'senior': 1.2,
-                    'lead': 1.3,
-                    'manager': 1.1
-                }.get(project_member.role.lower(), 1.0)
+                    'manager': 1.3,
+                    'member': 1.0,
+                    'viewer': 0.8
+                }.get(role_str, 1.0)
                 
                 return min((completed_tasks * 0.1) * role_multiplier, 1.0)
         
@@ -119,7 +121,10 @@ class MLService:
             similarity = len(keywords & similar_keywords) / len(keywords | similar_keywords)
             
             if similarity > 0.3 and similar_task.start_date and similar_task.end_date:
-                hours = (similar_task.end_date - similar_task.start_date).total_seconds() / 3600
+                # Ensure both dates are timezone-aware
+                start_date = similar_task.start_date.replace(tzinfo=timezone.utc) if similar_task.start_date.tzinfo is None else similar_task.start_date
+                end_date = similar_task.end_date.replace(tzinfo=timezone.utc) if similar_task.end_date.tzinfo is None else similar_task.end_date
+                hours = (end_date - start_date).total_seconds() / 3600
                 completion_times.append(hours)
                 
         return sum(completion_times) / len(completion_times) if completion_times else 0.0
@@ -138,15 +143,18 @@ class MLService:
         completion_rate = completed_tasks / total_tasks
         
         # Calculate deadline adherence
+        now = datetime.now(timezone.utc)
         overdue_tasks = len([t for t in project.tasks 
-                           if t.deadline and t.deadline < datetime.utcnow() and t.state != 'done'])
+                           if t.deadline and 
+                           (t.deadline.replace(tzinfo=timezone.utc) if t.deadline.tzinfo is None else t.deadline) < now 
+                           and t.state != 'done'])
         deadline_score = 1.0 - (overdue_tasks / total_tasks if total_tasks > 0 else 0)
         
         # Team velocity
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = now - timedelta(days=30)
         recent_completed = len([t for t in project.tasks 
                               if t.state == 'done' and t.end_date 
-                              and t.end_date >= thirty_days_ago])
+                              and (t.end_date.replace(tzinfo=timezone.utc) if t.end_date.tzinfo is None else t.end_date) >= thirty_days_ago])
         velocity_score = min(recent_completed / 10.0, 1.0)  # Normalize to 0-1
         
         # Combine scores with weights
@@ -198,7 +206,7 @@ class MLService:
         
         if model_record and model_record.last_trained:
             # Check if model is recent (trained within last 7 days)
-            if model_record.last_trained >= datetime.utcnow() - timedelta(days=7):
+            if model_record.last_trained >= datetime.now(timezone.utc) - timedelta(days=7):
                 return joblib.load(f'models/completion_time_{model_record.model_version}.joblib')
         
         # Train new model
@@ -222,7 +230,10 @@ class MLService:
         
         for task in completed_tasks:
             features = self._prepare_task_features(task)
-            actual_hours = (task.end_date - task.start_date).total_seconds() / 3600
+            # Ensure both dates are timezone-aware
+            start_date = task.start_date.replace(tzinfo=timezone.utc) if task.start_date.tzinfo is None else task.start_date
+            end_date = task.end_date.replace(tzinfo=timezone.utc) if task.end_date.tzinfo is None else task.end_date
+            actual_hours = (end_date - start_date).total_seconds() / 3600
             
             X.append(list(features.values()))
             y.append(actual_hours)
@@ -247,7 +258,7 @@ class MLService:
         mse = mean_squared_error(y_test, y_pred)
         
         # Save model
-        version = datetime.utcnow().strftime('%Y%m%d_%H%M')
+        version = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')
         model_path = f'models/completion_time_{version}.joblib'
         joblib.dump(model, model_path)
         
@@ -270,7 +281,7 @@ class MLService:
                  "team_experience", "similar_tasks", "project_health"],
                 model.feature_importances_.tolist()
             )),
-            last_trained=datetime.utcnow(),
+            last_trained=datetime.now(timezone.utc),
             is_active=True
         )
         self.db.add(model_record)
@@ -304,10 +315,10 @@ class MLService:
             raise ValueError(f"Project {project_id} not found")
             
         # Calculate current period metrics
-        current_period = datetime.utcnow().strftime('%Y-%m')
+        current_period = datetime.now(timezone.utc).strftime('%Y-%m')
         
         # Get team velocity
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
         completed_tasks = len([t for t in project.tasks 
                              if t.state == 'done' 
                              and t.end_date 

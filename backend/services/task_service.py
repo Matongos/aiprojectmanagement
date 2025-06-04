@@ -119,6 +119,42 @@ class TaskService:
 
         return task
 
+    def _calculate_stage_based_progress(self, db: Session, task: Task) -> float:
+        """Calculate task progress based on current stage and total stages"""
+        # If task is done, return 100% regardless of stage
+        if task.state == TaskState.DONE:
+            return 100.0
+            
+        # Get all stages for the project ordered by sequence
+        if not task.project_id:
+            return 0.0
+            
+        stages = (
+            db.query(TaskStage)
+            .filter(TaskStage.project_id == task.project_id)
+            .order_by(TaskStage.sequence)
+            .all()
+        )
+        
+        if not stages:
+            return 0.0
+            
+        # Find current stage position
+        current_stage_index = next(
+            (i for i, stage in enumerate(stages) if stage.id == task.stage_id),
+            -1
+        )
+        
+        if current_stage_index == -1:
+            return 0.0
+            
+        # Calculate progress based on stage position
+        # We use 95 as max progress (instead of 100) to reserve 100% for DONE state
+        total_stages = len(stages)
+        stage_progress = (current_stage_index + 1) / total_stages * 95
+        
+        return round(stage_progress, 2)
+
     def update_task_state(self, db: Session, task: Task, new_state: str, current_user_id: int) -> Task:
         """Update task state and handle completion status"""
         # Check project permissions
@@ -154,7 +190,8 @@ class TaskService:
         elif task.state == TaskState.DONE and new_state != TaskState.DONE:
             # Handle un-completion
             task.end_date = None
-            task.progress = 0.0
+            # Recalculate progress based on stage
+            task.progress = self._calculate_stage_based_progress(db, task)
             
             # Trigger productivity update for task assignee
             if task.assigned_to:
@@ -198,6 +235,9 @@ class TaskService:
             task.state = TaskState.DONE
             task.end_date = datetime.utcnow()
             task.progress = 100.0
+        else:
+            # Calculate new progress based on stage position
+            task.progress = self._calculate_stage_based_progress(db, task)
         
         db.commit()
         db.refresh(task)
