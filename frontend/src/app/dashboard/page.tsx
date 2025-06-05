@@ -112,17 +112,25 @@ interface TaskTrendResponse {
   completed_tasks: TaskTrendItem[];
 }
 
+interface Task {
+  id: number;
+  name: string;
+  priority: string;
+  priority_score: number;
+  deadline?: string;
+  state: string;
+  assignee?: {
+    full_name: string;
+    profile_image_url: string | null;
+  };
+}
+
 export default function DashboardPage() {
   const { user, token } = useAuthStore();
   const { metrics, loading, error, fetchMetrics } = useDashboardStore();
   const [date, setDate] = useState<Date>(new Date());
   const [projects, setProjects] = useState<Project[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<string>("");
-  const [urgentTasks] = useState([
-    { id: '1', title: 'Finish monthly reporting', due_date: new Date().toISOString() },
-    { id: '2', title: 'Report signing', due_date: new Date().toISOString() },
-    { id: '3', title: 'Market overview keynote', due_date: new Date().toISOString() },
-  ]);
   const [teamMembers] = useState([
     { id: '1', name: 'Dana R.', role: 'Project Manager', avatar: '/default-avatar.png' },
     { id: '2', name: 'Peter McCloud', role: 'Team Lead', avatar: '/default-avatar.png' },
@@ -258,6 +266,30 @@ export default function DashboardPage() {
 
       if (!response.ok) {
         throw new Error('Failed to fetch task trend data');
+      }
+
+      return response.json();
+    },
+    enabled: !!token,
+  });
+
+  // Add query for prioritized tasks
+  const { data: prioritizedTasks, isLoading: isLoadingPrioritizedTasks } = useQuery<Task[]>({
+    queryKey: ["prioritized-tasks"],
+    queryFn: async () => {
+      if (!token) {
+        throw new Error("Authentication token is missing");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/task-priority/tasks?limit=3`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch prioritized tasks');
       }
 
       return response.json();
@@ -579,12 +611,38 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {urgentTasks.map((task) => (
-                  <div key={task.id} className="flex items-center justify-between">
-                    <p className="text-sm">{task.title}</p>
-                    <span className="text-xs text-red-500">Today</span>
+                {isLoadingPrioritizedTasks ? (
+                  <div className="flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                   </div>
-                ))}
+                ) : prioritizedTasks && prioritizedTasks.length > 0 ? (
+                  prioritizedTasks.map((task) => (
+                    <div key={task.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-lg">
+                      <div className="flex flex-col">
+                        <p className="text-sm font-medium">{task.name}</p>
+                        {task.assignee && (
+                          <p className="text-xs text-gray-500">
+                            Assigned to: {task.assignee.full_name}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <span className="text-xs text-red-500">
+                          {task.deadline ? new Date(task.deadline).toLocaleDateString() : 'No deadline'}
+                        </span>
+                        <span className={`text-xs px-2 py-1 rounded-full ${
+                          task.priority === 'urgent' ? 'bg-red-100 text-red-700' :
+                          task.priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>
+                          {task.priority}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500 text-center">No urgent tasks</p>
+                )}
               </div>
             </CardContent>
           </Card>
