@@ -19,6 +19,8 @@ from passlib.context import CryptContext
 import asyncio
 from workers.task_scheduler import start_scheduler
 from workers.metrics_worker import start_metrics_worker
+from services.scheduler_service import scheduler_service
+import logging
 
 # Create bcrypt context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -26,6 +28,10 @@ print("Successfully initialized bcrypt CryptContext")
 
 # Create database tables
 print(f"Created direct database engine with URL: {str(engine.url)}")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -220,6 +226,21 @@ async def startup_event():
     from services.weather_cache_service import get_weather_cache_service
     weather_cache = get_weather_cache_service()
     asyncio.create_task(weather_cache.start_weather_update_loop())
+    # Start the scheduler when the application starts
+    try:
+        await scheduler_service.start()
+        logger.info("Task priority scheduler started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start task priority scheduler: {str(e)}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the scheduler when the application shuts down"""
+    try:
+        await scheduler_service.stop()
+        logger.info("Task priority scheduler stopped successfully")
+    except Exception as e:
+        logger.error(f"Failed to stop task priority scheduler: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

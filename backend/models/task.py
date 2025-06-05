@@ -63,6 +63,7 @@ class Task(Base):
     name = Column(String, nullable=False)  # Task name (not title)
     description = Column(Text, nullable=True)
     priority = Column(String(50), default='normal')
+    priority_source = Column(String(50), default='auto')  # Values: 'auto', 'manual', 'rule', 'ai'
     state = Column(String(50), default=TaskState.TODO)
     task_type = Column(String(50), nullable=True, default=TaskType.OTHER.value)  # Using String instead of Enum
     
@@ -291,3 +292,9 @@ class Task(Base):
                 child.milestone_id = milestone_id
         
         db_session.flush()  # Ensure changes are visible within the session 
+
+    def update_priority(self, new_priority: str, source: str = 'manual'):
+        """Update task priority and its source"""
+        self.priority = new_priority
+        self.priority_source = source
+        self.update_metrics() 
