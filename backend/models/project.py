@@ -100,6 +100,7 @@ class Project(Base):
     color = Column(String, nullable=False, default="#3498db")
     is_template = Column(Boolean, nullable=False, default=False)
     progress = Column(Float, default=0.0, comment='Project progress percentage')
+    urgency_score = Column(Float, default=0.5, comment='Project urgency score between 0 and 1')
     allow_milestones = Column(Boolean, nullable=False, default=True, comment='Whether milestones are enabled for this project')
     created_at = Column(DateTime(timezone=True), server_default=text('now()'))
     updated_at = Column(DateTime(timezone=True), onupdate=text('now()'))

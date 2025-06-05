@@ -105,6 +105,9 @@ class Task(TaskBase):
     created_at: datetime
     updated_at: Optional[datetime]
     date_last_stage_update: Optional[datetime] = None
+    priority_source: Optional[str] = Field(default="auto", description="Source of the priority (auto/manual/rule/ai)")
+    priority_score: Optional[float] = Field(default=0.0, description="Priority score from 0.0 to 1.0")
+    priority_reasoning: Optional[List[str]] = Field(default_factory=list, description="List of reasons for the priority")
     depends_on_ids: List[int] = []
     subtask_ids: List[int] = []
     attachments: Optional[List[FileAttachment]] = None
@@ -158,60 +161,22 @@ class Task(TaskBase):
         return d
 
 class TaskResponse(BaseModel):
-    """Response model for tasks with simplified fields"""
     id: int
     name: str
-    description: Optional[str] = ""
-    priority: TaskPriority
-    state: TaskState
-    project_id: int
-    stage_id: int
-    assigned_to: Optional[int] = None
-    assignee: Optional[UserBase] = None  # Changed to use UserBase model
-    milestone_id: Optional[int] = None
-    milestone: Optional[MilestoneResponse] = None
+    description: Optional[str] = None
+    state: str
+    priority: str
+    priority_score: float = Field(default=0.0)
+    priority_reasoning: List[str] = Field(default_factory=list)
     deadline: Optional[datetime] = None
-    progress: Optional[float] = 0.0
     created_at: datetime
     updated_at: Optional[datetime] = None
-    is_active: bool = Field(default=True, description="Whether task is active")
+    project_id: int
+    assigned_to: Optional[int] = None
+    created_by: int
 
     class Config:
         from_attributes = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat() if v else None
-        }
-
-    def dict(self, *args, **kwargs):
-        """Override dict method to properly handle serialization"""
-        d = super().dict(*args, **kwargs)
-        if self.assignee:
-            d['assignee'] = {
-                'id': self.assignee.id,
-                'username': self.assignee.username,
-                'email': self.assignee.email,
-                'full_name': self.assignee.full_name,
-                'profile_image_url': self.assignee.profile_image_url
-            }
-        if self.milestone:
-            d['milestone'] = {
-                'id': self.milestone.id,
-                'name': self.milestone.name,
-                'description': self.milestone.description,
-                'due_date': self.milestone.due_date.isoformat() if self.milestone.due_date else None,
-                'is_completed': self.milestone.is_completed,
-                'is_active': self.milestone.is_active,
-                'project_id': self.milestone.project_id,
-                'created_at': self.milestone.created_at.isoformat() if self.milestone.created_at else None,
-                'created_by': self.milestone.created_by,
-                'updated_at': self.milestone.updated_at.isoformat() if self.milestone.updated_at else None
-            }
-        return d
-
-    @property
-    def progress_value(self) -> float:
-        """Ensure progress is always a valid float"""
-        return self.progress if self.progress is not None else 0.0
 
 class TaskStageWithTasks(TaskStage):
     """Task stage schema that includes the tasks in the stage"""

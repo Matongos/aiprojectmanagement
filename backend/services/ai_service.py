@@ -4,6 +4,7 @@ from sqlalchemy import func, and_
 from datetime import datetime, timezone, timedelta
 import json
 from zoneinfo import ZoneInfo
+import logging
 
 from services.ollama_service import get_ollama_client
 from services.vector_service import VectorService
@@ -14,6 +15,8 @@ from models.time_entry import TimeEntry
 from models.user import User
 from models.activity import Activity
 from schemas.task import TaskState
+
+logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self, db: Session):
@@ -1069,6 +1072,291 @@ class AIService:
                 "recommendations": ["Verify weather conditions manually"],
                 "forecast": None
             }
+
+    async def analyze_task_urgency(self, task_id: int, context: Dict) -> Dict:
+        """
+        Analyze task urgency using AI to determine relative importance and suggested order.
+        Returns detailed analysis including urgency score, impact score, and reasoning.
+        """
+        try:
+            # Prepare prompt for AI
+            prompt = self._create_urgency_analysis_prompt(context)
+            
+            # Get AI response
+            response = await self._get_ai_response(prompt)
+            
+            # Parse and validate response
+            analysis = self._parse_urgency_analysis(response)
+            
+            return {
+                "task_id": task_id,
+                "urgency_score": analysis.get("urgency_score", 0.5),
+                "impact_score": analysis.get("impact_score", 0.5),
+                "reasoning": analysis.get("reasoning", []),
+                "suggested_order": analysis.get("suggested_order", 0)
+            }
+        except Exception as e:
+            logger.error(f"Error in AI task urgency analysis: {str(e)}")
+            return {
+                "urgency_score": 0.5,
+                "impact_score": 0.5,
+                "reasoning": ["Failed to get AI analysis"],
+                "suggested_order": 0
+            }
+
+    def _create_urgency_analysis_prompt(self, context: Dict) -> str:
+        """Create a detailed prompt for task urgency analysis"""
+        deadline_str = context["deadline"].isoformat() if context["deadline"] else "No deadline"
+        dependencies_str = "\n".join([f"- {dep['name']} ({dep['state']})" for dep in context["dependencies"]])
+        blocking_tasks_str = "\n".join([f"- {dep['name']} ({dep['state']})" for dep in context["dependent_tasks"]])
+        
+        return f"""
+        Analyze the following task and provide urgency scores and reasoning:
+
+        Task Description: {context["description"]}
+        Deadline: {deadline_str}
+        Complexity Score: {context["complexity_score"]}
+        Project Urgency: {context["project_urgency"]}
+        
+        Dependencies:
+        {dependencies_str or "None"}
+        
+        Blocking Tasks:
+        {blocking_tasks_str or "None"}
+        
+        Created: {context["created_at"]}
+        Last Updated: {context["last_updated"]}
+        State: {context["state"]}
+
+        Please analyze this task and provide:
+        1. Urgency score (0-1)
+        2. Impact score (0-1)
+        3. Reasoning for the scores
+        4. Suggested processing order
+        
+        Consider factors like:
+        - Deadline proximity
+        - Number of dependent tasks
+        - Task complexity
+        - Project urgency
+        - Dependencies status
+        """
+
+    def _parse_urgency_analysis(self, response: str) -> Dict:
+        """Parse AI response into structured analysis"""
+        try:
+            # Add your AI response parsing logic here
+            # This is a placeholder implementation
+            return {
+                "urgency_score": 0.8,  # Example score
+                "impact_score": 0.7,    # Example score
+                "reasoning": [
+                    "High number of dependent tasks",
+                    "Close to deadline",
+                    "Critical for project progress"
+                ],
+                "suggested_order": 1
+            }
+        except Exception as e:
+            logger.error(f"Error parsing AI response: {str(e)}")
+            return {
+                "urgency_score": 0.5,
+                "impact_score": 0.5,
+                "reasoning": ["Failed to parse AI analysis"],
+                "suggested_order": 0
+            }
+
+    async def analyze_content(
+        self,
+        content_type: str,
+        content: Dict[str, Any],
+        analysis_prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze content using AI and return structured results.
+        
+        Args:
+            content_type: Type of content being analyzed (e.g., 'task_priority')
+            content: Dictionary containing the content to analyze
+            analysis_prompt: Specific instructions for the analysis
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        try:
+            # For task priority analysis
+            if content_type == "task_priority":
+                return await self._analyze_task_priority(content)
+            
+            # Default fallback analysis
+            return {
+                "score": 50.0,
+                "score_breakdown": {
+                    "content_score": 20.0,
+                    "priority_level_score": 15.0,
+                    "reasoning_score": 10.0,
+                    "characteristics_score": 5.0
+                },
+                "explanation": "Default analysis performed"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in AI content analysis: {str(e)}")
+            raise
+
+    async def _analyze_task_priority(self, content: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze task content for priority scoring.
+        
+        Args:
+            content: Dictionary containing task information
+            
+        Returns:
+            Dictionary containing score and breakdown
+        """
+        try:
+            # Extract task information
+            task_name = content.get("task_name", "")
+            description = content.get("description", "")
+            priority_level = content.get("priority_level", "normal")
+            priority_reasoning = content.get("priority_reasoning", [])
+            deadline = content.get("deadline")
+            is_blocking = content.get("is_blocking", False)
+            
+            # Calculate content score (40%)
+            content_score = self._calculate_content_score(task_name, description)
+            
+            # Calculate priority level score (30%)
+            priority_score = self._calculate_priority_score(priority_level)
+            
+            # Calculate reasoning score (20%)
+            reasoning_score = self._calculate_reasoning_score(priority_reasoning)
+            
+            # Calculate characteristics score (10%)
+            characteristics_score = self._calculate_characteristics_score(
+                deadline=deadline,
+                is_blocking=is_blocking
+            )
+            
+            # Calculate total score
+            total_score = (
+                content_score +
+                priority_score +
+                reasoning_score +
+                characteristics_score
+            )
+            
+            return {
+                "score": total_score,
+                "score_breakdown": {
+                    "content_score": content_score,
+                    "priority_level_score": priority_score,
+                    "reasoning_score": reasoning_score,
+                    "characteristics_score": characteristics_score
+                },
+                "explanation": self._generate_explanation(
+                    content_score,
+                    priority_score,
+                    reasoning_score,
+                    characteristics_score,
+                    content
+                )
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in task priority analysis: {str(e)}")
+            raise
+
+    def _calculate_content_score(self, name: str, description: str) -> float:
+        """Calculate score based on task name and description (40% weight)"""
+        importance_keywords = {
+            'urgent': 10,
+            'critical': 10,
+            'important': 8,
+            'high priority': 8,
+            'asap': 7,
+            'deadline': 6,
+            'crucial': 6,
+            'essential': 5,
+            'significant': 5,
+            'key': 4
+        }
+        
+        content = f"{name} {description}".lower()
+        score = 0.0
+        
+        for keyword, weight in importance_keywords.items():
+            if keyword in content:
+                score += weight
+        
+        return min(score, 40.0)  # Cap at 40 as per weighting
+
+    def _calculate_priority_score(self, priority: str) -> float:
+        """Calculate score based on priority level (30% weight)"""
+        priority_scores = {
+            'urgent': 30.0,
+            'high': 22.5,
+            'normal': 15.0,
+            'low': 7.5
+        }
+        return priority_scores.get(priority.lower(), 15.0)
+
+    def _calculate_reasoning_score(self, reasoning: list) -> float:
+        """Calculate score based on priority reasoning (20% weight)"""
+        if not reasoning:
+            return 10.0
+        
+        # Score based on number and quality of reasons
+        base_score = min(len(reasoning) * 5, 20.0)
+        return base_score
+
+    def _calculate_characteristics_score(self, deadline: Optional[str], is_blocking: bool) -> float:
+        """Calculate score based on task characteristics (10% weight)"""
+        score = 0.0
+        
+        # Add points for having a deadline
+        if deadline:
+            score += 5.0
+            
+        # Add points for blocking status
+        if is_blocking:
+            score += 5.0
+            
+        return min(score, 10.0)
+
+    def _generate_explanation(
+        self,
+        content_score: float,
+        priority_score: float,
+        reasoning_score: float,
+        characteristics_score: float,
+        content: Dict[str, Any]
+    ) -> str:
+        """Generate human-readable explanation for the score"""
+        explanations = []
+        
+        if content_score > 30:
+            explanations.append("Task content indicates high importance")
+        elif content_score > 20:
+            explanations.append("Task content suggests moderate importance")
+            
+        if priority_score > 22.5:
+            explanations.append("High priority level")
+        elif priority_score > 15:
+            explanations.append("Moderate priority level")
+            
+        if reasoning_score > 15:
+            explanations.append("Well-justified priority with multiple reasons")
+        elif reasoning_score > 10:
+            explanations.append("Adequately justified priority")
+            
+        if characteristics_score > 7.5:
+            explanations.append("Critical task characteristics (blocking/deadline)")
+            
+        if not explanations:
+            return "Score based on standard task analysis"
+            
+        return ". ".join(explanations) + "."
 
 # Create a singleton instance
 _ai_service = None

@@ -22,6 +22,7 @@ from services.priority_service import PriorityService
 from models.project import Project
 from schemas.tag import Tag as TagSchema
 from services.permission_service import PermissionService
+from services.priority_scoring_service import PriorityScoringService
 
 router = APIRouter(
     prefix="/tasks",
@@ -279,6 +280,9 @@ async def read_task(
             "name": db_task.name,
             "description": db_task.description,
             "priority": db_task.priority,
+            "priority_source": db_task.priority_source,
+            "priority_score": db_task.priority_score,
+            "priority_reasoning": db_task.priority_reasoning or [],
             "state": db_task.state,
             "project_id": db_task.project_id,
             "stage_id": db_task.stage_id,
@@ -1310,8 +1314,15 @@ async def auto_set_task_priority(
         if result["priority_source"] != "MANUAL":
             task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
             if task:
+                # Update priority fields
                 task.priority = result["final_priority"]
                 task.priority_source = result["priority_source"]
+                task.priority_reasoning = result.get("reasoning", [])
+                
+                # Calculate priority score using dedicated scoring service
+                scoring_service = PriorityScoringService(db)
+                task.priority_score = await scoring_service.calculate_priority_score(task)
+                
                 db.commit()
         
         return result
@@ -1344,4 +1355,136 @@ async def update_all_priorities(
         raise HTTPException(
             status_code=500,
             detail=f"Error updating priorities: {str(e)}"
+        )
+
+@router.put("/{task_id}/calculate-priority-score")
+async def calculate_task_priority_score(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Calculate and store a priority score for a task using AI analysis.
+    This endpoint:
+    1. Forces recalculation of the priority score
+    2. Updates the score in the database
+    3. Returns the new score and its breakdown
+    
+    Returns:
+        Dict containing:
+        - score: float (0-100)
+        - score_breakdown: Dict of component scores
+        - explanation: String explaining the score
+        - status: Success/error message
+    """
+    try:
+        # Get the task
+        task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        # Verify required fields
+        missing_fields = []
+        if not task.name:
+            missing_fields.append("name")
+        if not task.description:
+            missing_fields.append("description")
+        if not task.priority:
+            missing_fields.append("priority level")
+            
+        if missing_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required fields for scoring: {', '.join(missing_fields)}"
+            )
+            
+        # Force recalculation of priority reasoning based on current task state
+        task.priority_reasoning = []
+            
+        # Add deadline-based reasoning
+        if task.deadline:
+            days_to_deadline = (task.deadline - datetime.now(timezone.utc)).days
+            if days_to_deadline < 0:
+                task.priority_reasoning.append(f"Task is overdue by {abs(days_to_deadline)} days")
+            elif days_to_deadline < 7:
+                task.priority_reasoning.append(f"Task deadline is in {days_to_deadline} days")
+        
+        # Add dependency-based reasoning
+        if hasattr(task, 'dependent_tasks') and task.dependent_tasks:
+            task.priority_reasoning.append(f"Task is blocking {len(task.dependent_tasks)} other tasks")
+        
+        # Add basic priority reasoning
+        task.priority_reasoning.append(f"Task priority level is set to {task.priority}")
+            
+        # Calculate score using dedicated service
+        scoring_service = PriorityScoringService(db)
+        
+        # Prepare context for AI analysis
+        context = {
+            "task_name": task.name,
+            "description": task.description or "",
+            "priority_level": task.priority,
+            "priority_reasoning": task.priority_reasoning,
+            "deadline": str(task.deadline) if task.deadline else None,
+            "state": task.state,
+            "is_blocking": len(task.dependent_tasks) > 0 if hasattr(task, 'dependent_tasks') else False
+        }
+        
+        # Force fresh analysis
+        analysis = await scoring_service.ai_service.analyze_content(
+            content_type="task_priority",
+            content=context,
+            analysis_prompt="""
+            Analyze this task and assign a priority score from 0 to 100 based on:
+            1. Task name and description importance (40% weight)
+            2. Current priority level (30% weight)
+            3. Priority reasoning validity (20% weight)
+            4. Task characteristics (10% weight)
+            
+            Return a JSON with:
+            {
+                "score": float,  # 0-100
+                "score_breakdown": {
+                    "content_score": float,  # 0-40
+                    "priority_level_score": float,  # 0-30
+                    "reasoning_score": float,  # 0-20
+                    "characteristics_score": float  # 0-10
+                },
+                "explanation": string
+            }
+            """
+        )
+        
+        # Calculate new score
+        new_score = float(analysis.get("score", 50.0))
+        new_score = min(max(new_score, 0.0), 100.0)  # Ensure score is between 0 and 100
+        
+        # Update the task with new score
+        task.priority_score = new_score
+        
+        # Invalidate any cached priority data
+        priority_service = PriorityService(db)
+        priority_service.invalidate_cache(task_id)
+        
+        # Commit changes to database
+        db.commit()
+        
+        # Prepare the response
+        response = {
+            "task_id": task.id,
+            "score": new_score,
+            "score_breakdown": analysis.get("score_breakdown", {}),
+            "explanation": analysis.get("explanation", "Score recalculated based on current task attributes"),
+            "status": "Success: Priority score recalculated and updated",
+            "priority_reasoning": task.priority_reasoning
+        }
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating priority score: {str(e)}"
         )

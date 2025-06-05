@@ -4,6 +4,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 from models.task import Task, TaskState
 from services.priority_service import PriorityService
+from services.priority_scoring_service import PriorityScoringService
 from services.notification_service import NotificationService
 from database import SessionLocal
 import logging
@@ -64,6 +65,7 @@ class SchedulerService:
                 
                 metrics["total_tasks"] = len(active_tasks)
                 priority_service = PriorityService(db)
+                scoring_service = PriorityScoringService(db)
                 
                 for task in active_tasks:
                     try:
@@ -81,6 +83,11 @@ class SchedulerService:
                         # Update task priority
                         task.priority = result["final_priority"]
                         task.priority_source = result["priority_source"]
+                        task.priority_reasoning = result.get("reasoning", [])
+                        
+                        # Calculate priority score using dedicated scoring service
+                        task.priority_score = await scoring_service.calculate_priority_score(task)
+                        
                         metrics["updated_tasks"] += 1
                         
                         # Track priority changes

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
-from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers, ai_router, weather, task_complexity
+from routers import auth, users, roles, projects, tasks, analytics, file_attachments, activities, comments, notifications, task_stages, stages, permissions, milestones, tags, log_notes, time_entries, messages, vectors, ai, websockets, followers, ai_router, weather, task_complexity, task_priority
 from database import engine, Base, create_tables
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -91,6 +91,7 @@ app.include_router(websockets.router)
 app.include_router(followers.router)
 app.include_router(weather.router)
 app.include_router(task_complexity.router)
+app.include_router(task_priority.router)
 
 # Add a simplified token endpoint
 @app.post("/token")

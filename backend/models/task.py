@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint, Enum as SQLEnum, JSON
 from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -8,6 +8,7 @@ from .task_stage import TaskStage
 from schemas.task import TaskState
 from .tag import task_tag  # Import the association table
 from .metrics import TaskMetrics
+from .ml_models import TaskPrediction  # Updated import
 
 class TaskType(str, enum.Enum):
     """Task type enumeration"""
@@ -64,6 +65,8 @@ class Task(Base):
     description = Column(Text, nullable=True)
     priority = Column(String(50), default='normal')
     priority_source = Column(String(50), default='auto')  # Values: 'auto', 'manual', 'rule', 'ai'
+    priority_score = Column(Float, default=0.0)  # Add priority score
+    priority_reasoning = Column(JSON, default=list)  # Add priority reasoning
     state = Column(String(50), default=TaskState.TODO)
     task_type = Column(String(50), nullable=True, default=TaskType.OTHER.value)  # Using String instead of Enum
     
@@ -297,4 +300,9 @@ class Task(Base):
         """Update task priority and its source"""
         self.priority = new_priority
         self.priority_source = source
-        self.update_metrics() 
+        self.update_metrics()
+        
+        # Invalidate priority cache
+        from services.priority_service import PriorityService
+        priority_service = PriorityService(self.db)
+        priority_service.invalidate_cache(self.id) 

@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     USE_CREDENTIALS: bool = True
     VALIDATE_CERTS: bool = True
     
+    # Redis settings
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
+    REDIS_URL: str = os.getenv(
+        "REDIS_URL",
+        f"redis://{':' + REDIS_PASSWORD + '@' if REDIS_PASSWORD else ''}{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+    )
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
@@ -51,7 +61,7 @@ class Settings(BaseSettings):
 
 
 @lru_cache()
-def get_settings():
+def get_settings() -> Settings:
     """Get application settings from cache."""
     return Settings()
 
