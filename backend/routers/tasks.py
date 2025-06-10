@@ -47,6 +47,10 @@ async def create_task(
         task_service = TaskService()
         created_task = task_service.create_task(db, task_data, current_user["id"])
 
+        # Calculate initial complexity
+        await created_task.update_metrics()
+        db.commit()
+        
         # Convert to dictionary and add additional fields
         task_dict = {
             "id": created_task.id,
@@ -67,6 +71,7 @@ async def create_task(
         
         return task_dict
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/", response_model=List[TaskSchema])

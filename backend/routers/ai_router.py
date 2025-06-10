@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, List
+from datetime import datetime, timedelta
 
 from database import get_db
 from services.ai_service import get_ai_service
 from models.task import Task
+from models.task_risk import TaskRisk
 
 router = APIRouter(
     prefix="/ai",
@@ -158,140 +160,7 @@ async def analyze_project_risks(
             detail=f"Error analyzing project risks: {str(e)}"
         )
 
-@router.get("/tasks/{task_id}/risk")
-async def analyze_task_risk_endpoint(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Analyze risk factors for a specific task.
-    
-    Returns comprehensive risk analysis including:
-    - Overall risk score
-    - Risk factors breakdown
-    - Role-skill match analysis
-    - Timeline analysis
-    - Dependency analysis
-    - Workload impact
-    - Recommendations
-    """
-    try:
-        ai_service = get_ai_service(db)
-        analysis = await ai_service.analyze_task_risk(task_id)
-        
-        if "error" in analysis:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Task {task_id} not found"
-            )
-            
-        return {
-            "task_id": task_id,
-            "risk_score": analysis.get("risk_score", 0),
-            "is_at_risk": analysis.get("at_risk", False),
-            "risk_factors": analysis.get("risk_factors", []),
-            "metrics": {
-                "time": analysis.get("metrics", {}).get("time", {}),
-                "role_match": analysis.get("metrics", {}).get("role_match", {}),
-                "dependencies": analysis.get("metrics", {}).get("dependencies", {}),
-                "workload": analysis.get("metrics", {}).get("workload", {}),
-                "activity": analysis.get("metrics", {}).get("activity", {}),
-                "sentiment": analysis.get("metrics", {}).get("sentiment", {})
-            },
-            "recommendations": analysis.get("recommendations", []),
-            "estimated_delay_days": analysis.get("estimated_delay_days", 0),
-            "updated_at": analysis.get("updated_at")
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing task risk: {str(e)}"
-        )
 
-@router.get("/tasks/{task_id}/risk/detailed")
-async def analyze_task_risk_detailed(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Get detailed risk analysis for a task with all raw metrics and calculations.
-    Useful for debugging or understanding how risk is calculated.
-    """
-    try:
-        ai_service = get_ai_service(db)
-        return await ai_service.analyze_task_risk(task_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing task risk: {str(e)}"
-        )
-
-@router.get("/tasks/{task_id}/analyze")
-async def analyze_task(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Perform comprehensive analysis of a task including:
-    - Task complexity
-    - Required skills
-    - Potential challenges
-    - Success factors
-    - Best practices
-    """
-    try:
-        ai_service = get_ai_service(db)
-        return await ai_service.analyze_task(task_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing task: {str(e)}"
-        )
-
-@router.get("/tasks/{task_id}/suggest-priority")
-async def suggest_task_priority(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Suggest task priority based on:
-    - Task urgency
-    - Dependencies
-    - Project timeline
-    - Business impact
-    - Resource availability
-    """
-    try:
-        ai_service = get_ai_service(db)
-        return await ai_service.suggest_task_priority(task_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error suggesting task priority: {str(e)}"
-        )
-
-@router.get("/tasks/{task_id}/estimate-time")
-async def estimate_task_time(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Estimate task completion time based on:
-    - Task complexity
-    - Historical data
-    - Resource availability
-    - Dependencies
-    - Similar tasks
-    """
-    try:
-        ai_service = get_ai_service(db)
-        return await ai_service.estimate_task_time(task_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error estimating task time: {str(e)}"
-        )
 
 @router.get("/projects/{project_id}/insights")
 async def generate_project_insights(
@@ -315,4 +184,61 @@ async def generate_project_insights(
         raise HTTPException(
             status_code=500,
             detail=f"Error generating project insights: {str(e)}"
+        )
+
+@router.get("/task/{task_id}/risk/history")
+async def get_task_risk_history(
+    task_id: int,
+    days: int = 7,  # Default to last 7 days
+    db: Session = Depends(get_db)
+) -> List[Dict]:
+    """
+    Get historical risk analysis data for a task.
+    
+    Parameters:
+    - task_id: The ID of the task
+    - days: Number of days of history to retrieve (default: 7)
+    
+    Returns a list of risk analyses ordered by date, including:
+    - Risk scores over time
+    - Risk levels
+    - Risk breakdowns (time sensitivity, complexity, priority)
+    - Risk factors at each point
+    - Recommendations history
+    """
+    try:
+        # Verify task exists
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Task {task_id} not found"
+            )
+            
+        # Get risk analyses for the specified time period
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        risk_analyses = db.query(TaskRisk).filter(
+            TaskRisk.task_id == task_id,
+            TaskRisk.created_at >= cutoff_date
+        ).order_by(TaskRisk.created_at.desc()).all()
+        
+        return [{
+            "task_id": analysis.task_id,
+            "risk_score": analysis.risk_score,
+            "risk_level": analysis.risk_level,
+            "risk_breakdown": {
+                "time_sensitivity": analysis.time_sensitivity,
+                "complexity": analysis.complexity,
+                "priority": analysis.priority
+            },
+            "risk_factors": analysis.risk_factors,
+            "recommendations": analysis.recommendations,
+            "metrics": analysis.metrics,
+            "created_at": analysis.created_at.isoformat()
+        } for analysis in risk_analyses]
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving risk history: {str(e)}"
         ) 

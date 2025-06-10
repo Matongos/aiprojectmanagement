@@ -108,6 +108,9 @@ class Task(TaskBase):
     priority_source: Optional[str] = Field(default="auto", description="Source of the priority (auto/manual/rule/ai)")
     priority_score: Optional[float] = Field(default=0.0, description="Priority score from 0.0 to 1.0")
     priority_reasoning: Optional[List[str]] = Field(default_factory=list, description="List of reasons for the priority")
+    complexity_score: Optional[float] = Field(default=0.0, description="Overall task complexity score")
+    complexity_factors: Optional[dict] = Field(default_factory=dict, description="Detailed breakdown of complexity factors")
+    complexity_last_updated: Optional[datetime] = Field(default=None, description="When complexity was last calculated")
     depends_on_ids: List[int] = []
     subtask_ids: List[int] = []
     attachments: Optional[List[FileAttachment]] = None
@@ -174,6 +177,9 @@ class TaskResponse(BaseModel):
     project_id: int
     assigned_to: Optional[int] = None
     created_by: int
+    complexity_score: Optional[float] = Field(default=0.0, description="Overall task complexity score")
+    complexity_factors: Optional[dict] = Field(default_factory=dict, description="Detailed breakdown of complexity factors")
+    complexity_last_updated: Optional[datetime] = Field(default=None, description="When complexity was last calculated")
 
     class Config:
         from_attributes = True

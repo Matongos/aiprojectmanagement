@@ -41,40 +41,7 @@ class ProjectInsight(BaseModel):
     resource_allocation: Dict[str, Any]
     performance_metrics: Dict[str, Any]
 
-@router.get("/tasks/{task_id}/analyze", response_model=TaskAnalysis)
-async def analyze_task(
-    task_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get AI analysis for a task"""
-    ai_service = get_ai_service(db)
-    analysis = await ai_service.analyze_task(task_id)
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return analysis
 
-@router.get("/tasks/{task_id}/suggest-priority")
-async def suggest_task_priority(
-    task_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get AI-suggested priority for a task"""
-    ai_service = get_ai_service(db)
-    priority = await ai_service.suggest_task_priority(task_id)
-    return {"priority": priority}
-
-@router.get("/tasks/{task_id}/estimate-time")
-async def estimate_task_time(
-    task_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get AI-estimated completion time for a task"""
-    ai_service = get_ai_service(db)
-    estimated_hours = await ai_service.estimate_completion_time(task_id)
-    return {"estimated_hours": estimated_hours}
 
 @router.get("/projects/{project_id}/risks", response_model=ProjectRiskAnalysis)
 async def analyze_project_risks(

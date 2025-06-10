@@ -149,9 +149,16 @@ class TaskService:
             return 0.0
             
         # Calculate progress based on stage position
-        # We use 95 as max progress (instead of 100) to reserve 100% for DONE state
+        # We use 98 as max progress (instead of 100) to reserve 100% for DONE state
         total_stages = len(stages)
-        stage_progress = (current_stage_index + 1) / total_stages * 95
+        stage_progress = ((current_stage_index + 1) / total_stages) * 98
+        
+        # If stage has auto_progress_percentage defined, use the higher value
+        current_stage = stages[current_stage_index]
+        if current_stage.auto_progress_percentage:
+            stage_progress = max(stage_progress, current_stage.auto_progress_percentage)
+            if stage_progress > 98:  # Cap at 98% for non-DONE tasks
+                stage_progress = 98
         
         return round(stage_progress, 2)
 
@@ -181,7 +188,7 @@ class TaskService:
             if not task.start_date:
                 task.start_date = task.created_at or datetime.utcnow()
             task.end_date = datetime.utcnow()
-            task.progress = 100.0
+            task.progress = 100.0  # Always set to 100% when done
             
             # Trigger productivity update for task assignee
             if task.assigned_to:
@@ -423,7 +430,7 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     SELECT 
         t.id, t.name, t.description, t.state, t.priority, t.deadline,
         t.planned_hours, t.created_by, t.assigned_to, t.project_id,
-        t.created_at, t.updated_at,
+        t.created_at, t.updated_at, t.progress, t.stage_id,
         array_agg(DISTINCT jsonb_build_object(
             'id', tg.id,
             'name', tg.name,
@@ -436,7 +443,7 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
     WHERE t.id = :task_id
     GROUP BY t.id, t.name, t.description, t.state, t.priority, t.deadline,
              t.planned_hours, t.created_by, t.assigned_to, t.project_id,
-             t.created_at, t.updated_at
+             t.created_at, t.updated_at, t.progress, t.stage_id
     """)
     
     result = db.execute(query, {"task_id": task_id}).fetchone()
@@ -457,7 +464,9 @@ def get_task_by_id(db: Session, task_id: int) -> Dict[str, Any]:
         "project_id": result[9],
         "created_at": result[10],
         "updated_at": result[11],
-        "tags": result[12] if result[12] else []
+        "progress": result[12] if result[12] is not None else 0.0,
+        "stage_id": result[13],
+        "tags": result[14] if result[14] else []
     }
     
     return task_dict

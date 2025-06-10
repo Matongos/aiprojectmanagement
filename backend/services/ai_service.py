@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import json
 from zoneinfo import ZoneInfo
 import logging
+import requests
 
 from services.ollama_service import get_ollama_client
 from services.vector_service import VectorService
@@ -15,6 +16,8 @@ from models.time_entry import TimeEntry
 from models.user import User
 from models.activity import Activity
 from schemas.task import TaskState
+from services.complexity_service import ComplexityService
+from models.task_risk import TaskRisk
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ class AIService:
         self.ollama_client = get_ollama_client()
         self.vector_service = VectorService(db)
         self.weather_service = get_weather_service()
+        self.ollama_url = "http://localhost:11434/api/generate"
         
     def _get_current_time(self) -> datetime:
         """Get current time with UTC timezone"""
@@ -37,84 +41,11 @@ class AIService:
             return dt.replace(tzinfo=timezone.utc)
         return dt
         
-    async def analyze_task(self, task_id: int) -> Dict:
-        """Analyze task and provide comprehensive insights."""
-        task = self.db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
 
-        return {
-            "task_id": task_id,
-            "complexity": {
-                "score": 0.75,  # Example values
-                "factors": ["Multiple dependencies", "Technical challenges"]
-            },
-            "required_skills": [
-                {"skill": "Python", "level": "Advanced"},
-                {"skill": "FastAPI", "level": "Intermediate"}
-            ],
-            "challenges": [
-                "Complex integration requirements",
-                "Tight deadline"
-            ],
-            "success_factors": [
-                "Clear documentation",
-                "Regular progress updates"
-            ],
-            "best_practices": [
-                "Break down into smaller subtasks",
-                "Set up automated testing"
-            ]
-        }
 
-    async def suggest_task_priority(self, task_id: int) -> Dict:
-        """Suggest task priority based on various factors."""
-        task = self.db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
 
-        return {
-            "task_id": task_id,
-            "suggested_priority": "HIGH",
-            "priority_score": 0.85,
-            "factors": {
-                "urgency": 0.9,
-                "impact": 0.8,
-                "dependencies": 0.7,
-                "resource_availability": 0.85
-            },
-            "reasoning": [
-                "Critical path task",
-                "Multiple dependent tasks",
-                "High business impact"
-            ]
-        }
 
-    async def estimate_task_time(self, task_id: int) -> Dict:
-        """Estimate task completion time."""
-        task = self.db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
 
-        return {
-            "task_id": task_id,
-            "estimated_hours": 24,
-            "confidence_score": 0.8,
-            "range": {
-                "minimum": 20,
-                "maximum": 30
-            },
-            "factors": {
-                "complexity": 0.7,
-                "similar_tasks": 0.8,
-                "resource_skill": 0.9,
-                "dependencies": 0.75
-            },
-            "similar_tasks": [
-                {"id": 123, "actual_hours": 22},
-                {"id": 124, "actual_hours": 26}
-            ]
-        }
 
     async def generate_project_insights(self, project_id: int) -> Dict:
         """Generate comprehensive project insights."""
@@ -362,394 +293,232 @@ class AIService:
 
     async def analyze_task_risk(self, task_id: int) -> Dict:
         """Analyze risk factors for a specific task using real-time data."""
+        # Get task with all necessary relationships
         task = self.db.query(Task).filter(Task.id == task_id).first()
         if not task:
             raise ValueError(f"Task {task_id} not found")
 
-        # Ensure task dates are timezone aware
-        task.created_at = self._ensure_tz_aware(task.created_at)
-        task.start_date = self._ensure_tz_aware(task.start_date)
-        task.deadline = self._ensure_tz_aware(task.deadline)
-        
-        # Initialize risk components
-        risk_components = {
-            'missing_info': 0.0,
-            'role_match': 0.0,
-            'time': 0.0,
-            'dependencies': 0.0,
-            'workload': 0.0,
-            'complexity': 0.0,
-            'activity': 0.0,
-            'weather': 0.0  # Initialize weather risk
-        }
-
         try:
-            # Analyze missing information
-            missing_info_score, missing_info_factors = await self._analyze_missing_info(task)
-            risk_components['missing_info'] = missing_info_score
+            # Check if task is completed
+            if task.progress == 100 or getattr(task, 'state', '').lower() == 'done':
+                risk_analysis = {
+                    "task_id": task_id,
+                    "risk_score": 0,
+                    "risk_level": "low",
+                    "risk_factors": [],
+                    "risk_breakdown": {
+                        "complexity": 0,
+                        "time_sensitivity": 0,
+                        "priority": 0
+                    },
+                    "recommendations": [],
+                    "metrics": {
+                        "time": {
+                            "is_at_risk": False,
+                            "risk_factors": [],
+                            "estimated_delay_days": 0,
+                            "timeline": {
+                                "created_at": self._ensure_tz_aware(task.created_at).isoformat(),
+                                "started_at": self._ensure_tz_aware(task.start_date).isoformat() if task.start_date else None,
+                                "deadline": self._ensure_tz_aware(task.deadline).isoformat() if task.deadline else None,
+                                "planned_hours": task.planned_hours or 0,
+                                "elapsed_hours": 0,
+                                "remaining_hours": 0,
+                                "progress_percentage": 100
+                            },
+                            "overdue": False,
+                            "days_to_deadline": 0,
+                            "progress": 100
+                        },
+                        "role_match": {
+                            "risk_level": "low",
+                            "reason": "Task completed successfully",
+                            "skill_gap": [],
+                            "experience_level": "sufficient",
+                            "metrics": {
+                                "skill_match": 100,
+                                "role_alignment": 100,
+                                "experience_match": 100
+                            }
+                        },
+                        "complexity": {
+                            "score": 0,
+                            "factors": {
+                                "technical_complexity": 0,
+                                "scope_complexity": 0,
+                                "time_pressure": 0,
+                                "environmental_complexity": 0,
+                                "dependencies_impact": 0
+                            }
+                        }
+                    }
+                }
+                
+                # Store the risk analysis
+                self._store_risk_analysis(task_id, risk_analysis)
+                return risk_analysis
 
-            # Analyze role/skill match
-            role_match_risk = await self._analyze_role_skill_match(task)
-            risk_components['role_match'] = self._calculate_role_match_score(role_match_risk)
+            # Continue with existing risk analysis for non-completed tasks
+            # 1. Get task complexity data
+            complexity_service = ComplexityService()
+            complexity_analysis = await complexity_service.analyze_task_complexity(self.db, task_id)
+            
+            # 2. Get detailed assignee data
+            assignee_data = None
+            if task.assigned_to:
+                assignee = self.db.query(User).filter(User.id == task.assigned_to).first()
+                if assignee:
+                    assignee_data = {
+                        'id': assignee.id,
+                        'role': getattr(assignee, 'role', None),
+                        'job_title': getattr(assignee, 'job_title', None),
+                        'department': getattr(assignee, 'department', None),
+                        'skills': getattr(assignee, 'skills', []),
+                        'experience_level': getattr(assignee, 'experience_level', None)
+                    }
 
-            # Analyze time risks
+            # 3. Analyze time sensitivity
             time_risk = await self._analyze_time_risks(task)
-            risk_components['time'] = self._calculate_time_risk_score(time_risk)
-
-            # Analyze dependencies
-            dependency_risk = self._analyze_dependencies(task)
-            risk_components['dependencies'] = self._calculate_dependency_score(dependency_risk)
-
-            # Analyze workload
-            workload_risk = await self._analyze_workload(task)
-            risk_components['workload'] = self._calculate_workload_score(workload_risk)
-
-            # Analyze complexity
-            complexity_score, complexity_factors = await self._analyze_complexity(task)
-            risk_components['complexity'] = complexity_score
-
-            # Analyze activity
-            activity_metrics = self._analyze_activity(task)
-            risk_components['activity'] = self._calculate_activity_score(activity_metrics)
-
-            # Analyze weather risks if applicable
-            weather_risk = await self._analyze_weather_risk(task)
-            risk_components['weather'] = weather_risk.get('risk_score', 0.0)
-
-            # Calculate weighted risk score
-            weights = {
-                'missing_info': 0.1,
-                'role_match': 0.15,
-                'time': 0.2,
-                'dependencies': 0.15,
-                'workload': 0.1,
-                'complexity': 0.15,
-                'activity': 0.1,
-                'weather': 0.05  # Weather has lower weight as it's not always applicable
+            
+            # 4. Calculate role/task mismatch using AI
+            role_match_analysis = await self._analyze_role_task_match(
+                task_name=task.name,
+                task_description=task.description,
+                assignee_data=assignee_data
+            )
+            
+            # 5. Calculate risk components (ensure all are 0-100)
+            risk_components = {
+                'complexity': min(100, complexity_analysis.total_score),  # Already 0-100
+                'time_sensitivity': min(100, self._calculate_time_risk_score(time_risk) * 100),
+                'priority': min(100, self._calculate_priority_risk(task) * 100)
             }
-
+            
+            # New weights for different components (must sum to 1)
+            weights = {
+                'complexity': 0.1,    # 10% weight
+                'time_sensitivity': 0.8,  # 80% weight
+                'priority': 0.1     # 10% weight
+            }
+            
+            # Calculate weighted risk score (will be 0-100)
             risk_score = sum(score * weights[component] for component, score in risk_components.items())
-            risk_score = min(1.0, risk_score)
+            risk_score = round(min(100, risk_score), 1)  # Ensure max is 100 and round to 1 decimal
 
-            # Collect all risk factors
+            # Determine risk level based on 0-100 scale
+            risk_level = "high" if risk_score > 70 else "medium" if risk_score > 40 else "low"
+            
+            # Collect risk factors
             risk_factors = []
-            if missing_info_factors:
-                risk_factors.extend(missing_info_factors)
-            if role_match_risk.get('reason'):
-                risk_factors.append(role_match_risk['reason'])
-            if time_risk.get('risk_factors'):
+            
+            # Add complexity-based risk factors
+            if complexity_analysis.total_score > 70:
+                risk_factors.append("High task complexity")
+                for factor_name, factor_value in complexity_analysis.factors.__dict__.items():
+                    if isinstance(factor_value, (int, float)) and factor_value > 70:
+                        risk_factors.append(f"High {factor_name.replace('_', ' ')} complexity")
+            
+            # Add time-based risk factors
+            if time_risk['risk_factors']:
                 risk_factors.extend(time_risk['risk_factors'])
-            if dependency_risk.get('blocked'):
-                risk_factors.append(f"Blocked by {len(dependency_risk['blocking_tasks'])} tasks")
-            if workload_risk.get('overloaded'):
-                risk_factors.append(f"Assignee has {workload_risk['active_tasks']} active tasks")
-            if weather_risk.get('risk_factors'):
-                risk_factors.extend(weather_risk['risk_factors'])
+            
+            # Add priority-based risk factors
+            if task.priority == 'high' or getattr(task, 'priority_score', 0) > 70:
+                risk_factors.append("High priority task requiring immediate attention")
 
             # Generate recommendations
-            recommendations = self._generate_recommendations(risk_components, risk_factors, task)
-
-            return {
+            recommendations = []
+            if risk_score > 70:
+                recommendations.append("Immediate attention required - High risk task")
+            if complexity_analysis.total_score > 70:
+                recommendations.append("Consider breaking down the task into smaller subtasks")
+            if time_risk['is_at_risk']:
+                recommendations.append(f"Review timeline - Task may be delayed by {time_risk['estimated_delay_days']} days")
+            
+            risk_analysis = {
                 "task_id": task_id,
-                "risk_score": round(risk_score, 2),
-                "risk_level": "high" if risk_score > 0.7 else "medium" if risk_score > 0.4 else "low",
+                "risk_score": risk_score,
+                "risk_level": risk_level,
                 "risk_factors": risk_factors,
-                "risk_breakdown": risk_components,
+                "risk_breakdown": {
+                    "complexity": round(risk_components['complexity'], 1),
+                    "time_sensitivity": round(risk_components['time_sensitivity'], 1),
+                    "priority": round(risk_components['priority'], 1)
+                },
                 "recommendations": recommendations,
                 "metrics": {
                     "time": time_risk,
-                    "role_match": role_match_risk,
-                    "dependencies": dependency_risk,
-                    "workload": workload_risk,
-                    "activity": activity_metrics,
+                    "role_match": role_match_analysis['details'],
                     "complexity": {
-                        "score": complexity_score,
-                        "factors": complexity_factors
+                        "score": complexity_analysis.total_score,
+                        "factors": complexity_analysis.factors.__dict__
+                    }
                     },
-                    "weather": weather_risk
-                },
-                "updated_at": self._get_current_time().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }
+            
+            # Store the risk analysis
+            self._store_risk_analysis(task_id, risk_analysis)
+            return risk_analysis
 
         except Exception as e:
             print(f"Error in analyze_task_risk: {str(e)}")
             raise ValueError(f"Error analyzing task risk: {str(e)}")
 
-    async def _analyze_missing_info(self, task: Task) -> Tuple[float, List[str]]:
-        """Analyze missing critical information in task."""
-        score = 0.0
-        factors = []
-        
-        if not task.description or len(task.description.strip()) < 10:
-            score += 0.3
-            factors.append("Insufficient task description")
-        if not task.deadline:
-            score += 0.2
-            factors.append("No deadline specified")
-        if not task.planned_hours:
-            score += 0.2
-            factors.append("No time estimate provided")
-        if not task.assignee:
-            score += 0.3
-            factors.append("Task not assigned")
-        if not task.priority:
-            score += 0.1
-            factors.append("Priority not set")
-        
-        return score, factors
-
-    async def _analyze_complexity(self, task: Task) -> Tuple[float, List[str]]:
-        """Analyze task complexity using multiple factors."""
-        score = 0.0
-        factors = []
-        
+    def _store_risk_analysis(self, task_id: int, analysis: Dict) -> None:
+        """Store the risk analysis results in the database"""
         try:
-            # Check description complexity
-            if hasattr(task, 'description') and task.description:
-                words = task.description.split()
-                # Complexity indicators in description
-                complexity_terms = ['complex', 'difficult', 'challenging', 'critical', 'major', 'significant']
-                term_count = sum(1 for term in complexity_terms if term.lower() in task.description.lower())
-                
-                if len(words) > 200:
-                    score += 0.2
-                    factors.append("Detailed task description indicates complexity")
-                elif len(words) > 100:
-                    score += 0.1
-                    factors.append("Moderately detailed description")
-                
-                if term_count > 2:
-                    score += 0.2
-                    factors.append(f"Found {term_count} complexity indicators in description")
-
-            # Check dependencies
-            try:
-                dependencies = []
-                if hasattr(task, 'depends_on_ids') and task.depends_on_ids:
-                    dependencies = self.db.query(Task).filter(Task.id.in_(task.depends_on_ids)).all()
-                elif hasattr(task, 'depends_on') and task.depends_on:
-                    dependencies = task.depends_on
-
-                if dependencies:
-                    dep_count = len(dependencies)
-                    blocked_deps = [d for d in dependencies if hasattr(d, 'state') and d.state != TaskState.DONE]
-                    if dep_count > 3:
-                        score += 0.3
-                        factors.append(f"Complex dependency chain ({dep_count} dependencies)")
-                    elif dep_count > 0:
-                        score += 0.1
-                        factors.append("Has dependencies")
-                    
-                    if blocked_deps:
-                        score += 0.2
-                        factors.append(f"{len(blocked_deps)} blocking dependencies")
-            except Exception as e:
-                print(f"Error checking dependencies: {str(e)}")
-
-            # Check planned hours against similar tasks
-            if hasattr(task, 'planned_hours') and task.planned_hours:
-                try:
-                    project_id = task.project_id if hasattr(task, 'project_id') else (task.project.id if hasattr(task, 'project') else None)
-                    if project_id:
-                        similar_tasks = self.db.query(Task).filter(
-                            Task.project_id == project_id,
-                            Task.id != task.id,
-                            Task.state == TaskState.DONE
-                        ).all()
-                        
-                        if similar_tasks:
-                            avg_hours = sum(t.planned_hours or 0 for t in similar_tasks) / len(similar_tasks)
-                            if task.planned_hours > avg_hours * 1.5:
-                                score += 0.3
-                                factors.append(f"Time estimate ({task.planned_hours}h) significantly higher than similar tasks ({avg_hours:.1f}h)")
-                    
-                    if task.planned_hours > 40:
-                        score += 0.3
-                        factors.append("Large time estimate indicates complexity")
-                    elif task.planned_hours > 20:
-                        score += 0.2
-                        factors.append("Moderate time requirement")
-                except Exception as e:
-                    print(f"Error analyzing planned hours: {str(e)}")
-
-            # Check subtasks
-            try:
-                subtasks = self.db.query(Task).filter(Task.parent_id == task.id).all()
-                if subtasks:
-                    if len(subtasks) > 5:
-                        score += 0.2
-                        factors.append(f"Complex task structure ({len(subtasks)} subtasks)")
-                    elif len(subtasks) > 0:
-                        score += 0.1
-                        factors.append(f"Has {len(subtasks)} subtasks")
-            except Exception as e:
-                print(f"Error checking subtasks: {str(e)}")
-
-            # Check technical requirements
-            if hasattr(task, 'technical_requirements') and task.technical_requirements:
-                tech_count = len(task.technical_requirements)
-                if tech_count > 5:
-                    score += 0.2
-                    factors.append(f"Multiple technical requirements ({tech_count})")
-
-            return min(score, 1.0), factors
-        except Exception as e:
-            print(f"Error in complexity analysis: {str(e)}")
-            return 0.0, ["Error analyzing complexity"]
-
-    async def _analyze_time_risks(self, task: Task) -> Dict:
-        """Analyze time-based risks using actual task data."""
-        current_time = self._get_current_time()
-        risk_factors = []
-        is_at_risk = False
-        estimated_delay_days = 0
-        
-        # Get task timeline data
-        timeline = {
-            'created_at': self._ensure_tz_aware(task.created_at),
-            'started_at': self._ensure_tz_aware(task.start_date),
-            'deadline': self._ensure_tz_aware(task.deadline),
-            'planned_hours': task.planned_hours or 0,
-            'elapsed_hours': 0,
-            'remaining_hours': 0,
-            'progress_percentage': 0
-        }
-        
-        # Calculate elapsed time
-        if timeline['started_at']:
-            elapsed_seconds = (current_time - timeline['started_at']).total_seconds()
-            timeline['elapsed_hours'] = elapsed_seconds / 3600
+            # Create new TaskRisk entry
+            task_risk = TaskRisk(
+                task_id=task_id,
+                risk_score=analysis["risk_score"],
+                risk_level=analysis["risk_level"],
+                time_sensitivity=analysis["risk_breakdown"]["time_sensitivity"],
+                complexity=analysis["risk_breakdown"]["complexity"],
+                priority=analysis["risk_breakdown"]["priority"],
+                risk_factors=analysis["risk_factors"],
+                recommendations=analysis["recommendations"],
+                metrics=analysis["metrics"]
+            )
             
-            # Check if taking longer than planned
-            if timeline['elapsed_hours'] > timeline['planned_hours'] * 1.2:
-                risk_factors.append(f"Task taking longer than planned ({int(timeline['elapsed_hours'])} vs {timeline['planned_hours']} hours)")
-                is_at_risk = True
-                estimated_delay_days = int((timeline['elapsed_hours'] - timeline['planned_hours']) / 8)
+            # Add and commit to database
+            self.db.add(task_risk)
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error storing risk analysis: {str(e)}")
+            # Don't raise the error - we want the analysis to still be returned even if storage fails
 
-        # Check deadline proximity
-        if timeline['deadline']:
-            days_to_deadline = (timeline['deadline'] - current_time).days
-            if days_to_deadline < 0:
-                risk_factors.append(f"Task is overdue by {abs(days_to_deadline)} days")
-                is_at_risk = True
-                estimated_delay_days = abs(days_to_deadline)
-            elif days_to_deadline <= 2:
-                risk_factors.append(f"Urgent: Only {days_to_deadline} days until deadline")
-                is_at_risk = True
-            elif days_to_deadline <= 5:
-                risk_factors.append(f"Approaching deadline: {days_to_deadline} days remaining")
-                is_at_risk = True
-
-        # Check progress vs time elapsed
-        if task.progress and task.start_date:
-            expected_progress = min((timeline['elapsed_hours'] / (task.planned_hours or 40)) * 100, 100)
-            if task.progress < expected_progress - 20:
-                risk_factors.append(f"Behind schedule: {task.progress}% complete vs {int(expected_progress)}% expected")
-                is_at_risk = True
-
-        # Check recent activity
-        last_activity = self.db.query(Activity).filter(
-            Activity.task_id == task.id
-        ).order_by(Activity.created_at.desc()).first()
-
-        if last_activity:
-            days_since_activity = (current_time - last_activity.created_at).days
-            if days_since_activity > 7:
-                risk_factors.append(f"No activity for {days_since_activity} days")
-                is_at_risk = True
-
-        return {
-            "is_at_risk": is_at_risk,
-            "risk_factors": risk_factors,
-            "estimated_delay_days": estimated_delay_days,
-            "timeline": timeline,
-            "overdue": bool(task.deadline and task.deadline < current_time),
-            "days_to_deadline": (task.deadline - current_time).days if task.deadline else None,
-            "progress": task.progress
-        }
-
-    def _calculate_role_match_score(self, role_match_risk: Dict) -> float:
-        """Calculate role match risk score."""
-        risk_levels = {
+    def _calculate_priority_risk(self, task: Task) -> float:
+        """Calculate risk score based on task priority (returns 0-1)"""
+        priority_scores = {
             'low': 0.2,
-            'medium': 0.5,
-            'high': 0.8
+            'normal': 0.5,
+            'high': 0.8,
+            'urgent': 1.0
         }
-        return risk_levels.get(role_match_risk['risk_level'], 0.5)
+        
+        # Use priority_score if available (ensure it's 0-1)
+        if hasattr(task, 'priority_score') and task.priority_score is not None:
+            return min(1.0, task.priority_score / 100)  # Convert from 0-100 to 0-1
+        
+        return priority_scores.get(task.priority.lower(), 0.5)
 
-    def _calculate_time_risk_score(self, time_risk: Dict) -> float:
-        """Calculate time risk score."""
-        score = 0.0
-        if time_risk['is_at_risk']:
-            score += 0.4
-        if time_risk['overdue']:
-            score += 0.4
-        if len(time_risk['risk_factors']) > 2:
-            score += 0.2
-        return min(score, 1.0)
-
-    def _calculate_dependency_score(self, dependency_risk: Dict) -> float:
-        """Calculate dependency risk score."""
-        if not dependency_risk['blocked']:
-            return 0.0
-        return min(0.4 + (len(dependency_risk['blocking_tasks']) * 0.2), 1.0)
-
-    def _calculate_workload_score(self, workload_risk: Dict) -> float:
-        """Calculate workload risk score."""
-        if not workload_risk['overloaded']:
-            return 0.0
-        return min(0.4 + (workload_risk['active_tasks'] / 10), 1.0)
-
-    def _calculate_activity_score(self, activity_metrics: Dict) -> float:
-        """Calculate activity risk score."""
-        activity_levels = {
-            'high': 0.0,
-            'medium': 0.3,
-            'low': 0.6,
-            'none': 0.8
-        }
-        return activity_levels.get(activity_metrics['activity_level'], 0.5)
-
-    def _generate_recommendations(self, risk_components: Dict, risk_factors: List[str], task: Task) -> List[str]:
-        """Generate specific recommendations based on identified risks."""
-        recommendations = []
-        
-        if risk_components['missing_info'] > 0.3:
-            recommendations.append("Complete missing task information")
-        
-        if risk_components['role_match'] > 0.6:
-            if task.assignee:
-                recommendations.append(f"Review {task.assignee.username}'s role and consider skill-based reallocation")
-            else:
-                recommendations.append("Assign task to a qualified team member")
-        
-        if risk_components['time'] > 0.6:
-            if task.deadline:
-                recommendations.append(f"Urgent: Review timeline for task due on {task.deadline.strftime('%Y-%m-%d')}")
-            else:
-                recommendations.append("Set a deadline and timeline for this task")
-        
-        if risk_components['dependencies'] > 0.5:
-            recommendations.append("Address blocking tasks and review dependency chain")
-        
-        if risk_components['workload'] > 0.5:
-            recommendations.append("Consider workload redistribution or timeline adjustment")
-        
-        if risk_components['complexity'] > 0.6:
-            recommendations.append("Break down task into smaller subtasks")
-        
-        if risk_components['activity'] > 0.5:
-            recommendations.append("Investigate lack of progress and update task status")
-        
-        return recommendations
-
-    async def _analyze_role_skill_match(self, task: Task) -> Dict:
-        """Analyze match between task requirements and assignee skills."""
-        try:
-            if not hasattr(task, 'assignee') or not task.assignee:
-                return {
+    async def _analyze_role_task_match(
+        self,
+        task_name: str,
+        task_description: str,
+        assignee_data: Optional[Dict]
+    ) -> Dict:
+        """Analyze the match between task requirements and assignee capabilities"""
+        if not assignee_data:
+            return {
+                "mismatch_score": 0.8,
+                "risk_factors": ["Task not assigned to any team member"],
+                "recommendations": ["Assign task to a team member"],
+                "details": {
                     "risk_level": "high",
-                    "reason": "Task is not assigned",
+                    "reason": "No assignee",
                     "skill_gap": [],
                     "experience_level": "none",
                     "metrics": {
@@ -758,319 +527,92 @@ class AIService:
                         "success_rate": 0
                     }
                 }
-
-            # Get assignee's completed tasks in the last 90 days
-            ninety_days_ago = self._get_current_time() - timedelta(days=90)
-            
-            # Get similar completed tasks
-            try:
-                similar_tasks_completed = self.db.query(Task).filter(
-                    Task.assigned_to == (task.assignee.id if hasattr(task.assignee, 'id') else task.assignee),
-                    Task.state == TaskState.DONE,
-                    Task.updated_at >= ninety_days_ago,
-                    Task.task_type == task.task_type if hasattr(task, 'task_type') else None
-                ).all()
-            except Exception as e:
-                print(f"Error getting similar tasks: {str(e)}")
-                similar_tasks_completed = []
-
-            # Calculate experience metrics
-            experience_metrics = {
-                "similar_tasks_completed": len(similar_tasks_completed),
-                "avg_completion_time": 0,
-                "success_rate": 0
             }
 
-            if similar_tasks_completed:
-                completion_times = []
-                successful_tasks = 0
-                
-                for t in similar_tasks_completed:
-                    if hasattr(t, 'start_date') and hasattr(t, 'completion_date') and t.start_date and t.completion_date:
-                        completion_times.append((t.completion_date - t.start_date).total_seconds() / 3600)
-                    if hasattr(t, 'success_rating') and t.success_rating and t.success_rating >= 4:
-                        successful_tasks += 1
-                
-                if completion_times:
-                    experience_metrics["avg_completion_time"] = sum(completion_times) / len(completion_times)
-                
-                if similar_tasks_completed:
-                    experience_metrics["success_rate"] = successful_tasks / len(similar_tasks_completed)
-
-            # Determine risk level based on experience
-            if experience_metrics["similar_tasks_completed"] >= 5 and experience_metrics["success_rate"] >= 0.8:
-                risk_level = "low"
-                reason = f"Assignee has successfully completed {experience_metrics['similar_tasks_completed']} similar tasks"
-                experience_level = "expert"
-            elif experience_metrics["similar_tasks_completed"] >= 2 and experience_metrics["success_rate"] >= 0.6:
-                risk_level = "medium"
-                reason = f"Assignee has moderate experience with similar tasks ({experience_metrics['similar_tasks_completed']} completed)"
-                experience_level = "intermediate"
-            else:
-                risk_level = "high"
-                reason = "Assignee lacks experience with similar tasks"
-                experience_level = "beginner"
-
-            # Check skill requirements match
-            skill_gap = []
-            if (hasattr(task, 'required_skills') and task.required_skills and 
-                hasattr(task.assignee, 'skills') and task.assignee.skills):
-                missing_skills = set(task.required_skills) - set(task.assignee.skills)
-                if missing_skills:
-                    skill_gap = list(missing_skills)
-                    risk_level = "high"
-                    reason = f"Assignee lacks required skills: {', '.join(missing_skills)}"
-
-            return {
-                "risk_level": risk_level,
-                "reason": reason,
-                "skill_gap": skill_gap,
-                "experience_level": experience_level,
-                "metrics": experience_metrics
-            }
-        except Exception as e:
-            print(f"Error in role/skill match analysis: {str(e)}")
-            return {
-                "risk_level": "high",
-                "reason": f"Error analyzing role/skill match: {str(e)}",
-                "skill_gap": [],
-                "experience_level": "unknown",
-                "metrics": {
-                    "similar_tasks_completed": 0,
-                    "avg_completion_time": 0,
-                    "success_rate": 0
-                }
-            }
-
-    def _analyze_dependencies(self, task: Task) -> Dict:
-        """Analyze task dependencies and identify blockers."""
-        if not task.depends_on:
-            return {
-                "blocked": False,
-                "blocking_tasks": [],
-                "risk_level": "low"
-            }
-
-        blocking_tasks = []
-        for dependency in task.depends_on:
-            if dependency.state != TaskState.DONE:
-                blocking_tasks.append({
-                    "id": dependency.id,
-                    "name": dependency.name,
-                    "state": dependency.state,
-                    "deadline": dependency.deadline.isoformat() if dependency.deadline else None
-                })
-
-        return {
-            "blocked": bool(blocking_tasks),
-            "blocking_tasks": blocking_tasks,
-            "risk_level": "high" if blocking_tasks else "low"
-        }
-
-    async def _analyze_workload(self, task: Task) -> Dict:
-        """Analyze assignee workload and capacity."""
-        if not task.assignee:
-            return {
-                "overloaded": False,
-                "active_tasks": 0,
-                "risk_level": "low",
-                "metrics": {
-                    "total_hours_assigned": 0,
-                    "hours_per_week": 0,
-                    "task_overlap_count": 0
-                }
-            }
-
-        current_time = self._get_current_time()
-
-        # Get all active tasks for assignee
-        active_tasks = self.db.query(Task).filter(
-            Task.assigned_to == task.assignee.id,
-            Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED]),
-            Task.deadline >= current_time
-        ).all()
-
-        # Calculate workload metrics
-        total_hours = sum(t.planned_hours or 0 for t in active_tasks)
-        
-        # Calculate task overlap
-        overlapping_tasks = []
-        if task.start_date and task.deadline:
-            overlapping_tasks = [
-                t for t in active_tasks 
-                if t.id != task.id 
-                and t.start_date 
-                and t.deadline 
-                and (
-                    (t.start_date <= task.deadline and t.deadline >= task.start_date) or
-                    (task.start_date <= t.deadline and task.deadline >= t.start_date)
-                )
-            ]
-
-        # Calculate hours per week
-        hours_per_week = 0
-        if task.start_date and task.deadline:
-            weeks = max(1, (task.deadline - task.start_date).days / 7)
-            hours_per_week = total_hours / weeks
-
-        # Determine workload status
-        workload_threshold = 40  # Hours per week
-        is_overloaded = (
-            len(active_tasks) > 5 or
-            hours_per_week > workload_threshold or
-            len(overlapping_tasks) > 3
-        )
-
-        metrics = {
-            "total_hours_assigned": total_hours,
-            "hours_per_week": round(hours_per_week, 2),
-            "task_overlap_count": len(overlapping_tasks),
-            "concurrent_tasks": [
-                {
-                    "id": t.id,
-                    "name": t.name,
-                    "hours": t.planned_hours,
-                    "start_date": t.start_date.isoformat() if t.start_date else None,
-                    "deadline": t.deadline.isoformat() if t.deadline else None
-                }
-                for t in overlapping_tasks
-            ]
-        }
-
-        risk_level = "high" if is_overloaded else "medium" if hours_per_week > workload_threshold * 0.7 else "low"
-
-        return {
-            "overloaded": is_overloaded,
-            "active_tasks": len(active_tasks),
-            "risk_level": risk_level,
-            "metrics": metrics
-        }
-
-    def _analyze_activity(self, task: Task) -> Dict:
-        """Analyze task activity patterns."""
-        current_time = self._get_current_time()
-        
-        # Get all activities for the task
-        activities = self.db.query(Activity).filter(
-            Activity.task_id == task.id
-        ).order_by(Activity.created_at).all()
-
-        if not activities:
-            return {
-                "activity_level": "none",
-                "last_updated": None,
-                "state_changes": 0,
-                "comment_count": 0
-            }
-
-        # Calculate metrics
-        state_changes = len([a for a in activities if a.field_name == 'state'])
-        comment_count = len(task.comments) if task.comments else 0
-        last_activity = self._ensure_tz_aware(activities[-1].created_at)
-
-        # Determine activity level
-        days_since_last_activity = (current_time - last_activity).days
-        if days_since_last_activity <= 1:
-            activity_level = "high"
-        elif days_since_last_activity <= 3:
-            activity_level = "medium"
-        else:
-            activity_level = "low"
-
-        return {
-            "activity_level": activity_level,
-            "last_updated": last_activity.isoformat(),
-            "state_changes": state_changes,
-            "comment_count": comment_count
-        }
-
-    async def _analyze_weather_risk(self, task: Task) -> Dict:
-        """Analyze weather-related risks for a task."""
         try:
-            # Check if task is outdoor-related
-            is_outdoor = False
-            outdoor_keywords = ['outdoor', 'outside', 'field', 'construction', 'installation', 'maintenance']
+            # Use AI to analyze task requirements
+            prompt = f"""Analyze the following task and determine required skills and experience:
+            Task Name: {task_name}
+            Description: {task_description or ''}
             
-            if task.description:
-                is_outdoor = any(keyword in task.description.lower() for keyword in outdoor_keywords)
+            Assignee Information:
+            Role: {assignee_data.get('role') or assignee_data.get('job_title') or 'Unknown'}
+            Department: {assignee_data.get('department', 'Unknown')}
+            Skills: {', '.join(assignee_data.get('skills', []))}
+            Experience Level: {assignee_data.get('experience_level', 'Unknown')}
             
-            if not is_outdoor:
-                return {
-                    "is_at_risk": False,
-                    "risk_score": 0.0,
-                    "risk_factors": [],
-                    "recommendations": [],
-                    "forecast": None
+            Consider:
+            1. Technical skills needed vs assignee skills
+            2. Role/job title alignment with task requirements
+            3. Department relevance to task
+            4. Required experience level
+            5. Domain knowledge requirements
+            
+            Return only valid JSON with:
+            - skill_match_score: float (0-1)
+            - role_alignment_score: float (0-1)
+            - experience_match_score: float (0-1)
+            - identified_gaps: list of strings
+            - recommendations: list of strings
+            """
+
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "codellama",
+                    "prompt": prompt,
+                    "stream": False
                 }
-
-            # Get location from task or project
-            location = None
-            if task.location:
-                location = task.location
-            elif task.project and task.project.location:
-                location = task.project.location
-            else:
-                # Default to a fallback location or get from configuration
-                location = "default_location"  # Replace with your default location
-
-            # Get weather forecast
-            try:
-                forecast = await self.weather_service.get_forecast(location)
-            except Exception as e:
-                print(f"Error getting weather forecast: {str(e)}")
-                return {
-                    "is_at_risk": False,
-                    "risk_score": 0.0,
-                    "risk_factors": ["Unable to fetch weather data"],
-                    "recommendations": ["Verify weather conditions manually"],
-                    "forecast": None
-                }
-
-            if not forecast:
-                return {
-                    "is_at_risk": False,
-                    "risk_score": 0.0,
-                    "risk_factors": ["No weather data available"],
-                    "recommendations": ["Check weather conditions before proceeding"],
-                    "forecast": None
-                }
-
-            # Analyze weather risks
-            risk_score = 0.0
+            )
+            
+            result = response.json()
+            analysis = json.loads(result["response"])
+            
+            # Calculate overall mismatch score
+            mismatch_score = 1 - ((
+                analysis['skill_match_score'] +
+                analysis['role_alignment_score'] +
+                analysis['experience_match_score']
+            ) / 3)
+            
+            # Generate risk factors based on gaps
             risk_factors = []
-            recommendations = []
-            
-            # Check weather conditions for task duration
-            if task.start_date and task.deadline:
-                task_duration = (task.deadline - task.start_date).days
-                relevant_forecast = forecast[:min(task_duration, len(forecast))]
-
-                for day in relevant_forecast:
-                    if day.get('severe_conditions'):
-                        risk_score = max(risk_score, 0.8)
-                        risk_factors.append(f"Severe weather expected on {day['date']}")
-                        recommendations.append("Plan for weather contingencies")
-                    elif day.get('adverse_conditions'):
-                        risk_score = max(risk_score, 0.4)
-                        risk_factors.append(f"Adverse weather possible on {day['date']}")
-                        recommendations.append("Monitor weather conditions")
+            if analysis['identified_gaps']:
+                risk_factors.extend(analysis['identified_gaps'])
             
             return {
-                "is_at_risk": risk_score > 0.3,
-                "risk_score": risk_score,
+                "mismatch_score": mismatch_score,
                 "risk_factors": risk_factors,
-                "recommendations": recommendations,
-                "forecast": forecast
+                "recommendations": analysis['recommendations'],
+                "details": {
+                    "risk_level": "high" if mismatch_score > 0.7 else "medium" if mismatch_score > 0.4 else "low",
+                    "reason": risk_factors[0] if risk_factors else None,
+                    "skill_gap": analysis['identified_gaps'],
+                    "experience_level": assignee_data.get('experience_level', 'unknown'),
+                    "metrics": {
+                        "skill_match": round(analysis['skill_match_score'] * 100, 1),
+                        "role_alignment": round(analysis['role_alignment_score'] * 100, 1),
+                        "experience_match": round(analysis['experience_match_score'] * 100, 1)
+                    }
+                }
             }
-
         except Exception as e:
-            print(f"Error in weather risk analysis: {str(e)}")
+            print(f"Error in role-task match analysis: {str(e)}")
             return {
-                "is_at_risk": False,
-                "risk_score": 0.0,
-                "risk_factors": ["Error in weather analysis"],
-                "recommendations": ["Verify weather conditions manually"],
-                "forecast": None
+                "mismatch_score": 0.5,
+                "risk_factors": ["Unable to analyze role-task match"],
+                "recommendations": ["Manually review task requirements and assignee capabilities"],
+                "details": {
+                    "risk_level": "medium",
+                    "reason": "Analysis error",
+                    "skill_gap": [],
+                    "experience_level": "unknown",
+                    "metrics": {
+                        "skill_match": 0,
+                        "role_alignment": 0,
+                        "experience_match": 0
+                    }
+                }
             }
 
     async def analyze_task_urgency(self, task_id: int, context: Dict) -> Dict:
@@ -1357,6 +899,206 @@ class AIService:
             return "Score based on standard task analysis"
             
         return ". ".join(explanations) + "."
+
+    def _calculate_time_risk_score(self, time_risk: Dict) -> float:
+        """
+        Calculate time risk score (0-1) based on various time-related factors.
+        Returns a more aggressive score based on:
+        - Deadline proximity vs remaining work (highest priority)
+        - Progress rate and completion likelihood
+        - Time buffer analysis
+        - Work rate required vs historical rate
+        """
+        score = 0.0
+        timeline = time_risk.get('timeline', {})
+        
+        # 1. Deadline Status and Time Buffer Analysis (50% weight)
+        if time_risk.get('overdue', False):
+            # Overdue tasks get nearly maximum score
+            score += 0.45
+            # Add remaining 0.05 based on how overdue
+            days_overdue = abs(time_risk.get('days_to_deadline', 0))
+            score += min(0.05, days_overdue * 0.01)
+        elif 'days_to_deadline' in time_risk:
+            days_to_deadline = time_risk['days_to_deadline']
+            planned_hours = timeline.get('planned_hours', 0)
+            remaining_hours = timeline.get('remaining_hours', 0)
+            progress = timeline.get('progress_percentage', 0)
+            
+            # Calculate remaining work days needed
+            remaining_work_days = remaining_hours / 8 if remaining_hours > 0 else (planned_hours * (100 - progress) / 100) / 8
+            
+            # Time buffer ratio (remaining time vs needed time)
+            if days_to_deadline <= 0:
+                buffer_score = 0.5  # Maximum score for this component
+            else:
+                buffer_ratio = days_to_deadline / (remaining_work_days if remaining_work_days > 0 else 0.1)
+                if buffer_ratio <= 1:
+                    # Critical: Less or equal time than needed
+                    buffer_score = 0.5
+                elif buffer_ratio <= 1.2:
+                    # Very tight buffer (20% or less)
+                    buffer_score = 0.45
+                elif buffer_ratio <= 1.5:
+                    # Tight buffer (50% or less)
+                    buffer_score = 0.4
+                elif buffer_ratio <= 2:
+                    # Limited buffer (double time needed)
+                    buffer_score = 0.35
+                else:
+                    # Comfortable buffer but still factor in absolute deadline
+                    buffer_score = max(0.2, 0.35 - (buffer_ratio - 2) * 0.05)
+
+            score += buffer_score
+
+        # 2. Progress Rate Analysis (30% weight)
+        elapsed_hours = timeline.get('elapsed_hours', 0)
+        planned_hours = timeline.get('planned_hours', 0)
+        progress = timeline.get('progress_percentage', 0)
+        
+        if planned_hours > 0 and elapsed_hours > 0:
+            # Calculate actual progress rate (% per hour)
+            actual_rate = progress / elapsed_hours if elapsed_hours > 0 else 0
+            
+            # Calculate required rate to complete on time
+            remaining_progress = 100 - progress
+            if time_risk.get('days_to_deadline'):
+                remaining_hours = time_risk['days_to_deadline'] * 8  # Convert days to hours
+                required_rate = remaining_progress / remaining_hours if remaining_hours > 0 else float('inf')
+                
+                # Compare actual vs required rate
+                if actual_rate == 0:
+                    score += 0.3  # No progress being made
+                elif required_rate > actual_rate * 3:
+                    score += 0.3  # Need to work 3x faster
+                elif required_rate > actual_rate * 2:
+                    score += 0.25  # Need to work 2x faster
+                elif required_rate > actual_rate * 1.5:
+                    score += 0.2  # Need to work 1.5x faster
+                elif required_rate > actual_rate:
+                    score += 0.15  # Need to work somewhat faster
+                else:
+                    score += 0.1  # Current pace is sufficient
+
+        # 3. Time Elapsed vs Planned Analysis (20% weight)
+        if planned_hours > 0 and elapsed_hours > 0:
+            time_ratio = elapsed_hours / planned_hours
+            progress_ratio = progress / 100
+            
+            # Calculate efficiency ratio (progress % / time %)
+            efficiency = progress_ratio / time_ratio if time_ratio > 0 else 0
+            
+            if efficiency < 0.3:  # Severely inefficient
+                score += 0.2
+            elif efficiency < 0.5:  # Very inefficient
+                score += 0.15
+            elif efficiency < 0.7:  # Inefficient
+                score += 0.1
+            elif efficiency < 0.9:  # Slightly inefficient
+                score += 0.05
+            # Efficient progress doesn't add to risk score
+
+        # Final adjustments
+        if time_risk.get('is_at_risk', False):
+            # Add 10% to score if task is flagged as at risk
+            score = min(1.0, score + 0.1)
+            
+        # Ensure minimum score based on deadline proximity
+        if 'days_to_deadline' in time_risk:
+            days_to_deadline = time_risk['days_to_deadline']
+            if days_to_deadline <= 1:
+                score = max(score, 0.9)  # At least 90% risk if 1 day or less
+            elif days_to_deadline <= 2:
+                score = max(score, 0.8)  # At least 80% risk if 2 days or less
+            elif days_to_deadline <= 3:
+                score = max(score, 0.7)  # At least 70% risk if 3 days or less
+
+        return min(1.0, score)
+
+    async def _analyze_time_risks(self, task: Task) -> Dict:
+        """Analyze time-based risks using actual task data."""
+        current_time = self._get_current_time()
+        risk_factors = []
+        is_at_risk = False
+        estimated_delay_days = 0
+        
+        # Get task timeline data
+        timeline = {
+            'created_at': self._ensure_tz_aware(task.created_at),
+            'started_at': self._ensure_tz_aware(task.start_date),
+            'deadline': self._ensure_tz_aware(task.deadline),
+            'planned_hours': task.planned_hours or 0,
+            'elapsed_hours': 0,
+            'remaining_hours': 0,
+            'progress_percentage': task.progress or 0
+        }
+        
+        # Calculate elapsed time
+        if timeline['started_at']:
+            elapsed_seconds = (current_time - timeline['started_at']).total_seconds()
+            timeline['elapsed_hours'] = elapsed_seconds / 3600
+            
+            # Calculate remaining hours based on progress
+            if timeline['planned_hours'] > 0:
+                timeline['remaining_hours'] = (timeline['planned_hours'] * (100 - timeline['progress_percentage'])) / 100
+                
+                # Check if taking longer than planned
+                if timeline['elapsed_hours'] > timeline['planned_hours'] * 1.2:
+                    risk_factors.append(f"Task taking longer than planned ({int(timeline['elapsed_hours'])} vs {timeline['planned_hours']} hours)")
+                    is_at_risk = True
+                    # Calculate delay based on remaining work and progress rate
+                    if timeline['progress_percentage'] > 0:
+                        progress_rate = timeline['progress_percentage'] / timeline['elapsed_hours']  # % per hour
+                        remaining_progress = 100 - timeline['progress_percentage']
+                        estimated_remaining_hours = remaining_progress / progress_rate if progress_rate > 0 else timeline['remaining_hours']
+                        estimated_delay_days = int((estimated_remaining_hours - timeline['remaining_hours']) / 8)
+                    else:
+                        estimated_delay_days = int((timeline['elapsed_hours'] - timeline['planned_hours']) / 8)
+
+        # Check deadline status
+        overdue = False
+        days_to_deadline = None
+        if timeline['deadline']:
+            days_to_deadline = (timeline['deadline'] - current_time).days
+            if days_to_deadline < 0:
+                overdue = True
+                risk_factors.append(f"Task is overdue by {abs(days_to_deadline)} days")
+                is_at_risk = True
+                estimated_delay_days = abs(days_to_deadline)
+            elif days_to_deadline <= 2:
+                risk_factors.append(f"Urgent: Only {days_to_deadline} days until deadline")
+                is_at_risk = True
+            elif days_to_deadline <= 5:
+                risk_factors.append(f"Approaching deadline: {days_to_deadline} days remaining")
+                is_at_risk = True
+
+        # Check progress vs expected
+        if timeline['started_at'] and timeline['deadline'] and timeline['progress_percentage'] < 100:
+            total_duration = (timeline['deadline'] - timeline['started_at']).total_seconds()
+            elapsed_duration = (current_time - timeline['started_at']).total_seconds()
+            if total_duration > 0:
+                expected_progress = min((elapsed_duration / total_duration) * 100, 100)
+                if timeline['progress_percentage'] < expected_progress - 20:
+                    risk_factors.append(f"Behind schedule: {timeline['progress_percentage']}% complete vs {int(expected_progress)}% expected")
+                    is_at_risk = True
+
+        return {
+            "is_at_risk": is_at_risk,
+            "risk_factors": risk_factors,
+            "estimated_delay_days": estimated_delay_days,
+            "timeline": {
+                "created_at": timeline['created_at'].isoformat(),
+                "started_at": timeline['started_at'].isoformat() if timeline['started_at'] else None,
+                "deadline": timeline['deadline'].isoformat() if timeline['deadline'] else None,
+                "planned_hours": timeline['planned_hours'],
+                "elapsed_hours": timeline.get('elapsed_hours', 0),
+                "remaining_hours": timeline.get('remaining_hours', 0),
+                "progress_percentage": timeline['progress_percentage']
+            },
+            "overdue": overdue,
+            "days_to_deadline": days_to_deadline,
+            "progress": timeline['progress_percentage']
+        }
 
 # Create a singleton instance
 _ai_service = None

@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Table, CheckConstraint, Enum as SQLEnum, JSON
 from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.sql import func
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 from .base import Base
 from .task_stage import TaskStage
@@ -70,6 +70,11 @@ class Task(Base):
     state = Column(String(50), default=TaskState.TODO)
     task_type = Column(String(50), nullable=True, default=TaskType.OTHER.value)  # Using String instead of Enum
     
+    # Complexity fields
+    complexity_score = Column(Float, default=0.0)  # Overall complexity score
+    complexity_factors = Column(JSON, default=dict)  # Detailed complexity factors
+    complexity_last_updated = Column(DateTime(timezone=True), nullable=True)
+    
     # Foreign Keys
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     stage_id = Column(Integer, ForeignKey("task_stages.id"), nullable=True)
@@ -132,6 +137,9 @@ class Task(Base):
     # Add predictions relationship
     predictions = relationship("TaskPrediction", back_populates="task", cascade="all, delete-orphan")
 
+    # Add risk analyses relationship
+    risk_analyses = relationship("TaskRisk", back_populates="task", order_by="desc(TaskRisk.created_at)")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize metrics for new tasks
@@ -154,7 +162,7 @@ class Task(Base):
     def __repr__(self):
         return f"<Task {self.name}>"
     
-    def update_metrics(self):
+    async def update_metrics(self):
         """Update task metrics."""
         # Initialize metrics if they don't exist
         if not hasattr(self, 'metrics') or not self.metrics:
@@ -188,12 +196,32 @@ class Task(Base):
                 self.metrics.time_estimate_accuracy = total_time / self.planned_hours
         except Exception as e:
             print(f"Warning: Failed to calculate time metrics: {str(e)}")
-            # Set default values if calculation fails
             self.metrics.actual_duration = 0
             self.metrics.time_estimate_accuracy = 0
         
         # Update complexity metrics
-        self.metrics.dependency_count = len(self.depends_on) + len(self.dependent_tasks)
+        try:
+            from services.complexity_service import ComplexityService
+            complexity_service = ComplexityService()
+            complexity_analysis = await complexity_service.analyze_task_complexity(self.db, self.id)
+            
+            # Store complexity in both task and metrics
+            self.complexity_score = complexity_analysis.total_score
+            self.complexity_factors = {
+                "technical": complexity_analysis.factors.technical_complexity,
+                "scope": complexity_analysis.factors.scope_complexity,
+                "time_pressure": complexity_analysis.factors.time_pressure,
+                "environmental": complexity_analysis.factors.environmental_complexity,
+                "dependencies": complexity_analysis.factors.dependencies_impact,
+                "summary": complexity_analysis.analysis_summary
+            }
+            self.complexity_last_updated = datetime.now(timezone.utc)
+            
+            # Update metrics
+            self.metrics.complexity_score = complexity_analysis.total_score
+            self.metrics.dependency_count = len(self.depends_on) + len(self.dependent_tasks)
+        except Exception as e:
+            print(f"Warning: Failed to update complexity metrics: {str(e)}")
         
         # Update collaboration metrics
         self.metrics.comment_count = len(self.comments)
@@ -222,15 +250,36 @@ class Task(Base):
         if not new_stage:
             return False
             
+        # Get all stages for progress calculation
+        stages = (
+            db.query(TaskStage)
+            .filter(TaskStage.project_id == self.project_id)
+            .order_by(TaskStage.sequence)
+            .all()
+        )
+        
+        # Calculate stage-based progress
+        if stages:
+            current_stage_index = next(
+                (i for i, stage in enumerate(stages) if stage.id == new_stage_id),
+                -1
+            )
+            if current_stage_index != -1:
+                # Calculate progress (98% max for non-DONE tasks)
+                stage_progress = ((current_stage_index + 1) / len(stages)) * 98
+                
+                # If stage has auto_progress_percentage, use the higher value
+                if new_stage.auto_progress_percentage:
+                    stage_progress = max(stage_progress, new_stage.auto_progress_percentage)
+                    if stage_progress > 98:  # Cap at 98% for non-DONE tasks
+                        stage_progress = 98
+                
+                self.progress = round(stage_progress, 2)
+        
         # Update stage and last update time
         self.stage_id = new_stage_id
         self.date_last_stage_update = datetime.utcnow()
         
-        # If stage has auto progress percentage, update task progress
-        if new_stage.auto_progress_percentage is not None:
-            self.progress = new_stage.auto_progress_percentage
-            
-        # Don't update metrics here - let the caller handle it
         return True
 
     def get_available_stages(self, db: Session):

@@ -1,42 +1,46 @@
-# Import models to make them available when importing the models package
+# Import base first
 from .base import Base
+
+# Import models in dependency order
+from .company import Company
+from .role import Role
 from .user import User
 from .project import Project
-from .task import Task
 from .task_stage import TaskStage
 from .milestone import Milestone
-from .company import Company
-from .role import Role, Permission
+from .tag import Tag, task_tag
+from .metrics import TaskMetrics
+from .ml_models import TaskPrediction
+from .task import Task, TaskType, TaskState
+from .task_risk import TaskRisk
 from .file_attachment import FileAttachment
 from .activity import Activity
 from .comment import Comment
 from .time_entry import TimeEntry
-from .message import Message
-from .tag import Tag, task_tag
-from .notification import Notification
 from .log_note import LogNote
-from .metrics import TaskMetrics
-from .user_metrics import UserProductivityMetrics
+from .message import Message
 
+# Export all models
 __all__ = [
     'Base',
-    'User',
-    'Project',
-    'Task',
-    'TaskStage',
-    'Milestone',
     'Company',
     'Role',
-    'Permission',
+    'User',
+    'Project',
+    'TaskStage',
+    'Milestone',
+    'Tag',
+    'task_tag',
+    'TaskMetrics',
+    'TaskPrediction',
+    'Task',
+    'TaskType',
+    'TaskState',
+    'TaskRisk',
     'FileAttachment',
     'Activity',
     'Comment',
     'TimeEntry',
-    'Message',
-    'Tag',
-    'task_tag',
-    'Notification',
     'LogNote',
-    'TaskMetrics',
-    'UserProductivityMetrics'
+    'Message'
 ] 
