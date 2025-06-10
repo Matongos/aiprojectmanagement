@@ -81,6 +81,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Stage } from '@/types/stage';
+import { Progress } from "@radix-ui/react-progress";
 
 interface TaskStatus {
   id: string;
@@ -100,6 +101,7 @@ const taskStatuses: TaskStatus[] = [
 interface Task {
   id: number;
   name: string;
+  progress: number;
   description: string;
   state: TaskState;
   priority: 'low' | 'medium' | 'high' | 'urgent';
@@ -162,6 +164,7 @@ const styles = `
     text-orientation: mixed;
   }
 `;
+
 
 // Helper function to check if user can access a task
 const canAccessTask = (task, currentUser) => {
@@ -424,6 +427,7 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
         stage_id: currentStageId,
         milestone_id: selectedMilestone || null,
         company_id: null,
+        progress:0,
         parent_id: null
       };
 
@@ -691,12 +695,38 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
     setSelectedAssignees(prev => prev.filter(user => user.id !== userId));
   };
 
+  const ProgressIndicator = ({ progress }: { progress: number }) => {
+    const getProgressColor = (value: number) => {
+      if (value >= 80) return 'text-green-600 bg-green-50';
+      if (value >= 50) return 'text-blue-600 bg-blue-50';
+      if (value >= 30) return 'text-yellow-600 bg-yellow-50';
+      return 'text-gray-600 bg-gray-50';
+    };
+  
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger>
+            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${getProgressColor(progress)}`}>
+              {Math.round(progress)}%
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Project Progress: {Math.round(progress)}%</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  };
+
   const renderEmptyState = () => {
     const placeholderStages = [
       { name: "To Do", description: "Tasks to be started" },
       { name: "In Progress", description: "Tasks currently being worked on" },
       { name: "Done", description: "Completed tasks" }
     ];
+   
+
 
     return (
       <div className="overflow-x-auto">
@@ -1491,10 +1521,12 @@ export default function ProjectDetailsPage({ params }: { params: Promise<{ id: s
                                               (1000 * 60 * 60 * 24)
                                             ))} days left
                                           </span>
+                  
                                         </div>
                                       )}
 
                                       {/* Status and Assignee on Right */}
+                                      <ProgressIndicator progress={task.progress || 0} />
                                       <div className="flex items-center gap-2">
                                         {task.assignee && (
                                           <Avatar className="h-6 w-6">

@@ -165,6 +165,7 @@ class Task(TaskBase):
 
 class TaskResponse(BaseModel):
     id: int
+    progress: float = 0
     name: str
     description: Optional[str] = None
     state: str
