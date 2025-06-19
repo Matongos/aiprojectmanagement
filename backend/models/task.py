@@ -249,32 +249,6 @@ class Task(Base):
         new_stage = db.query(TaskStage).get(new_stage_id)
         if not new_stage:
             return False
-            
-        # Get all stages for progress calculation
-        stages = (
-            db.query(TaskStage)
-            .filter(TaskStage.project_id == self.project_id)
-            .order_by(TaskStage.sequence)
-            .all()
-        )
-        
-        # Calculate stage-based progress
-        if stages:
-            current_stage_index = next(
-                (i for i, stage in enumerate(stages) if stage.id == new_stage_id),
-                -1
-            )
-            if current_stage_index != -1:
-                # Calculate progress (98% max for non-DONE tasks)
-                stage_progress = ((current_stage_index + 1) / len(stages)) * 98
-                
-                # If stage has auto_progress_percentage, use the higher value
-                if new_stage.auto_progress_percentage:
-                    stage_progress = max(stage_progress, new_stage.auto_progress_percentage)
-                    if stage_progress > 98:  # Cap at 98% for non-DONE tasks
-                        stage_progress = 98
-                
-                self.progress = round(stage_progress, 2)
         
         # Update stage and last update time
         self.stage_id = new_stage_id

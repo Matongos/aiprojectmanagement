@@ -52,7 +52,6 @@ class User(Base):
     uploaded_files = relationship("FileAttachment", back_populates="user")
     activities = relationship("Activity", back_populates="user")
     log_notes = relationship("LogNote", back_populates="user")
-    log_note_attachments = relationship("LogNoteAttachment", back_populates="user")
     
     # Message relationships
     sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")

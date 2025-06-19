@@ -17,5 +17,4 @@ class LogNote(Base):
     
     # Relationships
     task = relationship("Task", back_populates="log_notes")
-    user = relationship("User", back_populates="log_notes")
-    attachments = relationship("LogNoteAttachment", back_populates="log_note", cascade="all, delete-orphan") 
+    user = relationship("User", back_populates="log_notes") 

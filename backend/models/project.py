@@ -6,31 +6,9 @@ from .milestone import Milestone  # Import Milestone from its dedicated module
 from .task import Task  # Import Task model
 from .tag import Tag  # Import Tag model
 from .metrics import ProjectMetrics, ResourceMetrics
-import enum
+from .project_member import ProjectMember  # Import ProjectMember from its own module
+from .enums import ProjectRole, ProjectStage  # Import enums from dedicated module
 from datetime import datetime
-
-# Add ProjectRole enum with numeric values
-class ProjectRole(int, enum.Enum):
-    MANAGER = 1
-    MEMBER = 2
-    VIEWER = 3
-
-    @classmethod
-    def from_string(cls, role_str: str) -> "ProjectRole":
-        role_map = {
-            "manager": cls.MANAGER,
-            "member": cls.MEMBER,
-            "viewer": cls.VIEWER
-        }
-        return role_map.get(role_str.lower(), cls.MEMBER)
-
-    def to_string(self) -> str:
-        role_map = {
-            self.MANAGER: "manager",
-            self.MEMBER: "member",
-            self.VIEWER: "viewer"
-        }
-        return role_map[self]
 
 # Association table for project tags
 project_tag = Table(
@@ -49,31 +27,6 @@ project_followers = Table(
     Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
     extend_existing=True
 )
-
-class ProjectStage(str, enum.Enum):
-    TODO = "to_do"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
-    CANCELLED = "cancelled"
-
-class ProjectMember(Base):
-    __tablename__ = "project_members"
-
-    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
-    role = Column(Enum(ProjectRole, name='projectrole', create_constraint=True, validate_strings=True), default=ProjectRole.MEMBER)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships with overlaps parameters
-    project = relationship("Project", back_populates="project_members", overlaps="members")
-    user = relationship("User", back_populates="project_memberships", overlaps="member_of_projects")
-
-    def __repr__(self):
-        return f"<ProjectMember {self.project_id}:{self.user_id}>"
-
-    def has_manager_permissions(self) -> bool:
-        """Check if the member has project manager permissions"""
-        return self.role == ProjectRole.MANAGER
 
 class StageDefinition(Base):
     __tablename__ = "stage_definitions"

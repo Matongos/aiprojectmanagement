@@ -2,24 +2,6 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-class LogNoteAttachmentBase(BaseModel):
-    original_filename: str
-    file_size: int
-    content_type: str
-
-class LogNoteAttachmentCreate(LogNoteAttachmentBase):
-    pass
-
-class LogNoteAttachment(LogNoteAttachmentBase):
-    id: int
-    filename: str
-    log_note_id: int
-    uploaded_by: Optional[int]
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
 class LogNoteBase(BaseModel):
     content: str
 
@@ -38,7 +20,6 @@ class LogNoteResponse(LogNoteBase):
     created_by: Optional[int]
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    attachments: List[LogNoteAttachment] = []
     user: Optional[Dict] = None
 
     class Config:
@@ -53,7 +34,6 @@ class LogNote(LogNoteBase):
     created_by: Optional[int]
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    attachments: List[LogNoteAttachment] = []
     user: Optional[UserInfo] = None
 
     class Config:

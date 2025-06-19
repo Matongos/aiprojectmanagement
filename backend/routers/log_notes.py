@@ -1,28 +1,26 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from database import get_db
-from schemas.log_note import LogNote, LogNoteCreate, LogNoteAttachment, LogNoteResponse
+from schemas.log_note import LogNote, LogNoteCreate, LogNoteResponse
 from crud import log_note as log_note_crud
 from routers.auth import get_current_user
-import os
-from config import settings
 from datetime import datetime
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/log-notes", tags=["log-notes"])
-
-UPLOAD_DIR = os.path.join(settings.UPLOAD_DIR, "log_notes")
-os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure upload directory exists
 
 @router.post("/", response_model=LogNoteResponse)
 async def create_log_note(
     content: str = Form(...),
     task_id: int = Form(...),
-    files: Optional[List[UploadFile]] = File(default=None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new log note with optional attachments"""
+    """Create a new log note"""
     try:
         # Create log note
         log_note_data = LogNoteCreate(content=content, task_id=task_id)
@@ -32,18 +30,6 @@ async def create_log_note(
         current_time = datetime.utcnow()
         log_note.created_at = current_time
         log_note.updated_at = current_time
-        
-        # Handle attachments if any
-        if files:  # Only process files if they exist
-            for file in files:
-                if file and file.filename and not isinstance(file, str):  # Ensure it's a valid UploadFile
-                    await log_note_crud.create_log_note_attachment(
-                        db=db,
-                        log_note_id=log_note.id,
-                        file=file,
-                        user_id=current_user["id"],
-                        upload_dir=UPLOAD_DIR
-                    )
         
         # Save changes to database
         db.commit()
@@ -57,7 +43,6 @@ async def create_log_note(
             created_by=log_note.created_by,
             created_at=log_note.created_at,
             updated_at=log_note.updated_at,
-            attachments=log_note.attachments,
             user={
                 "id": current_user["id"],
                 "username": current_user["username"],
@@ -82,10 +67,12 @@ async def get_task_log_notes(
 ):
     """Get all log notes for a task"""
     try:
+        logger.debug(f"Current user: {current_user.get('username')}")
         log_notes = log_note_crud.get_task_log_notes(db, task_id, skip, limit)
+        logger.info(f"Found {len(log_notes)} log notes")
         
         # Convert to response models
-        return [
+        response = [
             LogNoteResponse(
                 id=note.id,
                 content=note.content,
@@ -93,7 +80,6 @@ async def get_task_log_notes(
                 created_by=note.created_by,
                 created_at=note.created_at or datetime.utcnow(),
                 updated_at=note.updated_at or datetime.utcnow(),
-                attachments=note.attachments,
                 user={
                     "id": note.user.id,
                     "username": note.user.username,
@@ -103,26 +89,11 @@ async def get_task_log_notes(
             )
             for note in log_notes
         ]
+        logger.info("Successfully converted log notes to response format")
+        return response
     except Exception as e:
+        logger.error(f"Error fetching log notes: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch log notes: {str(e)}"
-        )
-
-@router.delete("/attachments/{attachment_id}")
-async def delete_attachment(
-    attachment_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Delete a log note attachment"""
-    try:
-        success = log_note_crud.delete_log_note_attachment(db, attachment_id, UPLOAD_DIR)
-        if not success:
-            raise HTTPException(status_code=404, detail="Attachment not found")
-        return {"message": "Attachment deleted successfully"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete attachment: {str(e)}"
         ) 

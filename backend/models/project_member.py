@@ -1,22 +1,28 @@
-from sqlalchemy import Column, Integer, ForeignKey, String, DateTime, Boolean
-from sqlalchemy.sql import func
+from sqlalchemy import Column, Integer, ForeignKey, DateTime, Enum
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from .base import Base
+from .enums import ProjectRole
 
 class ProjectMember(Base):
     __tablename__ = "project_members"
+    __table_args__ = {'extend_existing': True}
 
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    role = Column(String, nullable=False, default="member")  # e.g., "owner", "member", "viewer"
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    role = Column(Enum(ProjectRole, name='projectrole', create_constraint=True, validate_strings=True), default=ProjectRole.MEMBER)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    is_active = Column(Boolean, default=True)
 
-    # Relationships
-    project = relationship("Project", back_populates="members")
-    user = relationship("User", back_populates="project_memberships")
+    # Relationships with overlaps parameters
+    project = relationship("Project", back_populates="project_members", overlaps="members")
+    user = relationship("User", back_populates="project_memberships", overlaps="member_of_projects")
+
+    def __repr__(self):
+        return f"<ProjectMember {self.project_id}:{self.user_id}>"
+
+    def has_manager_permissions(self) -> bool:
+        """Check if the member has project manager permissions"""
+        return self.role == ProjectRole.MANAGER
 
     class Config:
         orm_mode = True 

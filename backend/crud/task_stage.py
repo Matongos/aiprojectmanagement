@@ -18,7 +18,7 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
             .all()
         )
         
-        # For each stage, serialize its tasks' assignees and ensure progress is valid
+        # For each stage, serialize its tasks' assignees
         for stage in stages:
             if stage.tasks:
                 for task in stage.tasks:
@@ -31,9 +31,6 @@ class CRUDTaskStage(CRUDBase[TaskStage, TaskStageCreate, TaskStageUpdate]):
                             'full_name': task.assignee.full_name,
                             'profile_image_url': task.assignee.profile_image_url
                         }
-                    # Ensure progress is a valid float
-                    if task.progress is None:
-                        task.progress = 0.0
         
         return stages
 

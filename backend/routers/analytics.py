@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, extract, text
+from sqlalchemy import func, case, extract, text, cast, Float
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
@@ -25,6 +25,7 @@ from models.user_metrics import UserProductivityMetrics
 from tasks.productivity_updater import update_user_productivity
 from services.complexity_service import ComplexityService
 from models.task_stage import TaskStage
+from models.project_member import ProjectMember
 
 router = APIRouter(
     prefix="/analytics",
@@ -1206,8 +1207,8 @@ async def get_project_progress(
             time_weight = task.planned_hours if task.planned_hours else 8  # Default to 8 hours
             task_weight = (complexity_score / 100) * time_weight  # Normalize complexity to 0-1 and multiply by time
 
-            # Calculate weighted progress
-            task_progress = 100 if task.state == TaskState.DONE else task.progress
+            # For progress, only consider if task is done or not
+            task_progress = 100 if task.state == TaskState.DONE else 0
             weighted_progress += task_progress * task_weight
             total_weight += task_weight
 
@@ -1229,7 +1230,7 @@ async def get_project_progress(
             tasks_progress.append({
                 "task_id": task.id,
                 "name": task.name,
-                "progress": task_progress,
+                "progress": task_progress,  # Will be either 0 or 100
                 "state": task.state,
                 "priority": task.priority,
                 "stage": stage_name,
@@ -1515,4 +1516,73 @@ Return ONLY valid JSON."""
         raise HTTPException(
             status_code=500,
             detail=f"Error analyzing task dependencies: {str(e)}"
+        )
+
+@router.get("/projects/{project_id}/weighted-progress", response_model=Dict[str, Any])
+async def get_project_weighted_progress(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Calculate weighted progress for a project based on task planned hours"""
+    try:
+        # Get project and verify access
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+            
+        # Check user has access to project
+        if not current_user.get("is_superuser"):
+            member = db.query(ProjectMember).filter(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == current_user["id"]
+            ).first()
+            if not member:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have access to this project"
+                )
+        
+        # Get all tasks for the project
+        tasks = db.query(Task).filter(Task.project_id == project_id).all()
+        
+        if not tasks:
+            return {
+                "weighted_progress": 0,
+                "total_planned_hours": 0,
+                "completed_hours": 0
+            }
+        
+        total_planned_hours = 0
+        total_weighted_progress = 0
+        completed_hours = 0
+        
+        for task in tasks:
+            planned_hours = task.planned_hours if task.planned_hours else 8  # Default to 8 hours
+            total_planned_hours += planned_hours
+            
+            # Only count progress as 100 if task is done, otherwise 0
+            task_progress = 100 if task.state == TaskState.DONE else 0
+            total_weighted_progress += task_progress * planned_hours
+            
+            if task.state == TaskState.DONE:
+                completed_hours += planned_hours
+        
+        # Calculate weighted progress
+        weighted_progress = round(total_weighted_progress / total_planned_hours, 2) if total_planned_hours > 0 else 0
+        
+        # Update project progress
+        project.progress = weighted_progress
+        db.commit()
+        
+        return {
+            "weighted_progress": weighted_progress,
+            "total_planned_hours": total_planned_hours,
+            "completed_hours": completed_hours
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to calculate project progress: {str(e)}"
         )

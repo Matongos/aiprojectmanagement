@@ -45,6 +45,7 @@ interface Project {
   creator_id?: number;
   has_user_tasks?: boolean;
   progress: number;
+  weighted_progress?: number;
 }
 
 const statusConfig: Record<ProjectStatus | 'default', { label: string; color: string; description: string }> = {
@@ -63,7 +64,7 @@ const stageConfig: Record<NonNullable<ProjectStage>, { label: string; color: str
   'cancelled': { label: 'Cancelled', color: 'bg-red-500' }
 };
 
-const ProgressIndicator = ({ progress }: { progress: number }) => {
+const ProgressIndicator = ({ progress, weighted_progress }: { progress: number; weighted_progress?: number }) => {
   const getProgressColor = (value: number) => {
     if (value >= 80) return 'text-green-600 bg-green-50';
     if (value >= 50) return 'text-blue-600 bg-blue-50';
@@ -71,16 +72,21 @@ const ProgressIndicator = ({ progress }: { progress: number }) => {
     return 'text-gray-600 bg-gray-50';
   };
 
+  const displayProgress = weighted_progress !== undefined ? weighted_progress : progress;
+
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger>
-          <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${getProgressColor(progress)}`}>
-            {Math.round(progress)}%
+          <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${getProgressColor(displayProgress)}`}>
+            {Math.round(displayProgress)}%
           </div>
         </TooltipTrigger>
         <TooltipContent>
-          <p>Project Progress: {Math.round(progress)}%</p>
+          <p>Project Progress: {Math.round(displayProgress)}%</p>
+          {weighted_progress !== undefined && (
+            <p className="text-xs text-gray-500">(Weighted by planned hours)</p>
+          )}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -158,7 +164,35 @@ function ProjectsContent() {
       }
 
       const allProjects = await allProjectsResponse.json();
-      console.log("All projects:", allProjects);
+      
+      // Fetch weighted progress for each project
+      const projectsWithProgress = await Promise.all(
+        allProjects.map(async (project: Project) => {
+          try {
+            const progressResponse = await fetch(
+              `${API_BASE_URL}/analytics/projects/${project.id}/weighted-progress`,
+              {
+                headers: {
+                  Authorization: `Bearer ${authToken}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+            
+            if (progressResponse.ok) {
+              const progressData = await progressResponse.json();
+              return {
+                ...project,
+                weighted_progress: progressData.weighted_progress
+              };
+            }
+            return project;
+          } catch (error) {
+            console.error(`Error fetching progress for project ${project.id}:`, error);
+            return project;
+          }
+        })
+      );
       
       // Now check if user has tasks in each project
       let userTasks = [];
@@ -172,24 +206,17 @@ function ProjectsContent() {
         
         if (userTasksResponse.ok) {
           userTasks = await userTasksResponse.json();
-          console.log("User tasks:", userTasks);
-        } else {
-          console.error(`Failed to fetch user tasks: ${userTasksResponse.status}`);
-          // Continue with empty user tasks instead of failing the whole operation
         }
       } catch (taskError) {
         console.error("Error fetching user tasks:", taskError);
-        // Continue with empty user tasks
       }
       
-      // Mark projects where user has access (their own projects or has tasks in them)
-      const projectsWithAccessInfo = allProjects.map((project: Project) => {
-        // Check if user has tasks in this project
+      // Mark projects where user has access
+      const projectsWithAccessInfo = projectsWithProgress.map((project: Project) => {
         const hasUserTasks = userTasks.length > 0
           ? userTasks.some((task: any) => task.project_id === project.id)
           : false;
         
-        // Check if user created this project
         const isCreator = project.creator_id === Number(user?.id);
         
         return {
@@ -570,7 +597,7 @@ function ProjectsContent() {
                         </TooltipProvider>
                       </div>
                     )}
-                    <ProgressIndicator progress={project.progress || 0} />
+                    <ProgressIndicator progress={project.progress || 0} weighted_progress={project.weighted_progress} />
                     <span className={`text-sm ${projectAccess ? 'text-gray-600' : 'text-gray-400'}`}>
                       {project.task_count || 0} Tasks
                     </span>

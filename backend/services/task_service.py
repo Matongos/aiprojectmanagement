@@ -119,49 +119,6 @@ class TaskService:
 
         return task
 
-    def _calculate_stage_based_progress(self, db: Session, task: Task) -> float:
-        """Calculate task progress based on current stage and total stages"""
-        # If task is done, return 100% regardless of stage
-        if task.state == TaskState.DONE:
-            return 100.0
-            
-        # Get all stages for the project ordered by sequence
-        if not task.project_id:
-            return 0.0
-            
-        stages = (
-            db.query(TaskStage)
-            .filter(TaskStage.project_id == task.project_id)
-            .order_by(TaskStage.sequence)
-            .all()
-        )
-        
-        if not stages:
-            return 0.0
-            
-        # Find current stage position
-        current_stage_index = next(
-            (i for i, stage in enumerate(stages) if stage.id == task.stage_id),
-            -1
-        )
-        
-        if current_stage_index == -1:
-            return 0.0
-            
-        # Calculate progress based on stage position
-        # We use 98 as max progress (instead of 100) to reserve 100% for DONE state
-        total_stages = len(stages)
-        stage_progress = ((current_stage_index + 1) / total_stages) * 98
-        
-        # If stage has auto_progress_percentage defined, use the higher value
-        current_stage = stages[current_stage_index]
-        if current_stage.auto_progress_percentage:
-            stage_progress = max(stage_progress, current_stage.auto_progress_percentage)
-            if stage_progress > 98:  # Cap at 98% for non-DONE tasks
-                stage_progress = 98
-        
-        return round(stage_progress, 2)
-
     def update_task_state(self, db: Session, task: Task, new_state: str, current_user_id: int) -> Task:
         """Update task state and handle completion status"""
         # Check project permissions
@@ -188,7 +145,6 @@ class TaskService:
             if not task.start_date:
                 task.start_date = task.created_at or datetime.utcnow()
             task.end_date = datetime.utcnow()
-            task.progress = 100.0  # Always set to 100% when done
             
             # Trigger productivity update for task assignee
             if task.assigned_to:
@@ -197,8 +153,6 @@ class TaskService:
         elif task.state == TaskState.DONE and new_state != TaskState.DONE:
             # Handle un-completion
             task.end_date = None
-            # Recalculate progress based on stage
-            task.progress = self._calculate_stage_based_progress(db, task)
             
             # Trigger productivity update for task assignee
             if task.assigned_to:
@@ -234,17 +188,15 @@ class TaskService:
         completion_stage_names = {'done', 'completed', 'end', 'closed', 'complete', 'finished'}
         is_completion_stage = any(name in new_stage.name.lower() for name in completion_stage_names)
         
+        # Update task stage
         task.stage_id = new_stage_id
         task.date_last_stage_update = func.now()
         
-        # Update task status if moving to a completion stage
+        # Handle state based on conditions
         if is_completion_stage:
+            # Moving to completion stage always sets DONE state
             task.state = TaskState.DONE
             task.end_date = datetime.utcnow()
-            task.progress = 100.0
-        else:
-            # Calculate new progress based on stage position
-            task.progress = self._calculate_stage_based_progress(db, task)
         
         db.commit()
         db.refresh(task)
@@ -302,21 +254,10 @@ class TaskService:
                     # Ensure start_date exists before setting end_date
                     if not task.start_date:
                         task_data["start_date"] = task.created_at or datetime.utcnow()
-                    task_data["progress"] = 100.0
                 elif task.state == TaskState.DONE and task_data["state"] != TaskState.DONE:
                     # When changing from DONE to another state
                     task_data["end_date"] = None
-                    task_data["progress"] = 0.0  # Reset progress when task is no longer done
             
-            # Check start_date permission if it's being updated
-            if "start_date" in task_data:
-                if not ScheduledTaskService.can_set_start_date(db, current_user_id, task_project_id):
-                    return None, "Only superusers and project managers can set task start dates"
-                    
-                # Validate start_date is in the future
-                if task_data["start_date"] and task_data["start_date"] < datetime.utcnow():
-                    return None, "Start date must be in the future"
-
             # Validate project exists if specified
             if task_data.get("project_id"):
                 check_query = text("SELECT id FROM projects WHERE id = :project_id")
@@ -355,8 +296,7 @@ class TaskService:
                 "tags": "tags",
                 "email_cc": "email_cc",
                 "email_from": "email_from",
-                "displayed_image_id": "displayed_image_id",
-                "progress": "progress"
+                "displayed_image_id": "displayed_image_id"
             }
             
             for field, column in field_map.items():
@@ -377,7 +317,7 @@ class TaskService:
                 WHERE id = :task_id
                 RETURNING id, name, description, state, priority, deadline, 
                           planned_hours, assigned_to, created_by, project_id,
-                          created_at, updated_at, progress, stage_id, end_date
+                          created_at, updated_at, stage_id, end_date
             """)
             
             result = db.execute(update_query, params).fetchone()
@@ -400,7 +340,6 @@ class TaskService:
                 "project_id": result.project_id,
                 "created_at": result.created_at,
                 "updated_at": result.updated_at,
-                "progress": result.progress if hasattr(result, 'progress') else 0.0,
                 "stage_id": result.stage_id,
                 "end_date": result.end_date
             }
