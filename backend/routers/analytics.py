@@ -510,6 +510,7 @@ async def get_completion_time_metrics(
     try:
         start_date = datetime.utcnow() - timedelta(days=days)
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        fourteen_days_ago = datetime.utcnow() - timedelta(days=14)
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
         
         # Get completed tasks for different time periods
@@ -530,6 +531,15 @@ async def get_completion_time_metrics(
         completed_tasks_30days = base_query.filter(
             Task.state == TaskState.DONE,
             Task.updated_at >= thirty_days_ago
+        ).all()
+
+        # --- New: Get previous 7 days tasks ---
+        previous_7days_start = fourteen_days_ago
+        previous_7days_end = seven_days_ago
+        completed_tasks_prev_7days = base_query.filter(
+            Task.state == TaskState.DONE,
+            Task.updated_at >= previous_7days_start,
+            Task.updated_at < previous_7days_end
         ).all()
 
         # Calculate metrics for each period
@@ -554,18 +564,11 @@ async def get_completion_time_metrics(
         avg_completion_time, tasks_over_planned, total_tasks = calculate_period_metrics(completed_tasks_period)
         last_7days_avg, _, tasks_7days = calculate_period_metrics(completed_tasks_7days)
         last_30days_avg, _, tasks_30days = calculate_period_metrics(completed_tasks_30days)
-        
-        # Calculate trend (comparing to previous period)
-        previous_start = start_date - timedelta(days=days)
-        previous_tasks = db.query(Task).filter(
-            Task.state == TaskState.DONE,
-            Task.updated_at >= previous_start,
-            Task.updated_at < start_date
-        ).all()
-        
-        previous_avg, _, _ = calculate_period_metrics(previous_tasks)
-        trend = ((avg_completion_time - previous_avg) / previous_avg) if previous_avg > 0 else 0
-        
+        prev_7days_avg, _, prev_7days_count = calculate_period_metrics(completed_tasks_prev_7days)
+
+        # --- New: Calculate trend for last 7 days vs previous 7 days ---
+        trend = ((last_7days_avg - prev_7days_avg) / prev_7days_avg) if prev_7days_avg > 0 else 0
+
         # Get tasks needing attention (unchanged for 7 business days)
         attention_query = db.query(func.count(Task.id))
         if not current_user.get("is_superuser"):

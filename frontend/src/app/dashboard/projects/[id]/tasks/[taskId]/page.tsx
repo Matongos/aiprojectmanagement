@@ -1095,6 +1095,22 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       // First update the task details using patchApi helper
       await putApi(`/tasks/${resolvedParams.taskId}`, updatedFields);
 
+      // After updating the task, trigger risk score recalculation for the assigned user
+      const assignedUserId = updatedFields.assigned_to || task?.assigned_to;
+      if (assignedUserId && token) {
+        try {
+          await fetch(`${API_BASE_URL}/ai/user/${assignedUserId}/risk-score`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+        } catch (err) {
+          console.error('Failed to update user risk score:', err);
+        }
+      }
+
       // Create activities for all changes
       for (const activityData of activities) {
         await postApi('/activities/', activityData);

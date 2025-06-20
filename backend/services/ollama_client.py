@@ -38,13 +38,32 @@ class OllamaClient:
                         error_text = await response.text()
                         print(f"Ollama API error: {error_text}")
                         return None
-                        
-                    result = await response.json()
-                    return type('Response', (), {
-                        'text': result.get('response', ''),
-                        'model': model,
-                        'usage': result.get('stats', {})
-                    })
+                    # NDJSON streaming: print and collect all response chunks
+                    responses = []
+                    last_result = None
+                    async for line in response.content:
+                        line = line.decode('utf-8').strip()
+                        if not line:
+                            continue
+                        print(f"Ollama NDJSON line: {line}")  # Debug print
+                        try:
+                            result = json.loads(line)
+                            if 'response' in result:
+                                responses.append(result['response'])
+                            last_result = result
+                        except Exception as e:
+                            print(f"Error parsing NDJSON line: {e} | line: {line}")
+                            continue
+                    full_response = ''.join(responses)
+                    if full_response:
+                        return type('Response', (), {
+                            'text': full_response,
+                            'model': model,
+                            'usage': last_result.get('stats', {}) if last_result else {}
+                        })()
+                    else:
+                        print("No valid response text received from Ollama.")
+                        return None
                     
         except Exception as e:
             print(f"Error calling Ollama API: {str(e)}")

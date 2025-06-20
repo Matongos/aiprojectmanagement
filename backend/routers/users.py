@@ -3,11 +3,16 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
 import logging
+from datetime import datetime
 
 from database import get_db
 from routers.auth import get_current_user
 from services import user_service
 from schemas.user import User
+from models.user import User as UserModel
+from models.project import Project, ProjectMember
+from models.task import Task
+from sqlalchemy import or_, and_
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -76,6 +81,24 @@ class UserProfileUpdate(BaseModel):
         }
     }
 
+class TeamDirectoryTask(BaseModel):
+    id: int
+    name: str
+    state: str
+    project_id: int
+    project_name: str
+    deadline: Optional[datetime] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[int] = None
+
+class TeamDirectoryUser(BaseModel):
+    id: int
+    name: str
+    job_title: Optional[str]
+    project_names: List[str]
+    has_active_task: bool
+    tasks: List[TeamDirectoryTask]
+
 # Routes
 @router.get("/", response_model=List[UserResponse])
 async def get_users(
@@ -104,6 +127,76 @@ async def get_users(
 async def read_users_me(current_user: dict = Depends(get_current_user)):
     """Get current user information."""
     return current_user
+
+@router.get("/team-directory", response_model=List[TeamDirectoryUser])
+async def get_team_directory(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all users in the same projects as the current user, with their tasks and shared projects.
+    Superusers see all users, starting with those with active tasks.
+    """
+    user_id = current_user["id"]
+    is_superuser = current_user.get("is_superuser", False)
+
+    # Helper: get active task states
+    active_states = ["todo", "in_progress", "changes_requested", "approved"]
+
+    if is_superuser:
+        users = db.query(UserModel).all()
+    else:
+        # Get all project IDs where user is a member or has a task
+        project_ids = set(
+            [pm.project_id for pm in db.query(ProjectMember).filter(ProjectMember.user_id == user_id).all()]
+        )
+        task_project_ids = set(
+            [t.project_id for t in db.query(Task).filter(Task.assigned_to == user_id).all()]
+        )
+        all_project_ids = project_ids | task_project_ids
+        # Get all users in those projects
+        user_ids = set()
+        for pid in all_project_ids:
+            members = db.query(ProjectMember).filter(ProjectMember.project_id == pid).all()
+            user_ids.update([m.user_id for m in members])
+        users = db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
+
+    # Build user info
+    user_list = []
+    for user in users:
+        # Get all projects this user is in
+        user_project_ids = set([pm.project_id for pm in db.query(ProjectMember).filter(ProjectMember.user_id == user.id).all()])
+        user_projects = db.query(Project).filter(Project.id.in_(user_project_ids)).all()
+        project_names = [p.name for p in user_projects]
+        # Get all tasks for this user
+        user_tasks = db.query(Task).filter(Task.assigned_to == user.id).all()
+        # For each task, get project name
+        tasks_out = [
+            TeamDirectoryTask(
+                id=t.id,
+                name=t.name,
+                state=t.state,
+                project_id=t.project_id,
+                project_name=next((p.name for p in user_projects if p.id == t.project_id), None),
+                deadline=t.deadline,
+                priority=t.priority,
+                assigned_to=t.assigned_to
+            )
+            for t in user_tasks
+        ]
+        # Determine if user has any active task
+        has_active_task = any(t.state in active_states for t in user_tasks)
+        user_list.append(TeamDirectoryUser(
+            id=user.id,
+            name=user.full_name,
+            job_title=user.job_title,
+            project_names=project_names,
+            has_active_task=has_active_task,
+            tasks=tasks_out
+        ))
+    # Sort: users with active tasks first
+    user_list.sort(key=lambda u: not u.has_active_task)
+    return user_list
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(

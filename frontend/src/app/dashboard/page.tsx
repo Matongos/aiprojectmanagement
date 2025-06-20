@@ -17,6 +17,8 @@ import { getRecentProjects } from "@/lib/api";
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { Project } from "@/types/project";
 import { WeatherWidget } from "@/components/weather/WeatherWidget";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface Comment {
   id: number;
@@ -119,24 +121,57 @@ interface Task {
   priority_score: number;
   deadline?: string;
   state: string;
+  progress: number;
   assignee?: {
     full_name: string;
     profile_image_url: string | null;
   };
 }
 
+// Add interface for user risk score
+interface UserRiskScore {
+  scope: string;
+  user_id: number | null;
+  average_risk_score: number;
+  min_risk_score: number;
+  max_risk_score: number;
+  median_risk_score: number;
+  task_count: number;
+  risk_level: string;
+  ai_explanation: string;
+  high_risk_task_count: number;
+  critical_risk_task_count: number;
+}
+
+// Add interface for AI Task Insight
+interface AiTaskInsight {
+  task_id: number;
+  task_name: string;
+  assigned_to: string | null;
+  ai_insights: {
+    root_cause: string;
+    predicted_impact: string;
+    suggested_action: string;
+  };
+}
+
+// Add new interface for team directory user
+interface TeamDirectoryUser {
+  id: number;
+  name: string;
+  job_title?: string;
+  project_names: string[];
+  has_active_task: boolean;
+  tasks: { id: number; name: string; state: string; project_id: number; project_name: string; deadline?: string; priority?: string; assigned_to?: number }[];
+}
+
 export default function DashboardPage() {
   const { user, token } = useAuthStore();
-  const { metrics, loading, error, fetchMetrics } = useDashboardStore();
+  const { loading, error, fetchMetrics } = useDashboardStore();
   const [date, setDate] = useState<Date>(new Date());
   const [projects, setProjects] = useState<Project[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<string>("");
-  const [teamMembers] = useState([
-    { id: '1', name: 'Dana R.', role: 'Project Manager', avatar: '/default-avatar.png' },
-    { id: '2', name: 'Peter McCloud', role: 'Team Lead', avatar: '/default-avatar.png' },
-    { id: '3', name: 'Nancy K.', role: 'Account Manager', avatar: '/default-avatar.png' },
-    { id: '4', name: 'James M.', role: 'Digital Manager', avatar: '/default-avatar.png' },
-  ]);
+  const [teamSearch, setTeamSearch] = useState("");
 
   // WebSocket connection
   const wsStatus = useWebSocket("");
@@ -297,6 +332,71 @@ export default function DashboardPage() {
     enabled: !!token,
   });
 
+  // Add user risk score query
+  const { data: userRiskScore, isLoading: isLoadingRiskScore, error: riskScoreError } = useQuery<UserRiskScore>({
+    queryKey: ["user-risk-score", user?.id],
+    queryFn: async () => {
+      if (!token || !user?.id) {
+        throw new Error("Authentication token or user ID is missing");
+      }
+      const response = await fetch(`${API_BASE_URL}/ai/user/${user.id}/risk-score/latest`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch user risk score');
+      }
+      return response.json();
+    },
+    enabled: !!token && !!user?.id,
+    retry: 1,
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Add query for AI task insights (for superusers and users)
+  const { data: aiTaskInsights, isLoading: isLoadingAiTaskInsights, error: aiTaskInsightsError } = useQuery<AiTaskInsight[]>({
+    queryKey: ["ai-task-insights", user?.id],
+    queryFn: async () => {
+      if (!token || !user?.id) {
+        throw new Error("Authentication token or user ID is missing");
+      }
+      const response = await fetch(`${API_BASE_URL}/ai/ai/analyze-tasks/history?user_id=${user.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch AI task insights');
+      }
+      return response.json();
+    },
+    enabled: !!token && !!user?.id,
+    retry: 1,
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Fetch team directory
+  const { data: teamDirectory, isLoading: isLoadingTeamDirectory, error: teamDirectoryError } = useQuery<TeamDirectoryUser[]>({
+    queryKey: ["team-directory"],
+    queryFn: async () => {
+      if (!token) throw new Error("Authentication token is missing");
+      const response = await fetch(`${API_BASE_URL}/users/team-directory`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch team directory');
+      return response.json();
+    },
+    enabled: !!token,
+  });
+
   // Log the auth state
   useEffect(() => {
     console.log("Auth state:", {
@@ -316,40 +416,56 @@ export default function DashboardPage() {
     async function fetchData() {
       try {
         const projectsData = await getRecentProjects();
-        const accessibleProjects = projectsData
+        const projectPromises = projectsData
           .filter((project: ApiProject) => 
             project.created_by === Number(user?.id) || project.has_user_tasks === true
           )
-          .map((project: ApiProject): Project => ({
-            id: project.id,
-            name: project.name,
-            description: project.description || null,
-            key: project.id.toString(),
-            privacy_level: 'public',
-            start_date: project.created_at,
-            end_date: project.deadline || null,
-            created_by: project.created_by || 0,
-            color: '#2563eb',
-            is_template: false,
-            meta_data: {},
-            created_at: project.created_at,
-            updated_at: project.updated_at,
-            is_active: true,
-            has_user_tasks: project.has_user_tasks,
-            has_access: project.has_access,
-            member_count: project.members?.length || 0,
-            members: project.members || []
-          }));
+          .map(async (project: ApiProject) => {
+            // Fetch detailed project information including members
+            const response = await fetch(`${API_BASE_URL}/projects/${project.id}`, {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            
+            if (!response.ok) {
+              throw new Error(`Failed to fetch project details for project ${project.id}`);
+            }
+            
+            const detailedProject = await response.json();
+            
+            return {
+              id: project.id,
+              name: project.name,
+              description: project.description || null,
+              key: project.id.toString(),
+              start_date: project.created_at,
+              end_date: project.deadline || null,
+              created_by: project.created_by || 0,
+              is_template: false,
+              meta_data: {},
+              created_at: project.created_at,
+              updated_at: project.updated_at,
+              is_active: true,
+              has_user_tasks: project.has_user_tasks,
+              has_access: project.has_access,
+              member_count: detailedProject.member_count || 0,
+              members: detailedProject.members || []
+            };
+          });
+
+        const accessibleProjects = await Promise.all(projectPromises);
         setProjects(accessibleProjects);
       } catch (error) {
         console.error('Failed to fetch projects:', error);
       }
     }
 
-    if (user) {
+    if (user && token) {
       fetchData();
     }
-  }, [user]);
+  }, [user, token]);
 
   if (loading || isLoadingTaskSummary) {
     return (
@@ -399,9 +515,8 @@ export default function DashboardPage() {
     );
   }
 
-  const suggestions = metrics.aiInsights?.suggestions || [];
-  const riskLevel = metrics.aiInsights?.riskLevel || 'Low';
-  const predictedDelays = metrics.aiInsights?.predictedDelays || 0;
+  // Get risk level from the new endpoint
+  const riskLevel = userRiskScore?.risk_level || 'Loading...';
 
   // Update the chart dataset using taskSummaryData
   const chartData = {
@@ -492,15 +607,14 @@ export default function DashboardPage() {
           </div>
         </div>
         
-        {/* Weather and Quick Actions Row */}
+        {/* Quick Actions Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <WeatherWidget />
           {/* You can add more quick action widgets here */}
         </div>
       </div>
 
       {/* Debug Output - Remove in production */}
-      <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+     {/* <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <h3 className="text-sm font-semibold mb-2">Debug Information:</h3>
         <pre className="text-xs overflow-auto max-h-40">
           {JSON.stringify({ taskSummaryData, isLoadingTaskSummary, taskSummaryError }, null, 2)}
@@ -509,24 +623,31 @@ export default function DashboardPage() {
 
       {/* Metrics Section */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 mb-6">
+        <WeatherWidget />
         <KPICard
-          title="Total Tasks"
+          title="Task Overview"
           value={taskSummaryData?.total ?? 0}
-          description={taskSummaryData ? 
-            `Active: ${taskSummaryData.active}, Completed: ${taskSummaryData.completed}, Cancelled: ${taskSummaryData.cancelled}` : 
-            'No data available'}
-          isLoading={isLoadingTaskSummary}
-          trend={undefined}
-        />
-        <KPICard
-          title="Completed Tasks"
-          value={completionRateData?.completed_tasks ?? 0}
+          description={
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <span>Active:</span>
+                <span>{taskSummaryData?.active ?? 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Completed:</span>
+                <span>{taskSummaryData?.completed ?? 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Completion Rate:</span>
+                <span>{completionRateData?.completion_rate?.toFixed(1)}%</span>
+              </div>
+            </div>
+          }
+          isLoading={isLoadingTaskSummary || isLoadingCompletionRate}
           trend={completionRateData?.completion_rate ?? 0}
-          description={`${completionRateData?.is_superuser_view ? 'Overall' : 'Your'} completion rate: ${completionRateData?.completion_rate?.toFixed(1)}%`}
-          isLoading={isLoadingCompletionRate}
         />
         <KPICard
-          title="Average Completion Time"
+          title="Time Metrics"
           value={`${completionMetrics.averageCompletionTime.toFixed(1)}h`}
           trend={completionMetrics.trend}
           description={
@@ -582,20 +703,31 @@ export default function DashboardPage() {
                         </div>
                         <div>
                           <p className="text-sm font-medium">{project.name}</p>
-                          <p className="text-xs text-gray-500">{project.member_count || 0} members</p>
+                          <p className="text-xs text-gray-500">
+                            {project.member_count ?? 0} {project.member_count === 1 ? 'member' : 'members'}
+                          </p>
                         </div>
                       </div>
                       <div className="flex -space-x-2">
-                        {project.members?.slice(0, 3).map((member) => (
-                          <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
-                            <AvatarImage 
-                              src={member.user.profile_image_url || '/default-avatar.png'} 
-                              alt={member.user.name}
-                              className="object-cover"
-                            />
-                            <AvatarFallback>{member.user.name[0]}</AvatarFallback>
-                          </Avatar>
-                        ))}
+                        {project.members && project.members.length > 0 ? (
+                          project.members.slice(0, 3).map((member) => (
+                            <Avatar key={member.id} className="h-6 w-6 border-2 border-white">
+                              <AvatarImage 
+                                src={member.user?.profile_image_url || '/default-avatar.png'} 
+                                alt={member.user?.name || 'Member'}
+                                className="object-cover"
+                              />
+                              <AvatarFallback>
+                                {member.user?.name ? member.user.name[0] : 'M'}
+                              </AvatarFallback>
+                            </Avatar>
+                          ))
+                        ) : null}
+                        {typeof project.member_count === 'number' && project.member_count > 3 && (
+                          <div className="h-6 w-6 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center">
+                            <span className="text-xs text-gray-600">+{project.member_count - 3}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))
@@ -762,35 +894,72 @@ export default function DashboardPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <h3 className="font-semibold mb-2">Risk Level</h3>
+                  {isLoadingRiskScore ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
+                      <span className="text-sm text-gray-500">Analyzing...</span>
+                    </div>
+                  ) : riskScoreError ? (
+                    <p className="text-sm text-red-500">Failed to load risk level</p>
+                  ) : (
                   <p className={`text-lg ${
-                    riskLevel === "Low"
+                      riskLevel === "Very Low" || riskLevel === "Low"
                       ? "text-green-500"
                       : riskLevel === "Medium"
                       ? "text-yellow-500"
-                      : "text-red-500"
+                        : riskLevel === "High" || riskLevel === "Critical"
+                        ? "text-red-500"
+                        : "text-gray-500"
                   }`}>
                     {riskLevel}
                   </p>
+                  )}
                 </div>
                 <div>
-                  <h3 className="font-semibold mb-2">Predicted Delays</h3>
+                  <h3 className="font-semibold mb-2">Tasks at Risk</h3>
+                  {isLoadingRiskScore ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
+                      <span className="text-sm text-gray-500">Analyzing...</span>
+                    </div>
+                  ) : riskScoreError ? (
+                    <p className="text-sm text-red-500">Failed to load</p>
+                  ) : (
                   <p className="text-lg">
-                    {predictedDelays} task(s) at risk
+                      {(userRiskScore?.high_risk_task_count ?? 0) + (userRiskScore?.critical_risk_task_count ?? 0)} task(s) at risk
                   </p>
+                  )}
                 </div>
               </div>
               <div className="mt-4">
-                <h3 className="font-semibold mb-2">AI Suggestions</h3>
-                {suggestions && suggestions.length > 0 ? (
-                  <ul className="list-disc list-inside space-y-1">
-                    {suggestions.map((suggestion, index) => (
-                      <li key={index} className="text-sm text-gray-600">
-                        {suggestion}
+                <h3 className="font-semibold mb-2">AI Task Suggestions</h3>
+                {isLoadingAiTaskInsights ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
+                    <span className="text-sm text-gray-500">Loading AI suggestions...</span>
+                  </div>
+                ) : aiTaskInsightsError ? (
+                  <p className="text-sm text-red-500">Failed to load AI task suggestions</p>
+                ) : aiTaskInsights && aiTaskInsights.length > 0 ? (
+                  <ul className="space-y-4">
+                    {aiTaskInsights.map((insight) => (
+                      <li key={insight.task_id} className="bg-blue-50 rounded-lg p-3 shadow-sm">
+                        <div className="mb-1 text-sm text-gray-700 font-semibold">
+                          Task: <span className="text-blue-700">{insight.task_name}</span> (ID: {insight.task_id})
+                        </div>
+                        {insight.assigned_to && (
+                          <div className="mb-1 text-xs text-gray-500">
+                            Assigned to: <span className="font-medium text-gray-700">{insight.assigned_to}</span>
+                          </div>
+                        )}
+                        <div className="text-sm">
+                          <span className="font-semibold text-green-700">Suggested Action:</span> {insight.ai_insights.suggested_action || <span className="text-gray-400">No suggestion</span>}
+                        </div>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm text-gray-500">No suggestions available</p>
+                  <p className="text-sm text-gray-500">No AI task suggestions available</p>
                 )}
               </div>
             </CardContent>
@@ -799,22 +968,63 @@ export default function DashboardPage() {
           {/* Team Directory */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Team directory</CardTitle>
+              <CardTitle className="text-lg flex items-center justify-between">
+                Team directory
+                {teamDirectory && teamDirectory.length > 4 && (
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button variant="outline" size="sm">View all</Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-lg w-full">
+                      <DialogHeader>
+                        <DialogTitle>All Team Members</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 max-h-[400px] overflow-y-auto">
+                        <Input placeholder="Search team members..." className="mb-2" onChange={e => setTeamSearch(e.target.value)} />
+                        {(teamDirectory.filter(u => u.name.toLowerCase().includes(teamSearch.toLowerCase()) || (u.job_title || '').toLowerCase().includes(teamSearch.toLowerCase()))).map((member) => (
+                          <div key={member.id} className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50">
+                            <Avatar className="h-10 w-10">
+                              <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                              <AvatarFallback>{member.name[0]}</AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium">{member.name}</p>
+                              <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                            </div>
+                            <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">{member.tasks.length} tasks</div>
+                          </div>
+                        ))}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                )}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {teamMembers.map((member) => (
-                  <div key={member.id} className="flex items-center space-x-3">
-                    <Avatar className="h-10 w-10">
-                      <AvatarImage src={member.avatar} alt={member.name} />
-                      <AvatarFallback>{member.name[0]}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="text-sm font-medium">{member.name}</p>
-                      <p className="text-xs text-gray-500">{member.role}</p>
-                    </div>
+                {isLoadingTeamDirectory ? (
+                  <div className="flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                   </div>
-                ))}
+                ) : teamDirectoryError ? (
+                  <p className="text-sm text-red-500 text-center">Failed to load team directory</p>
+                ) : teamDirectory && teamDirectory.length > 0 ? (
+                  teamDirectory.slice(0, 4).map((member) => (
+                    <div key={member.id} className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50">
+                      <Avatar className="h-10 w-10">
+                        <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                        <AvatarFallback>{member.name[0]}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{member.name}</p>
+                        <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                      </div>
+                      <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">{member.tasks.length} tasks</div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500 text-center">No team members found</p>
+                )}
               </div>
             </CardContent>
           </Card>
