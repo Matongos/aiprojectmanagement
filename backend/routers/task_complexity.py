@@ -8,6 +8,8 @@ from routers.auth import get_current_user
 from models.task import Task
 from datetime import datetime
 from pydantic import BaseModel
+from tasks.task_complexity import calculate_task_complexity_task
+from celery.result import AsyncResult
 
 class StoredComplexityResponse(BaseModel):
     task_id: int
@@ -26,56 +28,21 @@ router = APIRouter(
 
 complexity_service = ComplexityService()
 
-@router.get("/{task_id}", response_model=TaskComplexityResponse)
+@router.get("/{task_id}", response_model=Dict)
 async def get_task_complexity(
     task_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Calculate complexity score for a specific task.
-    
-    The complexity score is calculated based on:
-    - Task name and description analysis
-    - Time pressure and deadlines
-    - Environmental factors (indoor/outdoor)
-    - Weather conditions (for outdoor tasks)
-    - Dependencies
-    """
-    try:
-        # Get the task first
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        # Calculate complexity
-        complexity = await complexity_service.analyze_task_complexity(db, task_id)
-        
-        # Update task with new complexity data
-        task.complexity_score = complexity.total_score
-        task.complexity_factors = {
-            "technical": complexity.factors.technical_complexity,
-            "scope": complexity.factors.scope_complexity,
-            "time_pressure": complexity.factors.time_pressure,
-            "environmental": complexity.factors.environmental_complexity,
-            "dependencies": complexity.factors.dependencies_impact,
-            "summary": complexity.analysis_summary
-        }
-        task.complexity_last_updated = complexity.last_updated
-        
-        # Commit changes to database
-        db.commit()
-        
-        return TaskComplexityResponse(
-            success=True,
-            complexity=complexity
-        )
-    except Exception as e:
-        db.rollback()  # Rollback in case of error
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error calculating task complexity: {str(e)}"
-        )
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    celery_task = calculate_task_complexity_task.delay(task_id)
+    return {
+        "status": "queued",
+        "task_id": task_id,
+        "celery_task_id": celery_task.id
+    }
 
 @router.get("/batch/{project_id}", response_model=List[TaskComplexityResponse])
 async def get_project_tasks_complexity(
@@ -178,4 +145,16 @@ async def get_all_stored_task_complexities(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching stored task complexities: {str(e)}"
-        ) 
+        )
+
+@router.get("/status/{celery_task_id}", response_model=Dict)
+async def get_task_complexity_status(
+    celery_task_id: str
+):
+    result = AsyncResult(celery_task_id)
+    response = {
+        "task_id": celery_task_id,
+        "state": result.state,
+        "result": result.result if result.ready() else None
+    }
+    return response 

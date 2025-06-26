@@ -21,6 +21,7 @@ from workers.task_scheduler import start_scheduler
 from workers.metrics_worker import start_metrics_worker
 from services.scheduler_service import scheduler_service
 import logging
+from celery_app import celery_app
 
 # Create bcrypt context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -51,6 +52,12 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_version="3.0.2",
     lifespan=lifespan
+)
+
+# Configure Celery backend for FastAPI
+celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
+    result_backend='redis://localhost:6379/0'
 )
 
 # Add CORS middleware

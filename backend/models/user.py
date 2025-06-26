@@ -48,7 +48,7 @@ class User(Base):
     project_memberships = relationship("ProjectMember", back_populates="user", overlaps="member_of_projects")
     time_entries = relationship("TimeEntry", back_populates="user")
     comments = relationship("Comment", back_populates="author", cascade="all, delete-orphan")
-    notifications = relationship("Notification", back_populates="user")
+    notifications = relationship("Notification", back_populates="user", lazy="dynamic")
     uploaded_files = relationship("FileAttachment", back_populates="user")
     activities = relationship("Activity", back_populates="user")
     log_notes = relationship("LogNote", back_populates="user")

@@ -30,8 +30,18 @@ class SchedulerService:
             misfire_grace_time=3600  # Allow job to run up to 1 hour late if system was down
         )
         
+        # Schedule priority score updates to run every 3 hours
+        self.scheduler.add_job(
+            self._update_all_priority_scores,
+            CronTrigger(hour='*/3'),  # Run every 3 hours (0, 3, 6, 9, 12, 15, 18, 21)
+            id='priority_score_update',
+            name='Update task priority scores',
+            replace_existing=True,
+            misfire_grace_time=1800  # Allow job to run up to 30 minutes late if system was down
+        )
+        
         self.scheduler.start()
-        logger.info("Scheduler started - Task priorities will be updated at 00:00 and 12:00 daily")
+        logger.info("Scheduler started - Task priorities will be updated at 00:00 and 12:00 daily, priority scores every 3 hours")
 
     async def stop(self):
         """Stop the scheduler"""
@@ -157,5 +167,18 @@ class SchedulerService:
                     )
             except Exception as e:
                 logger.error(f"Error sending priority change notification: {str(e)}")
+
+    async def _update_all_priority_scores(self):
+        """Update priority scores for all active tasks using stored complexity data"""
+        try:
+            from tasks.task_priority import scheduled_priority_score_update_task
+            
+            # Queue the Celery task
+            celery_task = scheduled_priority_score_update_task.delay()
+            
+            logger.info(f"Queued scheduled priority score update task: {celery_task.id}")
+            
+        except Exception as e:
+            logger.error(f"Error queuing scheduled priority score update: {str(e)}")
 
 scheduler_service = SchedulerService() 

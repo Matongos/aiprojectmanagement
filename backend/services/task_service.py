@@ -402,7 +402,13 @@ class TaskService:
                 "updated_at": result.updated_at,
                 "progress": result.progress if hasattr(result, 'progress') else 0.0,
                 "stage_id": result.stage_id,
-                "end_date": result.end_date
+                "end_date": result.end_date,
+                # Add missing fields with default values for TaskResponse compatibility
+                "priority_score": 0.0,
+                "priority_reasoning": [],
+                "complexity_score": 0.0,
+                "complexity_factors": {},
+                "complexity_last_updated": None
             }
             
             # After successful update, mark task and project for immediate metrics update

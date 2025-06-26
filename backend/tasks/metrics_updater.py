@@ -1,13 +1,11 @@
-from celery import Celery
+from celery_app import celery_app
 from celery.schedules import crontab
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models.project import Project
 from models.task import Task
 
-celery = Celery('tasks', broker='redis://localhost:6379/0')
-
-@celery.task
+@celery_app.task
 def update_all_metrics():
     """Update metrics for all projects and tasks"""
     db = SessionLocal()
@@ -26,7 +24,7 @@ def update_all_metrics():
         db.close()
 
 # Schedule metrics update every hour
-@celery.on_after_configure.connect
+@celery_app.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):
     sender.add_periodic_task(
         crontab(minute=0),  # Run every hour
@@ -35,7 +33,7 @@ def setup_periodic_tasks(sender, **kwargs):
     )
 
 # Schedule metrics update for specific events
-@celery.task
+@celery_app.task
 def update_project_metrics(project_id: int):
     """Update metrics for a specific project"""
     db = SessionLocal()
@@ -47,7 +45,7 @@ def update_project_metrics(project_id: int):
     finally:
         db.close()
 
-@celery.task
+@celery_app.task
 def update_task_metrics(task_id: int):
     """Update metrics for a specific task"""
     db = SessionLocal()

@@ -6,7 +6,7 @@ import logging
 from models.task import Task as TaskModel
 from models.task_stage import TaskStage
 from models.user import User
-from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskState, TaskPriority
+from schemas.task import TaskCreate, TaskUpdate, Task as TaskSchema, TaskState, TaskPriority, TaskResponse
 from schemas.file_attachment import FileAttachment as FileAttachmentSchema, FileAttachmentCreate
 from crud import task as task_crud
 from crud import file_attachment as file_attachment_crud
@@ -25,6 +25,9 @@ from models.project import Project
 from schemas.tag import Tag as TagSchema
 from services.permission_service import PermissionService
 from services.priority_scoring_service import PriorityScoringService
+from tasks.task_priority import calculate_task_priority_score_task, auto_set_task_priority_task, update_all_task_priorities_task
+from tasks.task_complexity import calculate_task_complexity_task
+from celery.result import AsyncResult
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -55,6 +58,13 @@ async def create_task(
         # Calculate initial complexity
         await created_task.update_metrics()
         db.commit()
+        
+        # Auto-calculate complexity for new task
+        try:
+            celery_task = calculate_task_complexity_task.delay(created_task.id)
+            logger.info(f"Queued complexity calculation for new task {created_task.id}")
+        except Exception as e:
+            logger.warning(f"Failed to queue complexity calculation for new task {created_task.id}: {str(e)}")
         
         # Convert to dictionary and add additional fields
         task_dict = {
@@ -379,7 +389,7 @@ async def read_task(
             detail=f"Error fetching task: {str(e)}"
         )
 
-@router.put("/{task_id}", response_model=Dict[str, Any])
+@router.put("/{task_id}", response_model=TaskResponse)
 async def update_task(
     task_id: int,
     task_data: TaskUpdate,
@@ -390,10 +400,15 @@ async def update_task(
     try:
         task_service = TaskService()
         
-        # Get the task first to check permissions
+        # Get the task first to check permissions and compare changes
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Store original values for comparison
+        original_name = task.name
+        original_description = task.description
+        original_deadline = task.deadline
         
         # Convert task_data to dict and ensure state is properly handled
         update_data = task_data.model_dump(exclude_unset=True)
@@ -408,13 +423,29 @@ async def update_task(
                 )
 
         # Update the task using the task service
-        updated_task, error = task_service.update_task(db, task_id, update_data, current_user["id"])
+        updated_task_dict, error = task_service.update_task(db, task_id, update_data, current_user["id"])
         
         if error:
             raise HTTPException(status_code=400, detail=error)
         
-        if not updated_task:
+        if not updated_task_dict:
             raise HTTPException(status_code=404, detail="Task not found")
+
+        # Check if complexity-affecting fields changed
+        complexity_fields_changed = (
+            original_name != updated_task_dict.get("name") or
+            original_description != updated_task_dict.get("description") or
+            original_deadline != updated_task_dict.get("deadline")
+        )
+        
+        # Auto-recalculate complexity if relevant fields changed
+        if complexity_fields_changed:
+            try:
+                # Queue complexity recalculation
+                celery_task = calculate_task_complexity_task.delay(task_id)
+                logger.info(f"Queued complexity recalculation for task {task_id} due to field changes")
+            except Exception as e:
+                logger.warning(f"Failed to queue complexity recalculation for task {task_id}: {str(e)}")
 
         # Create activity log for the update
         changes = []
@@ -425,6 +456,8 @@ async def update_task(
         if "assigned_to" in update_data:
             assignee = db.query(User).filter(User.id == update_data["assigned_to"]).first()
             changes.append(f"assignee to {assignee.full_name if assignee else 'unassigned'}")
+        if complexity_fields_changed:
+            changes.append("complexity recalculation triggered")
         
         if changes:
             activity_data = ActivityCreate(
@@ -436,7 +469,8 @@ async def update_task(
             )
             activity.create_activity(db, activity_data)
 
-        return updated_task
+        # Convert the dictionary to TaskResponse
+        return TaskResponse.model_validate(updated_task_dict)
     except HTTPException:
         raise
     except Exception as e:
@@ -1307,39 +1341,67 @@ async def auto_set_task_priority(
     current_user: dict = Depends(get_current_user)
 ) -> Dict:
     """
-    Automatically calculate and set task priority using rules and AI.
+    Queue a background job to automatically calculate and set task priority using rules and AI.
     
     The priority is determined by:
     1. First applying rule-based logic for common cases
     2. Using AI for more nuanced decisions when rules are inconclusive
     3. Respecting manual priority if set
     
-    Returns both rule-based and AI suggestions along with the final priority.
+    Returns a job ID for status tracking.
     """
     try:
-        priority_service = PriorityService(db)
-        result = await priority_service.calculate_priority(task_id)
+        # Check if task exists
+        task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
         
-        # Update task priority if not manually set
-        if result["priority_source"] != "MANUAL":
-            task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
-            if task:
-                # Update priority fields
-                task.priority = result["final_priority"]
-                task.priority_source = result["priority_source"]
-                task.priority_reasoning = result.get("reasoning", [])
-                
-                # Calculate priority score using dedicated scoring service
-                scoring_service = PriorityScoringService(db)
-                task.priority_score = await scoring_service.calculate_priority_score(task)
-                
-                db.commit()
+        # Queue the Celery task
+        celery_task = auto_set_task_priority_task.delay(task_id)
         
-        return result
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "celery_task_id": celery_task.id,
+            "message": "Auto priority calculation queued successfully"
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error calculating task priority: {str(e)}"
+            detail=f"Error queuing auto priority calculation: {str(e)}"
+        )
+
+@router.get("/{task_id}/auto-priority-status/{celery_task_id}")
+async def get_auto_priority_status(
+    task_id: int,
+    celery_task_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Check the status of an auto priority calculation job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+    """
+    try:
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking auto priority status: {str(e)}"
         )
 
 @router.post("/update-all-priorities")
@@ -1348,8 +1410,10 @@ async def update_all_priorities(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Manually trigger priority updates for all active tasks.
+    Queue a background job to update priorities for all active tasks.
     Only available to superusers.
+    
+    Returns a job ID for status tracking.
     """
     if not current_user["is_superuser"]:
         raise HTTPException(
@@ -1358,13 +1422,56 @@ async def update_all_priorities(
         )
         
     try:
-        from services.scheduler_service import scheduler_service
-        await scheduler_service._update_all_task_priorities()
-        return {"message": "Priority update completed successfully"}
+        # Queue the Celery task
+        celery_task = update_all_task_priorities_task.delay()
+        
+        return {
+            "status": "queued",
+            "celery_task_id": celery_task.id,
+            "message": "Priority update for all tasks queued successfully"
+        }
+        
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error updating priorities: {str(e)}"
+            detail=f"Error queuing priority update: {str(e)}"
+        )
+
+@router.get("/update-all-priorities-status/{celery_task_id}")
+async def get_update_all_priorities_status(
+    celery_task_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Check the status of an update all priorities job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, PROGRESS, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+        - meta: Dict (progress information if in progress)
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can check priority update status"
+        )
+        
+    try:
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None,
+            "meta": result.info if hasattr(result, 'info') and result.info else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking priority update status: {str(e)}"
         )
 
 @router.put("/{task_id}/calculate-priority-score")
@@ -1374,11 +1481,12 @@ async def calculate_task_priority_score(
     current_user: dict = Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
-    Calculate and store a priority score for a task using priority level and complexity.
+    Queue a background job to calculate and store a priority score for a task.
+    
     This endpoint:
-    1. Forces recalculation of the priority score
-    2. Updates the score in the database
-    3. Returns the new score and its breakdown
+    1. Queues a background job to recalculate the priority score
+    2. Returns a job ID for status tracking
+    3. The job will update the score in the database when complete
     
     Priority score breakdown:
     - Priority Level (80% total):
@@ -1390,115 +1498,131 @@ async def calculate_task_priority_score(
     
     Returns:
         Dict containing:
-        - score: float (0-100)
-        - score_breakdown: Dict of component scores
-        - explanation: String explaining the score
-        - status: Success/error message
+        - status: "queued"
+        - task_id: int
+        - celery_task_id: str (for status checking)
     """
     try:
-        # Get the task
+        # Check if task exists
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-            
-        # Check if task is completed or cancelled
-        if task.state in ['done', 'cancelled']:
-            return {
-                "task_id": task.id,
-                "score": 0,
-                "score_breakdown": {
-                    "priority_score": 0,
-                    "complexity_score": 0
-                },
-                "explanation": f"Task is {task.state}, priority calculation not needed",
-                "status": f"Task is {task.state}",
-                "priority_reasoning": [f"Task is {task.state}"]
-            }
-            
-        # Verify required fields
-        missing_fields = []
-        if not task.name:
-            missing_fields.append("name")
-        if not task.priority:
-            missing_fields.append("priority level")
-            
-        if missing_fields:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Missing required fields for scoring: {', '.join(missing_fields)}"
-            )
-            
-        # Calculate priority score (80% weight)
-        priority_weights = {
-            'low': 20,
-            'normal': 40,
-            'high': 60,
-            'urgent': 80
+        
+        # Queue the Celery task
+        celery_task = calculate_task_priority_score_task.delay(task_id)
+        
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "celery_task_id": celery_task.id
         }
-        priority_score = priority_weights.get(task.priority.lower(), 40)  # Default to normal if unknown
-        
-        # Get task complexity (20% weight)
-        try:
-            complexity_service = ComplexityService()
-            complexity_analysis = await complexity_service.analyze_task_complexity(db, task.id)
-            # Convert complexity score to 20% scale
-            complexity_score = (complexity_analysis.total_score / 100) * 20
-        except Exception as e:
-            logger.warning(f"Error calculating complexity for task {task.id}: {str(e)}")
-            complexity_score = 10  # Default to medium complexity (50% of 20)
-            
-        # Calculate total score
-        total_score = priority_score + complexity_score
-        
-        # Generate explanation
-        priority_level = task.priority.lower()
-        explanation_parts = [
-            f"Task priority is {priority_level} ({priority_score}% weight)",
-            f"Task complexity score adds {complexity_score:.1f}% weight"
-        ]
-        
-        if hasattr(task, 'dependent_tasks') and task.dependent_tasks:
-            explanation_parts.append(f"Task is blocking {len(task.dependent_tasks)} other tasks")
-            
-        if task.deadline:
-            days_to_deadline = (task.deadline - datetime.now(timezone.utc)).days
-            if days_to_deadline < 0:
-                explanation_parts.append(f"Task is overdue by {abs(days_to_deadline)} days")
-            elif days_to_deadline < 7:
-                explanation_parts.append(f"Task deadline is in {days_to_deadline} days")
-                
-        # Update task priority reasoning
-        task.priority_reasoning = explanation_parts
-        
-        # Update the task with new score
-        task.priority_score = total_score
-        
-        # Invalidate any cached priority data
-        priority_service = PriorityService(db)
-        priority_service.invalidate_cache(task_id)
-        
-        # Commit changes to database
-        db.commit()
-        
-        # Prepare the response
-        response = {
-            "task_id": task.id,
-            "score": total_score,
-            "score_breakdown": {
-                "priority_score": priority_score,
-                "complexity_score": complexity_score
-            },
-            "explanation": ". ".join(explanation_parts),
-            "status": "Success: Priority score recalculated and updated",
-            "priority_reasoning": task.priority_reasoning
-        }
-        
-        return response
         
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error calculating priority score: {str(e)}"
+            detail=f"Error queuing priority score calculation: {str(e)}"
+        )
+
+@router.get("/{task_id}/priority-score-status/{celery_task_id}")
+async def get_priority_score_status(
+    task_id: int,
+    celery_task_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Check the status of a priority score calculation job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+    """
+    try:
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking priority score status: {str(e)}"
+        )
+
+@router.post("/trigger-scheduled-priority-score-update")
+async def trigger_scheduled_priority_score_update(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Manually trigger the scheduled priority score update task.
+    Only available to superusers.
+    
+    This endpoint manually triggers the same task that runs automatically every 3 hours.
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can trigger scheduled priority score updates"
+        )
+        
+    try:
+        from tasks.task_priority import scheduled_priority_score_update_task
+        
+        # Queue the Celery task
+        celery_task = scheduled_priority_score_update_task.delay()
+        
+        return {
+            "status": "queued",
+            "celery_task_id": celery_task.id,
+            "message": "Scheduled priority score update task queued successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error queuing scheduled priority score update: {str(e)}"
+        )
+
+@router.get("/scheduled-priority-score-update-status/{celery_task_id}")
+async def get_scheduled_priority_score_update_status(
+    celery_task_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Check the status of a scheduled priority score update job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, PROGRESS, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+        - meta: Dict (progress information if in progress)
+    """
+    if not current_user["is_superuser"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can check scheduled priority score update status"
+        )
+        
+    try:
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None,
+            "meta": result.info if hasattr(result, 'info') and result.info else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking scheduled priority score update status: {str(e)}"
         )
