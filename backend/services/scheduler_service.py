@@ -37,11 +37,21 @@ class SchedulerService:
             id='priority_score_update',
             name='Update task priority scores',
             replace_existing=True,
-            misfire_grace_time=1800  # Allow job to run up to 30 minutes late if system was down
+            misfire_grace_time=3600
+        )
+        
+        # Schedule daily productivity snapshots to run at 23:59 daily
+        self.scheduler.add_job(
+            self._create_daily_productivity_snapshots,
+            CronTrigger(hour='23', minute='59'),  # Run at 23:59 daily
+            id='productivity_snapshots',
+            name='Create daily productivity snapshots',
+            replace_existing=True,
+            misfire_grace_time=3600
         )
         
         self.scheduler.start()
-        logger.info("Scheduler started - Task priorities will be updated at 00:00 and 12:00 daily, priority scores every 3 hours")
+        logger.info("Scheduler started successfully")
 
     async def stop(self):
         """Stop the scheduler"""
@@ -180,5 +190,18 @@ class SchedulerService:
             
         except Exception as e:
             logger.error(f"Error queuing scheduled priority score update: {str(e)}")
+
+    async def _create_daily_productivity_snapshots(self):
+        """Create daily productivity snapshots"""
+        try:
+            from tasks.productivity_updater import create_daily_productivity_snapshots
+            
+            # Queue the Celery task
+            celery_task = create_daily_productivity_snapshots.delay()
+            
+            logger.info(f"Queued daily productivity snapshots task: {celery_task.id}")
+            
+        except Exception as e:
+            logger.error(f"Error queuing daily productivity snapshots: {str(e)}")
 
 scheduler_service = SchedulerService() 

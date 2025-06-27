@@ -2,7 +2,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, extract, text
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
 import json
@@ -21,10 +21,11 @@ from services.ml_service import get_ml_service
 from .ai import get_ollama_client
 from services.analytics_service import AnalyticsService
 from services.metrics_service import MetricsService
-from models.user_metrics import UserProductivityMetrics
+from models.user_metrics import UserProductivityMetrics, UserProductivityHistory
 from tasks.productivity_updater import update_user_productivity
 from services.complexity_service import ComplexityService
 from models.task_stage import TaskStage
+from services.redis_service import get_redis_client
 
 router = APIRouter(
     prefix="/analytics",
@@ -571,7 +572,7 @@ async def get_completion_time_metrics(
             attention_query = attention_query.filter(Task.assigned_to == current_user["id"])
         
         tasks_needing_attention = attention_query.filter(
-            Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED]),
+            Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED]),
             Task.updated_at <= datetime.utcnow() - timedelta(days=7)
         ).scalar()
 
@@ -737,50 +738,6 @@ async def predict_task_completion(
     try:
         ml_service = get_ml_service(db)
         return await ml_service.predict_task_completion_time(task_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/ml/project/{project_id}/team-performance", response_model=Dict[str, Any])
-async def analyze_team_performance(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get ML-powered team performance analysis"""
-    try:
-        ml_service = get_ml_service(db)
-        return await ml_service.analyze_team_performance(project_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/ml/project/{project_id}/historical-patterns", response_model=Dict[str, Any])
-async def get_historical_patterns(
-    project_id: int,
-    pattern_type: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get historical patterns identified in project data"""
-    try:
-        query = db.query(HistoricalPattern)
-        if pattern_type:
-            query = query.filter(HistoricalPattern.pattern_type == pattern_type)
-        patterns = query.order_by(HistoricalPattern.confidence.desc()).all()
-        
-        return {
-            "project_id": project_id,
-            "patterns": [
-                {
-                    "name": p.pattern_name,
-                    "description": p.pattern_description,
-                    "type": p.pattern_type,
-                    "confidence": p.confidence,
-                    "support": p.support,
-                    "data": p.pattern_data
-                }
-                for p in patterns
-            ]
-        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1061,85 +1018,6 @@ async def get_global_completion_metrics(
             detail=str(e)
         )
 
-@router.get("/tasks/completion-times")
-async def get_tasks_completion_times(
-    days: Optional[int] = 30,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Get a list of all completed tasks with their completion times and assigned users.
-    Shows individual task completion times and overall average.
-    """
-    try:
-        # Check if user is superuser or project manager
-        if not (current_user.get("is_superuser") or current_user.get("is_project_manager")):
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators and project managers can view this data"
-            )
-            
-        start_date = datetime.utcnow() - timedelta(days=days)
-        
-        # Get completed tasks with user information
-        completed_tasks = db.query(
-            Task,
-            User
-        ).join(
-            User,
-            Task.assigned_to == User.id
-        ).filter(
-            Task.state == TaskState.DONE,
-            Task.start_date.isnot(None),
-            Task.end_date.isnot(None),
-            Task.end_date >= start_date
-        ).order_by(Task.end_date.desc()).all()
-        
-        if not completed_tasks:
-            return {
-                "message": "No completed tasks found in the specified period",
-                "tasks": [],
-                "average_completion_time": 0,
-                "total_tasks": 0
-            }
-        
-        tasks_data = []
-        total_time = 0
-        
-        for task, user in completed_tasks:
-            # Calculate completion time in hours
-            completion_time = (task.end_date - task.start_date).total_seconds() / 3600
-            total_time += completion_time
-            
-            tasks_data.append({
-                "task_id": task.id,
-                "task_name": task.name,
-                "completion_time_hours": round(completion_time, 2),
-                "completed_date": task.end_date.isoformat(),
-                "user": {
-                    "id": user.id,
-                    "name": user.name,
-                    "email": user.email
-                },
-                "project_id": task.project_id,
-                "project_name": task.project.name if task.project else None
-            })
-        
-        average_time = total_time / len(completed_tasks)
-        
-        return {
-            "tasks": tasks_data,
-            "average_completion_time": round(average_time, 2),
-            "total_tasks": len(completed_tasks),
-            "period_days": days
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
 @router.get("/projects/{project_id}/progress", response_model=Dict[str, Any])
 async def get_project_progress(
     project_id: int,
@@ -1245,6 +1123,10 @@ async def get_project_progress(
                     
         # Calculate overall progress
         overall_progress = weighted_progress / total_weight if total_weight > 0 else 0
+        
+        # Update the Project model's progress field and commit
+        project.progress = round(overall_progress, 2)
+        db.commit()
         
         # Get progress by stage
         stages = db.query(TaskStage).filter(TaskStage.project_id == project_id).all()
@@ -1516,3 +1398,287 @@ Return ONLY valid JSON."""
             status_code=500,
             detail=f"Error analyzing task dependencies: {str(e)}"
         )
+
+@router.get("/user/productivity/trend", response_model=Dict[str, Any])
+async def get_user_productivity_trend(
+    user_id: int,
+    days: int = 30,
+    period_type: str = "daily",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get productivity trend for a specific user over a specified period.
+    
+    Args:
+        user_id: ID of the user to get trends for
+        days: Number of days to look back (default: 30)
+        period_type: Type of period ('daily', 'weekly', 'monthly')
+    """
+    try:
+        # Check if user is superuser or project manager
+        if not (current_user.get("is_superuser") or current_user.get("is_project_manager")):
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators and project managers can view productivity trends"
+            )
+            
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days)
+        
+        # Get productivity history for the user
+        history = db.query(UserProductivityHistory).filter(
+            UserProductivityHistory.user_id == user_id,
+            UserProductivityHistory.period_type == period_type,
+            UserProductivityHistory.snapshot_date >= start_date,
+            UserProductivityHistory.snapshot_date <= end_date
+        ).order_by(UserProductivityHistory.snapshot_date).all()
+        
+        if not history:
+            return {
+                "message": "No productivity history found for the specified period",
+                "trends": [],
+                "summary": {
+                    "overall_trend": "stable",
+                    "average_score": 0.0,
+                    "best_day": None,
+                    "worst_day": None,
+                    "consistency_score": 0.0
+                }
+            }
+        
+        # Extract productivity data from history
+        trends = []
+        scores = []
+        
+        for record in history:
+            trends.append({
+                "date": record.snapshot_date.isoformat(),
+                "productivity_score": record.productivity_score,
+                "completed_tasks": record.completed_tasks,
+                "total_time_spent": record.total_time_spent,
+                "avg_complexity": record.avg_complexity,
+                "completion_rate": record.completion_rate,
+                "avg_completion_time": record.avg_completion_time,
+                "trend": record.score_trend,
+                "trend_percentage": record.trend_percentage
+            })
+            scores.append(record.productivity_score)
+        
+        # Calculate summary statistics
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        
+        # Find best and worst days
+        best_record = max(history, key=lambda x: x.productivity_score)
+        worst_record = min(history, key=lambda x: x.productivity_score)
+        
+        # Calculate consistency (standard deviation)
+        if len(scores) > 1:
+            mean_score = sum(scores) / len(scores)
+            variance = sum((score - mean_score) ** 2 for score in scores) / len(scores)
+            std_dev = variance ** 0.5
+            consistency_score = max(0, 100 - (std_dev / mean_score * 100)) if mean_score > 0 else 0
+        else:
+            consistency_score = 100.0
+        
+        # Determine overall trend
+        if len(history) >= 2:
+            first_score = history[0].productivity_score
+            last_score = history[-1].productivity_score
+            if last_score > first_score * 1.1:
+                overall_trend = "up"
+            elif last_score < first_score * 0.9:
+                overall_trend = "down"
+            else:
+                overall_trend = "stable"
+        else:
+            overall_trend = "stable"
+        
+        return {
+            "trends": trends,
+            "summary": {
+                "overall_trend": overall_trend,
+                "average_score": round(avg_score, 2),
+                "best_day": {
+                    "date": best_record.snapshot_date.isoformat(),
+                    "score": best_record.productivity_score
+                },
+                "worst_day": {
+                    "date": worst_record.snapshot_date.isoformat(),
+                    "score": worst_record.productivity_score
+                },
+                "consistency_score": round(consistency_score, 2)
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting productivity trend: {str(e)}"
+        )
+
+@router.post("/user/productivity/snapshot", response_model=Dict[str, Any])
+async def create_user_productivity_snapshot(
+    user_id: int,
+    snapshot_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a new productivity snapshot for a specific user.
+    
+    Args:
+        user_id: ID of the user to create snapshot for
+        snapshot_date: Date for the snapshot (defaults to today)
+    """
+    try:
+        # Check if user is superuser or project manager
+        if not (current_user.get("is_superuser") or current_user.get("is_project_manager")):
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators and project managers can create productivity snapshots"
+            )
+        
+        if snapshot_date is None:
+            snapshot_date = date.today()
+            
+        # Check if snapshot already exists for this date
+        existing_snapshot = db.query(UserProductivityHistory).filter(
+            UserProductivityHistory.user_id == user_id,
+            UserProductivityHistory.snapshot_date == snapshot_date,
+            UserProductivityHistory.period_type == "daily"
+        ).first()
+        
+        if existing_snapshot:
+            return {
+                "message": "Productivity snapshot already exists for this date",
+                "snapshot": existing_snapshot.to_dict()
+            }
+        
+        # Calculate productivity metrics for the specific day
+        start_datetime = datetime.combine(snapshot_date, datetime.min.time())
+        end_datetime = datetime.combine(snapshot_date, datetime.max.time())
+        
+        # Get tasks completed on this day
+        completed_tasks = db.query(Task).filter(
+            Task.assigned_to == user_id,
+            Task.state == TaskState.DONE,
+            Task.end_date >= start_datetime,
+            Task.end_date <= end_datetime
+        ).all()
+        
+        # Get tasks started on this day
+        started_tasks = db.query(Task).filter(
+            Task.assigned_to == user_id,
+            Task.created_at >= start_datetime,
+            Task.created_at <= end_datetime
+        ).all()
+        
+        # Get tasks in progress on this day
+        in_progress_tasks = db.query(Task).filter(
+            Task.assigned_to == user_id,
+            Task.state.in_([TaskState.IN_PROGRESS, TaskState.CHANGES_REQUESTED, TaskState.APPROVED]),
+            or_(
+                and_(Task.start_date <= end_datetime, Task.end_date >= start_datetime),
+                and_(Task.start_date.is_(None), Task.created_at <= end_datetime)
+            )
+        ).all()
+        
+        # Calculate time spent on this day
+        time_entries = db.query(TimeEntry).filter(
+            TimeEntry.user_id == user_id,
+            TimeEntry.start_time >= start_datetime,
+            TimeEntry.start_time <= end_datetime
+        ).all()
+        
+        total_time_spent = sum(entry.duration for entry in time_entries)
+        
+        # Calculate productivity score for the day
+        productivity_score = 0.0
+        avg_complexity = 0.0
+        avg_completion_time = 0.0
+        
+        if completed_tasks:
+            # Calculate average complexity
+            complexity_scores = []
+            completion_times = []
+            
+            for task in completed_tasks:
+                if task.complexity_score:
+                    complexity_scores.append(task.complexity_score)
+                
+                if task.start_date and task.end_date:
+                    completion_time = (task.end_date - task.start_date).total_seconds() / 3600
+                    completion_times.append(completion_time)
+            
+            avg_complexity = sum(complexity_scores) / len(complexity_scores) if complexity_scores else 0.0
+            avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0.0
+            
+            # Simple productivity score: (completed_tasks * avg_complexity) / total_time_spent
+            if total_time_spent > 0:
+                productivity_score = (len(completed_tasks) * avg_complexity) / total_time_spent
+        
+        # Calculate completion rate
+        total_active_tasks = len(started_tasks) + len(in_progress_tasks)
+        completion_rate = (len(completed_tasks) / total_active_tasks * 100) if total_active_tasks > 0 else 0.0
+        
+        # Calculate trend compared to previous day
+        previous_date = snapshot_date - timedelta(days=1)
+        previous_snapshot = db.query(UserProductivityHistory).filter(
+            UserProductivityHistory.user_id == user_id,
+            UserProductivityHistory.snapshot_date == previous_date,
+            UserProductivityHistory.period_type == "daily"
+        ).first()
+        
+        trend = "stable"
+        trend_percentage = 0.0
+        
+        if previous_snapshot:
+            previous_score = previous_snapshot.productivity_score
+            if previous_score > 0:
+                trend_percentage = ((productivity_score - previous_score) / previous_score) * 100
+                if trend_percentage > 5:
+                    trend = "up"
+                elif trend_percentage < -5:
+                    trend = "down"
+        
+        # Create new productivity history record
+        new_history = UserProductivityHistory(
+            user_id=user_id,
+            snapshot_date=snapshot_date,
+            period_type="daily",
+            productivity_score=productivity_score,
+            completed_tasks=len(completed_tasks),
+            total_time_spent=total_time_spent,
+            avg_complexity=avg_complexity,
+            tasks_started=len(started_tasks),
+            tasks_in_progress=len(in_progress_tasks),
+            completion_rate=completion_rate,
+            avg_completion_time=avg_completion_time,
+            score_trend=trend,
+            trend_percentage=trend_percentage
+        )
+        
+        db.add(new_history)
+        db.commit()
+        
+        return {
+            "message": "Productivity snapshot created successfully",
+            "snapshot": new_history.to_dict()
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating productivity snapshot: {str(e)}"
+        )
+
+@router.get("/projects/{project_id}/progress/stored")
+async def get_stored_project_progress(project_id: int):
+    """Fetch the latest stored project progress from Redis."""
+    redis_client = get_redis_client()
+    result = redis_client.get(f"project_progress:{project_id}")
+    if result:
+        return result
+    return {"status": "not_ready", "message": "No stored progress found for this project. Please trigger calculation."}

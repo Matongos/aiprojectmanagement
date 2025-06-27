@@ -1507,7 +1507,7 @@ async def calculate_task_priority_score(
         task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+            
         # Queue the Celery task
         celery_task = calculate_task_priority_score_task.delay(task_id)
         
@@ -1524,7 +1524,7 @@ async def calculate_task_priority_score(
             status_code=500,
             detail=f"Error queuing priority score calculation: {str(e)}"
         )
-
+            
 @router.get("/{task_id}/priority-score-status/{celery_task_id}")
 async def get_priority_score_status(
     task_id: int,
