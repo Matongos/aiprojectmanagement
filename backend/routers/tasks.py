@@ -28,6 +28,7 @@ from services.priority_scoring_service import PriorityScoringService
 from tasks.task_priority import calculate_task_priority_score_task, auto_set_task_priority_task, update_all_task_priorities_task
 from tasks.task_complexity import calculate_task_complexity_task
 from celery.result import AsyncResult
+from tasks.project_progress import calculate_project_progress_task
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -468,6 +469,20 @@ async def update_task(
                 description=f"Updated task {', '.join(changes)}"
             )
             activity.create_activity(db, activity_data)
+
+        # Trigger project progress update via Celery
+        try:
+            calculate_project_progress_task.delay(task.project_id)
+        except Exception as e:
+            logger.warning(f"Failed to queue project progress update for project {task.project_id}: {str(e)}")
+
+        # If deadline changed, trigger priority recalculation tasks
+        if "deadline" in update_data and update_data["deadline"] != original_deadline:
+            try:
+                auto_set_task_priority_task.delay(task_id)
+                calculate_task_priority_score_task.delay(task_id)
+            except Exception as e:
+                logger.warning(f"Failed to queue priority recalculation tasks for task {task_id}: {str(e)}")
 
         # Convert the dictionary to TaskResponse
         return TaskResponse.model_validate(updated_task_dict)

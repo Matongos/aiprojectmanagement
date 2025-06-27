@@ -80,11 +80,10 @@ async def get_task_log_notes(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get all log notes for a task"""
+    """Get all log notes for a task (attachments disabled to avoid DB errors)"""
     try:
         log_notes = log_note_crud.get_task_log_notes(db, task_id, skip, limit)
-        
-        # Convert to response models
+        # Convert to response models, but do NOT include attachments
         return [
             LogNoteResponse(
                 id=note.id,
@@ -93,7 +92,7 @@ async def get_task_log_notes(
                 created_by=note.created_by,
                 created_at=note.created_at or datetime.utcnow(),
                 updated_at=note.updated_at or datetime.utcnow(),
-                attachments=note.attachments,
+                attachments=[],  # Disable attachments to avoid DB errors
                 user={
                     "id": note.user.id,
                     "username": note.user.username,

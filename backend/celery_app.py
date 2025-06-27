@@ -9,7 +9,8 @@ celery_app = Celery(
         'tasks.task_complexity',
         'tasks.metrics_updater',
         'tasks.productivity_updater',
-        'tasks.task_priority'
+        'tasks.task_priority',
+        'tasks.project_progress',
     ]
 )
 
