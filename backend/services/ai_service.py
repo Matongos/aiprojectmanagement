@@ -44,7 +44,7 @@ class AIService:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-
+        
     def get_cached_time_risk(self, task_id: int) -> Optional[Dict]:
         """
         Retrieve cached time risk data for a task from Redis.
@@ -53,10 +53,53 @@ class AIService:
         try:
             cache_key = f"task_time_risk:{task_id}"
             cached_data = self.redis_client.get(cache_key)
+            
+            if cached_data and "cache_info" in cached_data:
+                # Check if cache is still valid
+                next_update = datetime.fromisoformat(cached_data["cache_info"]["next_update"])
+                if datetime.now(timezone.utc) < next_update:
+                    return cached_data
+                else:
+                    # Cache expired, return None to trigger recalculation
+                    return None
+            
             return cached_data
         except Exception as e:
             logger.warning(f"Error retrieving cached time risk for task {task_id}: {str(e)}")
             return None
+
+    def get_time_risk_cache_status(self, task_id: int) -> Dict:
+        """
+        Get information about the time risk cache status for a task.
+        """
+        try:
+            cache_key = f"task_time_risk:{task_id}"
+            cached_data = self.redis_client.get(cache_key)
+            
+            if cached_data:
+                next_update = datetime.fromisoformat(cached_data["cache_info"]["next_update"])
+                time_until_update = (next_update - datetime.now(timezone.utc)).total_seconds()
+                
+                return {
+                    "is_cached": True,
+                    "cache_expires_in_seconds": max(0, int(time_until_update)),
+                    "next_update": cached_data["cache_info"]["next_update"],
+                    "update_frequency": cached_data["cache_info"]["update_frequency"],
+                    "current_risk": cached_data["time_risk_percentage"],
+                    "risk_level": cached_data["risk_level"]
+                }
+            else:
+                return {
+                    "is_cached": False,
+                    "message": "No cached data found - calculation needed"
+                }
+                
+        except Exception as e:
+            logger.warning(f"Error checking cache status for task {task_id}: {str(e)}")
+            return {
+                "is_cached": False,
+                "error": str(e)
+            }
 
     def store_time_risk_cache(self, task_id: int, time_risk_data: Dict, expiration_seconds: int = 3600) -> bool:
         """
@@ -479,11 +522,67 @@ class AIService:
                     'handover_count': task_metrics.handover_count
                 }
 
+            # 12. Get cached time risk data
+            time_risk_data = None
+            try:
+                cached_time_risk = self.get_cached_time_risk(task_id)
+                if cached_time_risk:
+                    # Weight the time risk against 30 (every 100% = 30 points)
+                    time_risk_percentage = cached_time_risk.get('time_risk_percentage', 0)
+                    weighted_risk_score = (time_risk_percentage / 100) * 30
+                    
+                    time_risk_data = {
+                        "cached_time_risk": cached_time_risk,
+                        "weighted_risk_score": round(weighted_risk_score, 2),
+                        "calculation": f"({time_risk_percentage} / 100) * 30 = {weighted_risk_score}",
+                        "risk_level": cached_time_risk.get('risk_level', 'unknown'),
+                        "time_data": cached_time_risk.get('time_data', {}),
+                        "cache_status": "valid"
+                    }
+                else:
+                    time_risk_data = {
+                        "cached_time_risk": None,
+                        "weighted_risk_score": 0,
+                        "calculation": "No cached data available",
+                        "risk_level": "unknown",
+                        "time_data": {},
+                        "cache_status": "not_found"
+                    }
+            except Exception as e:
+                time_risk_data = {
+                    "cached_time_risk": None,
+                    "weighted_risk_score": 0,
+                    "calculation": f"Error retrieving cache: {str(e)}",
+                    "risk_level": "unknown",
+                    "time_data": {},
+                    "cache_status": "error"
+                }
+
+            # 13. Perform AI analysis for role/person match (out of 20 points)
+            role_match_analysis = None
+            try:
+                role_match_analysis = await self._analyze_role_task_match_ai(
+                    task_name=task.name,
+                    task_description=task.description or "",
+                    assignee_data=assignee_data,
+                    active_tasks_count=len(assignee_active_tasks),
+                    active_tasks=assignee_data['active_tasks'] if assignee_data else []
+                )
+            except Exception as e:
+                role_match_analysis = {
+                    "ai_analysis_performed": False,
+                    "error": str(e),
+                    "role_match_score": 0,
+                    "workload_score": 0,
+                    "total_score": 0,
+                    "analysis_details": "AI analysis failed"
+                }
+
             # Return all collected data without analysis
             return {
                 "task_id": task_id,
                 "data_collection_timestamp": current_time.isoformat(),
-                "analysis_performed": False,
+                "analysis_performed": True,  # Now we're doing AI analysis
                 "collected_data": {
                     # 1. Task dueness (20% weight later)
                     "task_dueness": {
@@ -503,12 +602,15 @@ class AIService:
                         "weather_impact": complexity_analysis.weather_impact.__dict__ if complexity_analysis.weather_impact else None
                     },
                     
-                    # 3. Assigned person analysis (20% weight later - 10% role match + 10% active tasks)
+                    # 3. Assigned person analysis (20% weight - AI analyzed)
                     "assigned_person": {
                         "assignee_data": assignee_data,
-                        "role_match_analysis_needed": True,  # Will be done by AI later
                         "active_tasks_count": len(assignee_active_tasks),
-                        "active_tasks": assignee_data['active_tasks'] if assignee_data else []
+                        "active_tasks": assignee_data['active_tasks'] if assignee_data else [],
+                        "ai_analysis": role_match_analysis,
+                        "role_match_score": role_match_analysis.get('role_match_score', 0) if role_match_analysis else 0,
+                        "workload_score": role_match_analysis.get('workload_score', 0) if role_match_analysis else 0,
+                        "total_score": role_match_analysis.get('total_score', 0) if role_match_analysis else 0
                     },
                     
                     # 4. Task dependency analysis (10% weight later)
@@ -545,6 +647,9 @@ class AIService:
                         "environment_type": task_environment,
                         "weather_impact_analysis_needed": is_outdoor_task  # Only if outdoor task
                     },
+                    
+                    # 7. Time risk analysis (weighted against 30)
+                    "time_risk_analysis": time_risk_data,
                     
                     # Additional context data
                     "task_details": {
@@ -614,115 +719,266 @@ class AIService:
         
         return priority_scores.get(task.priority.lower(), 0.5)
 
-    async def _analyze_role_task_match(
+    async def _analyze_role_task_match_ai(
         self,
         task_name: str,
         task_description: str,
-        assignee_data: Optional[Dict]
+        assignee_data: Optional[Dict],
+        active_tasks_count: int,
+        active_tasks: List[Dict]
     ) -> Dict:
-        """Analyze the match between task requirements and assignee capabilities"""
+        """
+        AI analysis for role/task match and workload assessment.
+        Returns a score out of 20 (10 for role match + 10 for workload).
+        """
         if not assignee_data:
             return {
-                "mismatch_score": 0.8,
-                "risk_factors": ["Task not assigned to any team member"],
-                "recommendations": ["Assign task to a team member"],
-                "details": {
+                "ai_analysis_performed": True,
+                "role_match_score": 0,
+                "workload_score": 0,
+                "total_score": 0,
+                "analysis_details": "No assignee - task is unassigned",
                     "risk_level": "high",
-                    "reason": "No assignee",
-                    "skill_gap": [],
-                    "experience_level": "none",
-                    "metrics": {
-                        "similar_tasks_completed": 0,
-                        "avg_completion_time": 0,
-                        "success_rate": 0
-                    }
-                }
+                "recommendations": ["Assign task to a team member"]
             }
 
         try:
-            # Use AI to analyze task requirements
-            prompt = f"""Analyze the following task and determine required skills and experience:
-            Task Name: {task_name}
-            Description: {task_description or ''}
-            
-            Assignee Information:
-            Role: {assignee_data.get('role') or assignee_data.get('job_title') or 'Unknown'}
-            Department: {assignee_data.get('department', 'Unknown')}
-            Skills: {', '.join(assignee_data.get('skills', []))}
-            Experience Level: {assignee_data.get('experience_level', 'Unknown')}
-            
-            Consider:
-            1. Technical skills needed vs assignee skills
-            2. Role/job title alignment with task requirements
-            3. Department relevance to task
-            4. Required experience level
-            5. Domain knowledge requirements
-            
-            Return only valid JSON with:
-            - skill_match_score: float (0-1)
-            - role_alignment_score: float (0-1)
-            - experience_match_score: float (0-1)
-            - identified_gaps: list of strings
-            - recommendations: list of strings
-            """
+            # Prepare active tasks summary for workload analysis
+            active_tasks_summary = []
+            for task in active_tasks:
+                active_tasks_summary.append(f"Task: {task.get('name', 'Unknown')} - {task.get('state', 'unknown')} - {task.get('progress', 0)}% complete")
 
+            # Enhanced prompt with more specific instructions
+            prompt = f"""You are an expert project manager analyzing task assignments. Analyze the following task and assignee match.
+
+TASK TO ANALYZE:
+Name: {task_name}
+Description: {task_description or 'No description provided'}
+
+ASSIGNEE INFORMATION:
+Full Name: {assignee_data.get('full_name', 'Unknown')}
+Job Title: {assignee_data.get('job_title', 'Unknown')}
+Profession: {assignee_data.get('profession', 'Unknown')}
+Skills: {', '.join(assignee_data.get('skills', [])) if assignee_data.get('skills') else 'No skills listed'}
+Expertise: {', '.join(assignee_data.get('expertise', [])) if assignee_data.get('expertise') else 'No expertise listed'}
+Experience Level: {assignee_data.get('experience_level', 'Unknown')}
+
+CURRENT WORKLOAD:
+Active Tasks Count: {active_tasks_count}
+Active Tasks:
+{chr(10).join(active_tasks_summary) if active_tasks_summary else 'No active tasks'}
+
+ANALYSIS REQUIREMENTS:
+1. Role/Task Match (Score out of 10):
+   - Evaluate if the assignee's job title, skills, and expertise align with task requirements
+   - Consider technical skills, domain knowledge, and experience level
+   - Score 0 = perfect match (no risk), 10 = complete mismatch (high risk)
+   - For example: A backend developer assigned to content writing would score 8-9/10 (high risk)
+
+2. Workload Assessment (Score out of 10):
+   - Evaluate current workload based on active tasks count and task states
+   - Consider if adding this task would overload the person
+   - Score 0 = no workload issues (no risk), 10 = severely overloaded (high risk)
+   - 0 active tasks = 0/10 (no risk), 1-2 tasks = 2-3/10 (low risk), 3+ tasks = 5-7/10 (medium risk), 5+ tasks = 8-10/10 (high risk)
+
+You MUST return ONLY valid JSON in this exact format:
+{{
+    "role_match_score": 8.0,
+    "workload_score": 0.0,
+    "total_score": 8.0,
+    "role_match_reasoning": "Backend developer assigned to content writing task - significant skill mismatch (high risk)",
+    "workload_reasoning": "Assignee has no active tasks, can easily take on this task (no workload risk)",
+    "risk_level": "medium",
+    "recommendations": ["Consider reassigning to content writer", "Provide training if keeping assignment"],
+    "skill_gaps": ["Content writing skills", "SEO knowledge"],
+    "workload_concerns": []
+}}"""
+
+            logger.info(f"Sending AI analysis request for task {task_name} with assignee {assignee_data.get('full_name', 'Unknown')}")
+            
+            # Use streaming to see AI response as it comes
+            logger.info("Starting AI analysis with streaming...")
+            
             response = requests.post(
                 self.ollama_url,
                 json={
-                    "model": "codellama",
+                    "model": "mistral",  # Changed from codellama to mistral
                     "prompt": prompt,
-                    "stream": False
-                }
+                    "stream": True  # Enable streaming to see response as it comes
+                },
+                timeout=60,  # Increased timeout for Mistral
+                stream=True  # Enable HTTP streaming
             )
             
-            result = response.json()
-            analysis = json.loads(result["response"])
+            if response.status_code != 200:
+                logger.error(f"AI service returned status {response.status_code}: {response.text}")
+                raise Exception(f"AI service error: {response.status_code}")
             
-            # Calculate overall mismatch score
-            mismatch_score = 1 - ((
-                analysis['skill_match_score'] +
-                analysis['role_alignment_score'] +
-                analysis['experience_match_score']
-            ) / 3)
+            # Collect streaming response
+            ai_response_text = ""
+            logger.info("Receiving AI response stream:")
             
-            # Generate risk factors based on gaps
-            risk_factors = []
-            if analysis['identified_gaps']:
-                risk_factors.extend(analysis['identified_gaps'])
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        if 'response' in chunk:
+                            ai_response_text += chunk['response']
+                            # Log each chunk as it comes
+                            logger.info(f"AI chunk: {chunk['response']}")
+                        if chunk.get('done', False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+            
+            logger.info(f"Complete AI response: {ai_response_text}")
+            logger.info(f"FULL AI JSON RESPONSE: {ai_response_text}")  # Log the complete JSON response
+            
+            # Try to parse JSON response
+            try:
+                analysis = json.loads(ai_response_text)
+                logger.info(f"Parsed AI analysis: {json.dumps(analysis, indent=2)}")  # Log the parsed JSON
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI JSON response: {e}")
+                logger.error(f"Raw AI response: {ai_response_text}")
+                # Fallback to manual analysis
+                return self._fallback_role_analysis(task_name, task_description, assignee_data, active_tasks_count)
+            
+            # Validate required fields
+            required_fields = ['role_match_score', 'workload_score', 'total_score']
+            missing_fields = [field for field in required_fields if field not in analysis]
+            
+            if missing_fields:
+                logger.warning(f"AI response missing fields: {missing_fields}")
+                return self._fallback_role_analysis(task_name, task_description, assignee_data, active_tasks_count)
             
             return {
-                "mismatch_score": mismatch_score,
-                "risk_factors": risk_factors,
-                "recommendations": analysis['recommendations'],
-                "details": {
-                    "risk_level": "high" if mismatch_score > 0.7 else "medium" if mismatch_score > 0.4 else "low",
-                    "reason": risk_factors[0] if risk_factors else None,
-                    "skill_gap": analysis['identified_gaps'],
-                    "experience_level": assignee_data.get('experience_level', 'unknown'),
-                    "metrics": {
-                        "skill_match": round(analysis['skill_match_score'] * 100, 1),
-                        "role_alignment": round(analysis['role_alignment_score'] * 100, 1),
-                        "experience_match": round(analysis['experience_match_score'] * 100, 1)
-                    }
-                }
+                "ai_analysis_performed": True,
+                "role_match_score": round(float(analysis.get('role_match_score', 0)), 2),
+                "workload_score": round(float(analysis.get('workload_score', 0)), 2),
+                "total_score": round(float(analysis.get('total_score', 0)), 2),
+                "analysis_details": {
+                    "role_match_reasoning": analysis.get('role_match_reasoning', 'No reasoning provided'),
+                    "workload_reasoning": analysis.get('workload_reasoning', 'No reasoning provided'),
+                    "risk_level": analysis.get('risk_level', 'medium'),
+                    "skill_gaps": analysis.get('skill_gaps', []),
+                    "workload_concerns": analysis.get('workload_concerns', [])
+                },
+                "risk_level": analysis.get('risk_level', 'medium'),
+                "recommendations": analysis.get('recommendations', [])
             }
+            
         except Exception as e:
-            print(f"Error in role-task match analysis: {str(e)}")
+            logger.error(f"Error in AI role analysis: {str(e)}")
+            return self._fallback_role_analysis(task_name, task_description, assignee_data, active_tasks_count)
+
+    def _fallback_role_analysis(
+        self,
+        task_name: str,
+        task_description: str,
+        assignee_data: Optional[Dict],
+        active_tasks_count: int
+    ) -> Dict:
+        """
+        Fallback analysis when AI fails or provides incomplete data.
+        Uses rule-based logic to provide reasonable scores.
+        HIGHER SCORES = HIGHER RISK
+        """
+        try:
+            # Rule-based role match analysis
+            job_title = assignee_data.get('job_title', '').lower() if assignee_data else ''
+            task_name_lower = task_name.lower()
+            task_desc_lower = (task_description or '').lower()
+            
+            role_match_score = 5.0  # Default middle score (medium risk)
+            
+            # Content writing tasks
+            if any(word in task_name_lower or word in task_desc_lower for word in ['content', 'writing', 'text', 'copy', 'seo']):
+                if any(word in job_title for word in ['content', 'writer', 'marketing', 'seo']):
+                    role_match_score = 1.0  # Perfect match (low risk)
+                elif any(word in job_title for word in ['frontend', 'backend', 'developer', 'engineer']):
+                    role_match_score = 8.0  # Poor match (high risk)
+                else:
+                    role_match_score = 4.0  # Unknown match (medium risk)
+            
+            # Development tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['develop', 'code', 'programming', 'frontend', 'backend', 'api']):
+                if any(word in job_title for word in ['developer', 'engineer', 'programmer']):
+                    role_match_score = 2.0  # Good match (low risk)
+                elif any(word in job_title for word in ['content', 'writer', 'marketing']):
+                    role_match_score = 8.0  # Poor match (high risk)
+                else:
+                    role_match_score = 4.0  # Unknown match (medium risk)
+            
+            # Design tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['design', 'ui', 'ux', 'wireframe', 'mockup']):
+                if any(word in job_title for word in ['designer', 'ui', 'ux']):
+                    role_match_score = 1.0  # Perfect match (low risk)
+                elif any(word in job_title for word in ['developer', 'engineer']):
+                    role_match_score = 4.0  # Moderate match (medium risk)
+                else:
+                    role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Workload analysis (HIGHER SCORE = HIGHER RISK)
+            if active_tasks_count == 0:
+                workload_score = 0.0  # No workload (no risk)
+                workload_reasoning = "No active tasks - can easily take on this task (no risk)"
+            elif active_tasks_count <= 2:
+                workload_score = 2.0  # Low workload (low risk)
+                workload_reasoning = f"Low workload with {active_tasks_count} active tasks (low risk)"
+            elif active_tasks_count <= 4:
+                workload_score = 5.0  # Moderate workload (medium risk)
+                workload_reasoning = f"Moderate workload with {active_tasks_count} active tasks (medium risk)"
+            else:
+                workload_score = 8.0  # High workload (high risk)
+                workload_reasoning = f"High workload with {active_tasks_count} active tasks (high risk)"
+            
+            total_score = role_match_score + workload_score
+            
+            # Determine risk level (HIGHER SCORE = HIGHER RISK)
+            if total_score <= 5:
+                risk_level = "low"
+            elif total_score <= 10:
+                risk_level = "medium"
+            else:
+                risk_level = "high"
+            
+            # Generate recommendations
+            recommendations = []
+            if role_match_score > 5:
+                recommendations.append("Consider reassigning to someone with more relevant skills")
+            if workload_score > 5:
+                recommendations.append("Consider workload distribution or timeline adjustment")
+            
+            logger.info(f"Fallback analysis - Role: {role_match_score}, Workload: {workload_score}, Total: {total_score}, Risk: {risk_level}")
+            
             return {
-                "mismatch_score": 0.5,
-                "risk_factors": ["Unable to analyze role-task match"],
-                "recommendations": ["Manually review task requirements and assignee capabilities"],
-                "details": {
-                    "risk_level": "medium",
-                    "reason": "Analysis error",
-                    "skill_gap": [],
-                    "experience_level": "unknown",
-                    "metrics": {
-                        "skill_match": 0,
-                        "role_alignment": 0,
-                        "experience_match": 0
-                    }
-                }
+                "ai_analysis_performed": False,
+                "role_match_score": round(role_match_score, 2),
+                "workload_score": round(workload_score, 2),
+                "total_score": round(total_score, 2),
+                "analysis_details": {
+                    "role_match_reasoning": f"Rule-based analysis: {job_title} assigned to {task_name} (score: {role_match_score})",
+                    "workload_reasoning": workload_reasoning,
+                    "risk_level": risk_level,
+                    "skill_gaps": [],
+                    "workload_concerns": []
+                },
+                "risk_level": risk_level,
+                "recommendations": recommendations
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in fallback analysis: {str(e)}")
+            return {
+                "ai_analysis_performed": False,
+                "error": str(e),
+                "role_match_score": 5.0,  # Default medium risk
+                "workload_score": 5.0,    # Default medium risk
+                "total_score": 10.0,      # Default medium risk
+                "analysis_details": f"Fallback analysis failed: {str(e)}",
+                "risk_level": "medium",
+                "recommendations": ["Review task assignment manually"]
             }
 
     async def analyze_task_urgency(self, task_id: int, context: Dict) -> Dict:

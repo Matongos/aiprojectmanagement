@@ -191,6 +191,63 @@ async def calculate_task_time_risk(
             detail=f"Error calculating time risk: {str(e)}"
         )
 
+@router.get("/task/{task_id}/time-risk/cache-status")
+async def get_time_risk_cache_status(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Check the cache status of time risk calculation for a task.
+    Shows when the risk was last calculated and when it will update next.
+    """
+    try:
+        ai_service = get_ai_service(db)
+        cache_status = ai_service.get_time_risk_cache_status(task_id)
+        
+        return {
+            "task_id": task_id,
+            "cache_status": cache_status,
+            "current_time": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking cache status: {str(e)}"
+        )
+
+@router.get("/task/{task_id}/time-risk/result")
+async def get_time_risk_result(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Get the cached time risk calculation result for a task.
+    If no cached result exists, returns an error suggesting to trigger calculation.
+    """
+    try:
+        ai_service = get_ai_service(db)
+        cached_result = ai_service.get_cached_time_risk(task_id)
+        
+        if cached_result:
+            return {
+                "task_id": task_id,
+                "status": "cached",
+                "result": cached_result
+            }
+        else:
+            return {
+                "task_id": task_id,
+                "status": "not_ready",
+                "message": "No cached time risk found for this task. Please trigger calculation using /ai/task/{task_id}/time-risk"
+            }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving time risk result: {str(e)}"
+        )
+
 @router.get("/task/{task_id}/risk")
 async def analyze_task_risk(
     task_id: int,

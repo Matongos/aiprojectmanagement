@@ -474,4 +474,194 @@ def _is_significant_change(old_priority: str, new_priority: str) -> bool:
     priority_levels = {'LOW': 1, 'NORMAL': 2, 'HIGH': 3, 'URGENT': 4}
     old_level = priority_levels.get(old_priority, 0)
     new_level = priority_levels.get(new_priority, 0)
-    return abs(new_level - old_level) > 1  # Notify if change is more than one level 
+    return abs(new_level - old_level) > 1  # Notify if change is more than one level
+
+@celery_app.task(bind=True)
+def calculate_task_time_risk_task(self, task_id):
+    """
+    Calculate time-based risk for a task using Celery background processing.
+    
+    The risk is calculated using the formula:
+    Risk (%) = (T_alloc / (T_left + ε)) * 100
+    
+    Where:
+    - T_alloc = allocated/planned hours for the task
+    - T_left = time left until deadline (in hours)
+    - ε = small number (1) to avoid division by zero
+    
+    The risk increases when T_left is small and can exceed 100% to show true severity.
+    """
+    db = SessionLocal()
+    try:
+        # Import models here to avoid circular imports
+        from models.user import User
+        from models.notification import Notification
+        from models.log_note_attachment import LogNoteAttachment
+        from datetime import datetime, timezone, timedelta
+        from services.redis_service import get_redis_client
+        
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            return {"success": False, "message": "Task not found"}
+        
+        # Get current time with timezone awareness
+        now = datetime.now(timezone.utc)
+        
+        # Get task time data
+        allocated_hours = task.planned_hours or 0
+        start_date = task.start_date
+        deadline = task.deadline
+        
+        # Ensure timezone awareness for datetime objects
+        def make_timezone_aware(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+        
+        start_date = make_timezone_aware(start_date)
+        deadline = make_timezone_aware(deadline)
+        
+        # Calculate time left until deadline (in hours)
+        if not deadline:
+            time_left_hours = 0
+            is_overdue = False
+            overdue_hours = 0
+        else:
+            time_left = deadline - now
+            time_left_hours = max(0, time_left.total_seconds() / 3600)
+            is_overdue = time_left.total_seconds() < 0
+            overdue_hours = abs(time_left.total_seconds() / 3600) if is_overdue else 0
+        
+        # Calculate time passed since start (in hours)
+        time_passed_hours = 0
+        if start_date:
+            time_passed = now - start_date
+            time_passed_hours = max(0, time_passed.total_seconds() / 3600)
+        
+        # Calculate total time available (from start to deadline)
+        total_time_hours = 0
+        if start_date and deadline:
+            total_time = deadline - start_date
+            total_time_hours = max(0, total_time.total_seconds() / 3600)
+        
+        # Calculate time risk using the formula
+        epsilon = 1
+        if time_left_hours <= 0:
+            # Task is overdue - calculate how much time is needed vs how much is overdue
+            overdue_hours = abs(time_left_hours)
+            time_risk_percentage = (allocated_hours / (overdue_hours + epsilon)) * 100
+        else:
+            # Allow risk to exceed 100% to show true severity
+            time_risk_percentage = (allocated_hours / (time_left_hours + epsilon)) * 100
+        
+        # Optional: Calculate urgency ratio including time passed
+        urgency_ratio = 0
+        if total_time_hours > 0:
+            urgency_ratio = (time_passed_hours + allocated_hours) / (total_time_hours + 1)
+            urgency_ratio = min(1.0, urgency_ratio)  # Cap at 1.0
+        
+        # Apply risk boosts for critical time situations
+        risk_boosts = []
+        final_risk = time_risk_percentage
+        
+        if time_left_hours < 4:  # Less than 4 hours left
+            final_risk += 10
+            risk_boosts.append("Very close to deadline (< 4 hours)")
+        
+        if time_left_hours < allocated_hours / 2:  # Barely enough time left
+            final_risk += 10
+            risk_boosts.append("Insufficient time remaining")
+        
+        # Determine risk level based on uncapped risk
+        if final_risk >= 200:
+            risk_level = "extreme"
+        elif final_risk >= 150:
+            risk_level = "critical"
+        elif final_risk >= 100:
+            risk_level = "high"
+        elif final_risk >= 60:
+            risk_level = "medium"
+        elif final_risk >= 30:
+            risk_level = "low"
+        else:
+            risk_level = "minimal"
+        
+        # Calculate dynamic cache expiration based on time urgency
+        def calculate_cache_expiration(time_left_hours):
+            if time_left_hours <= 2:
+                return 1800  # 30 minutes - extreme urgency
+            elif time_left_hours <= 6:
+                return 3600  # 1 hour - critical urgency
+            elif time_left_hours <= 12:
+                return 7200  # 2 hours - high urgency
+            elif time_left_hours <= 24:
+                return 10800  # 3 hours - moderate urgency
+            else:
+                return 18000  # 5 hours - low urgency
+        
+        cache_expiration = calculate_cache_expiration(time_left_hours)
+        
+        # Prepare result
+        result = {
+            "task_id": task_id,
+            "task_name": task.name,
+            "calculation_timestamp": now.isoformat(),
+            "time_risk_percentage": round(final_risk, 2),
+            "risk_level": risk_level,
+            "time_data": {
+                "allocated_hours": allocated_hours,
+                "time_left_hours": round(time_left_hours, 2),
+                "time_passed_hours": round(time_passed_hours, 2),
+                "total_time_hours": round(total_time_hours, 2),
+                "is_overdue": is_overdue,
+                "overdue_hours": round(overdue_hours, 2) if is_overdue else 0,
+                "deadline": deadline.isoformat() if deadline else None,
+                "start_date": start_date.isoformat() if start_date else None
+            },
+            "urgency_ratio": round(urgency_ratio, 3),
+            "risk_boosts": risk_boosts,
+            "formula_used": "Risk (%) = (T_alloc / (T_left + ε)) * 100 (uncapped to show true severity)",
+            "cache_info": {
+                "expiration_seconds": cache_expiration,
+                "next_update": (now + timedelta(seconds=cache_expiration)).isoformat(),
+                "update_frequency": f"Every {cache_expiration//3600}h {cache_expiration%3600//60}m" if cache_expiration >= 3600 else f"Every {cache_expiration//60}m"
+            },
+            "calculation_details": {
+                "epsilon": epsilon,
+                "base_risk": round(time_risk_percentage, 2),
+                "final_risk_with_boosts": round(final_risk, 2),
+                "risk_interpretation": {
+                    "200%+": "Extreme - Task needs 2x+ more time than available",
+                    "150%+": "Critical - Task needs 1.5x+ more time than available", 
+                    "100%+": "High - Task needs more time than available",
+                    "60-99%": "Medium - Significant time pressure",
+                    "30-59%": "Low - Moderate time pressure",
+                    "<30%": "Minimal - Adequate time available"
+                }
+            }
+        }
+        
+        # Store in Redis with dynamic expiration
+        try:
+            redis_client = get_redis_client()
+            cache_key = f"task_time_risk:{task_id}"
+            redis_client.setex(cache_key, cache_expiration, result)
+        except Exception as e:
+            logger.warning(f"Could not cache time risk result for task {task_id}: {str(e)}")
+            result["cache_warning"] = f"Could not cache result: {str(e)}"
+        
+        return {
+            "success": True,
+            "task_id": task_id,
+            "result": result,
+            "status": "completed"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error calculating time risk for task {task_id}: {str(e)}")
+        return {"success": False, "message": str(e)}
+    finally:
+        db.close() 

@@ -483,6 +483,14 @@ async def update_task(
                 calculate_task_priority_score_task.delay(task_id)
             except Exception as e:
                 logger.warning(f"Failed to queue priority recalculation tasks for task {task_id}: {str(e)}")
+            
+            # Trigger time risk calculation when deadline changes
+            try:
+                from tasks.task_priority import calculate_task_time_risk_task
+                calculate_task_time_risk_task.delay(task_id)
+                logger.info(f"Queued time risk calculation for task {task_id} due to deadline change")
+            except Exception as e:
+                logger.warning(f"Failed to trigger time risk calculation for task {task_id}: {str(e)}")
 
         # Convert the dictionary to TaskResponse
         return TaskResponse.model_validate(updated_task_dict)
