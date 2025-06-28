@@ -1023,7 +1023,7 @@ async def add_tag_to_task(
     Add a tag to a task.
     """
     # Check if task exists
-    task = task_crud.get(db, id=task_id)
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1073,7 +1073,7 @@ async def remove_tag_from_task(
     Remove a tag from a task.
     """
     # Check if task exists
-    task = task_crud.get(db, id=task_id)
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1121,7 +1121,7 @@ async def get_task_tags(
     """
     Get all tags associated with a task.
     """
-    task = task_crud.get(db, id=task_id)
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1141,7 +1141,7 @@ async def update_task_tags(
     Update all tags for a task. This will replace existing tags with the new list.
     """
     # Check if task exists
-    task = task_crud.get(db, id=task_id)
+    task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1,17 +1,195 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from database import get_db
 from services.ai_service import get_ai_service
 from models.task import Task
 from models.task_risk import TaskRisk
+from services.redis_service import get_redis_client
 
 router = APIRouter(
     prefix="/ai",
     tags=["AI Analysis"]
 )
+
+@router.get("/task/{task_id}/time-risk")
+async def calculate_task_time_risk(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Calculate time-based risk for a task using the formula:
+    Risk (%) = (T_alloc / (T_left + ε)) * 100
+    
+    Where:
+    - T_alloc = allocated/planned hours for the task
+    - T_left = time left until deadline (in hours)
+    - ε = small number (1) to avoid division by zero
+    
+    The risk increases when T_left is small and can exceed 100% to show true severity:
+    - 100% = Task needs exactly the time available
+    - 200% = Task needs twice the time available
+    - 300% = Task needs three times the time available
+    
+    Risk levels:
+    - 200%+ = Extreme (needs 2x+ more time)
+    - 150%+ = Critical (needs 1.5x+ more time)
+    - 100%+ = High (needs more time than available)
+    - 60-99% = Medium (significant time pressure)
+    - 30-59% = Low (moderate time pressure)
+    - <30% = Minimal (adequate time available)
+    
+    Optional: Include actual time passed for urgency calculation
+    """
+    try:
+        # Get task details
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Task {task_id} not found"
+            )
+        
+        # Get current time with timezone awareness
+        now = datetime.now(timezone.utc)
+        
+        # Get task time data
+        allocated_hours = task.planned_hours or 0
+        start_date = task.start_date
+        deadline = task.deadline
+        
+        # Ensure timezone awareness for datetime objects
+        def make_timezone_aware(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+        
+        start_date = make_timezone_aware(start_date)
+        deadline = make_timezone_aware(deadline)
+        
+        # Calculate time left until deadline (in hours)
+        if not deadline:
+            time_left_hours = 0
+            is_overdue = False
+            overdue_hours = 0
+        else:
+            time_left = deadline - now
+            time_left_hours = max(0, time_left.total_seconds() / 3600)
+            is_overdue = time_left.total_seconds() < 0
+            overdue_hours = abs(time_left.total_seconds() / 3600) if is_overdue else 0
+        
+        # Calculate time passed since start (in hours)
+        time_passed_hours = 0
+        if start_date:
+            time_passed = now - start_date
+            time_passed_hours = max(0, time_passed.total_seconds() / 3600)
+        
+        # Calculate total time available (from start to deadline)
+        total_time_hours = 0
+        if start_date and deadline:
+            total_time = deadline - start_date
+            total_time_hours = max(0, total_time.total_seconds() / 3600)
+        
+        # Calculate time risk using the formula
+        epsilon = 1  # Small number to avoid division by zero
+        if time_left_hours <= 0:
+            # Task is overdue - calculate how much time is needed vs how much is overdue
+            overdue_hours = abs(time_left_hours)
+            time_risk_percentage = (allocated_hours / (overdue_hours + epsilon)) * 100
+        else:
+            # Allow risk to exceed 100% to show true severity
+            time_risk_percentage = (allocated_hours / (time_left_hours + epsilon)) * 100
+        
+        # Optional: Calculate urgency ratio including time passed
+        urgency_ratio = 0
+        if total_time_hours > 0:
+            urgency_ratio = (time_passed_hours + allocated_hours) / (total_time_hours + 1)
+            urgency_ratio = min(1.0, urgency_ratio)  # Cap at 1.0
+        
+        # Apply risk boosts for critical time situations
+        risk_boosts = []
+        final_risk = time_risk_percentage
+        
+        if time_left_hours < 4:  # Less than 4 hours left
+            final_risk += 10
+            risk_boosts.append("Very close to deadline (< 4 hours)")
+        
+        if time_left_hours < allocated_hours / 2:  # Barely enough time left
+            final_risk += 10
+            risk_boosts.append("Insufficient time remaining")
+        
+        # Determine risk level based on uncapped risk
+        if final_risk >= 200:
+            risk_level = "extreme"
+        elif final_risk >= 150:
+            risk_level = "critical"
+        elif final_risk >= 100:
+            risk_level = "high"
+        elif final_risk >= 60:
+            risk_level = "medium"
+        elif final_risk >= 30:
+            risk_level = "low"
+        else:
+            risk_level = "minimal"
+        
+        # Prepare response
+        result = {
+            "task_id": task_id,
+            "task_name": task.name,
+            "calculation_timestamp": now.isoformat(),
+            "time_risk_percentage": round(final_risk, 2),
+            "risk_level": risk_level,
+            "time_data": {
+                "allocated_hours": allocated_hours,
+                "time_left_hours": round(time_left_hours, 2),
+                "time_passed_hours": round(time_passed_hours, 2),
+                "total_time_hours": round(total_time_hours, 2),
+                "is_overdue": is_overdue,
+                "overdue_hours": round(overdue_hours, 2) if is_overdue else 0,
+                "deadline": deadline.isoformat() if deadline else None,
+                "start_date": start_date.isoformat() if start_date else None
+            },
+            "urgency_ratio": round(urgency_ratio, 3),
+            "risk_boosts": risk_boosts,
+            "formula_used": "Risk (%) = (T_alloc / (T_left + ε)) * 100 (uncapped to show true severity)",
+            "calculation_details": {
+                "epsilon": epsilon,
+                "base_risk": round(time_risk_percentage, 2),
+                "final_risk_with_boosts": round(final_risk, 2),
+                "risk_interpretation": {
+                    "200%+": "Extreme - Task needs 2x+ more time than available",
+                    "150%+": "Critical - Task needs 1.5x+ more time than available", 
+                    "100%+": "High - Task needs more time than available",
+                    "60-99%": "Medium - Significant time pressure",
+                    "30-59%": "Low - Moderate time pressure",
+                    "<30%": "Minimal - Adequate time available"
+                }
+            }
+        }
+        
+        # Store in Redis for later use by main risk analysis
+        try:
+            redis_client = get_redis_client()
+            cache_key = f"task_time_risk:{task_id}"
+            # Cache for 1 hour (3600 seconds)
+            redis_client.setex(cache_key, 3600, result)
+        except Exception as e:
+            # Don't fail the request if Redis is unavailable
+            result["cache_warning"] = f"Could not cache result: {str(e)}"
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating time risk: {str(e)}"
+        )
 
 @router.get("/task/{task_id}/risk")
 async def analyze_task_risk(
@@ -159,8 +337,6 @@ async def analyze_project_risks(
             status_code=500,
             detail=f"Error analyzing project risks: {str(e)}"
         )
-
-
 
 @router.get("/projects/{project_id}/insights")
 async def generate_project_insights(

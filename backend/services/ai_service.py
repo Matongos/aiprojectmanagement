@@ -10,6 +10,7 @@ import requests
 from services.ollama_service import get_ollama_client
 from services.vector_service import VectorService
 from services.weather_service import get_weather_service
+from services.redis_service import get_redis_client
 from models.task import Task
 from models.project import Project, ProjectMember
 from models.time_entry import TimeEntry
@@ -18,6 +19,8 @@ from models.activity import Activity
 from schemas.task import TaskState
 from services.complexity_service import ComplexityService
 from models.task_risk import TaskRisk
+from models.comment import Comment
+from models.metrics import TaskMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,7 @@ class AIService:
         self.vector_service = VectorService(db)
         self.weather_service = get_weather_service()
         self.ollama_url = "http://localhost:11434/api/generate"
+        self.redis_client = get_redis_client()
         
     def _get_current_time(self) -> datetime:
         """Get current time with UTC timezone"""
@@ -40,12 +44,31 @@ class AIService:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-        
 
+    def get_cached_time_risk(self, task_id: int) -> Optional[Dict]:
+        """
+        Retrieve cached time risk data for a task from Redis.
+        Returns None if not found or if Redis is unavailable.
+        """
+        try:
+            cache_key = f"task_time_risk:{task_id}"
+            cached_data = self.redis_client.get(cache_key)
+            return cached_data
+        except Exception as e:
+            logger.warning(f"Error retrieving cached time risk for task {task_id}: {str(e)}")
+            return None
 
-
-
-
+    def store_time_risk_cache(self, task_id: int, time_risk_data: Dict, expiration_seconds: int = 3600) -> bool:
+        """
+        Store time risk data in Redis cache.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            cache_key = f"task_time_risk:{task_id}"
+            return self.redis_client.setex(cache_key, expiration_seconds, time_risk_data)
+        except Exception as e:
+            logger.warning(f"Error storing time risk cache for task {task_id}: {str(e)}")
+            return False
 
     async def generate_project_insights(self, project_id: int) -> Dict:
         """Generate comprehensive project insights."""
@@ -292,174 +315,261 @@ class AIService:
             } 
 
     async def analyze_task_risk(self, task_id: int) -> Dict:
-        """Analyze risk factors for a specific task using real-time data."""
+        """Fetch all data required for task risk analysis without performing analysis."""
         # Get task with all necessary relationships
         task = self.db.query(Task).filter(Task.id == task_id).first()
         if not task:
             raise ValueError(f"Task {task_id} not found")
 
         try:
-            # Check if task is completed
-            if task.progress == 100 or getattr(task, 'state', '').lower() == 'done':
-                risk_analysis = {
-                    "task_id": task_id,
-                    "risk_score": 0,
-                    "risk_level": "low",
-                    "risk_factors": [],
-                    "risk_breakdown": {
-                        "complexity": 0,
-                        "time_sensitivity": 0,
-                        "priority": 0
-                    },
-                    "recommendations": [],
-                    "metrics": {
-                        "time": {
-                            "is_at_risk": False,
-                            "risk_factors": [],
-                            "estimated_delay_days": 0,
-                            "timeline": {
-                                "created_at": self._ensure_tz_aware(task.created_at).isoformat(),
-                                "started_at": self._ensure_tz_aware(task.start_date).isoformat() if task.start_date else None,
-                                "deadline": self._ensure_tz_aware(task.deadline).isoformat() if task.deadline else None,
-                                "planned_hours": task.planned_hours or 0,
-                                "elapsed_hours": 0,
-                                "remaining_hours": 0,
-                                "progress_percentage": 100
-                            },
-                            "overdue": False,
-                            "days_to_deadline": 0,
-                            "progress": 100
-                        },
-                        "role_match": {
-                            "risk_level": "low",
-                            "reason": "Task completed successfully",
-                            "skill_gap": [],
-                            "experience_level": "sufficient",
-                            "metrics": {
-                                "skill_match": 100,
-                                "role_alignment": 100,
-                                "experience_match": 100
-                            }
-                        },
-                        "complexity": {
-                            "score": 0,
-                            "factors": {
-                                "technical_complexity": 0,
-                                "scope_complexity": 0,
-                                "time_pressure": 0,
-                                "environmental_complexity": 0,
-                                "dependencies_impact": 0
-                            }
-                        }
-                    }
-                }
-                
-                # Store the risk analysis
-                self._store_risk_analysis(task_id, risk_analysis)
-                return risk_analysis
-
-            # Continue with existing risk analysis for non-completed tasks
-            # 1. Get task complexity data
+            # 1. Get project details
+            project = self.db.query(Project).filter(Project.id == task.project_id).first()
+            
+            # 2. Get task complexity data
             complexity_service = ComplexityService()
             complexity_analysis = await complexity_service.analyze_task_complexity(self.db, task_id)
             
-            # 2. Get detailed assignee data
+            # 3. Get detailed assignee data
             assignee_data = None
+            assignee_active_tasks = []
             if task.assigned_to:
                 assignee = self.db.query(User).filter(User.id == task.assigned_to).first()
                 if assignee:
+                    # Get assignee's active tasks
+                    assignee_active_tasks = self.db.query(Task).filter(
+                        Task.assigned_to == assignee.id,
+                        Task.state.in_(['in_progress', 'changes_requested', 'approved']),
+                        Task.id != task_id  # Exclude current task
+                    ).all()
+                    
                     assignee_data = {
                         'id': assignee.id,
-                        'role': getattr(assignee, 'role', None),
-                        'job_title': getattr(assignee, 'job_title', None),
-                        'department': getattr(assignee, 'department', None),
-                        'skills': getattr(assignee, 'skills', []),
-                        'experience_level': getattr(assignee, 'experience_level', None)
+                        'username': assignee.username,
+                        'full_name': assignee.full_name,
+                        'job_title': assignee.job_title,
+                        'profession': assignee.profession,
+                        'expertise': assignee.expertise or [],
+                        'skills': assignee.skills or [],
+                        'experience_level': assignee.experience_level,
+                        'active_tasks_count': len(assignee_active_tasks),
+                        'active_tasks': [
+                            {
+                                'id': t.id,
+                                'name': t.name,
+                                'description': t.description,
+                                'state': t.state,
+                                'progress': t.progress,
+                                'deadline': t.deadline.isoformat() if t.deadline else None
+                            } for t in assignee_active_tasks
+                        ]
                     }
 
-            # 3. Analyze time sensitivity
-            time_risk = await self._analyze_time_risks(task)
+            # 4. Get task comments
+            task_comments = self.db.query(Comment).filter(
+                Comment.task_id == task_id
+            ).order_by(Comment.created_at.desc()).all()
             
-            # 4. Calculate role/task mismatch using AI
-            role_match_analysis = await self._analyze_role_task_match(
-                task_name=task.name,
-                task_description=task.description,
-                assignee_data=assignee_data
-            )
+            comments_data = [
+                {
+                    'id': comment.id,
+                    'content': comment.content,
+                    'created_by': comment.created_by,
+                    'created_at': comment.created_at.isoformat(),
+                    'author_name': comment.author.full_name if comment.author else 'Unknown'
+                } for comment in task_comments
+            ]
+
+            # 5. Get project comments (for dependency analysis context)
+            project_comments = self.db.query(Comment).filter(
+                Comment.project_id == task.project_id,
+                Comment.task_id.is_(None)  # Only project-level comments
+            ).order_by(Comment.created_at.desc()).all()
             
-            # 5. Calculate risk components (ensure all are 0-100)
-            risk_components = {
-                'complexity': min(100, complexity_analysis.total_score),  # Already 0-100
-                'time_sensitivity': min(100, self._calculate_time_risk_score(time_risk) * 100),
-                'priority': min(100, self._calculate_priority_risk(task) * 100)
+            project_comments_data = [
+                {
+                    'id': comment.id,
+                    'content': comment.content,
+                    'created_by': comment.created_by,
+                    'created_at': comment.created_at.isoformat(),
+                    'author_name': comment.author.full_name if comment.author else 'Unknown'
+                } for comment in project_comments
+            ]
+
+            # 6. Get all tasks in the project for dependency analysis
+            project_tasks = self.db.query(Task).filter(
+                Task.project_id == task.project_id,
+                Task.id != task_id  # Exclude current task
+            ).all()
+            
+            project_tasks_data = [
+                {
+                    'id': t.id,
+                    'name': t.name,
+                    'description': t.description,
+                    'state': t.state,
+                    'progress': t.progress,
+                    'deadline': t.deadline.isoformat() if t.deadline else None,
+                    'assigned_to': t.assigned_to,
+                    'created_at': t.created_at.isoformat()
+                } for t in project_tasks
+            ]
+
+            # 7. Calculate time-related data
+            current_time = self._get_current_time()
+            task_deadline = self._ensure_tz_aware(task.deadline)
+            task_start_date = self._ensure_tz_aware(task.start_date)
+            
+            time_data = {
+                'current_time': current_time.isoformat(),
+                'task_created_at': self._ensure_tz_aware(task.created_at).isoformat(),
+                'task_start_date': task_start_date.isoformat() if task_start_date else None,
+                'task_deadline': task_deadline.isoformat() if task_deadline else None,
+                'planned_hours': task.planned_hours or 0,
+                'progress': task.progress or 0,
+                'days_to_deadline': None,
+                'is_overdue': False,
+                'overdue_days': 0
             }
             
-            # New weights for different components (must sum to 1)
-            weights = {
-                'complexity': 0.1,    # 10% weight
-                'time_sensitivity': 0.8,  # 80% weight
-                'priority': 0.1     # 10% weight
-            }
-            
-            # Calculate weighted risk score (will be 0-100)
-            risk_score = sum(score * weights[component] for component, score in risk_components.items())
-            risk_score = round(min(100, risk_score), 1)  # Ensure max is 100 and round to 1 decimal
+            if task_deadline:
+                if task_deadline < current_time:
+                    time_data['is_overdue'] = True
+                    time_data['overdue_days'] = (current_time - task_deadline).days
+                    time_data['days_to_deadline'] = -(current_time - task_deadline).days
+                else:
+                    time_data['days_to_deadline'] = (task_deadline - current_time).days
 
-            # Determine risk level based on 0-100 scale
-            risk_level = "high" if risk_score > 70 else "medium" if risk_score > 40 else "low"
-            
-            # Collect risk factors
-            risk_factors = []
-            
-            # Add complexity-based risk factors
-            if complexity_analysis.total_score > 70:
-                risk_factors.append("High task complexity")
-                for factor_name, factor_value in complexity_analysis.factors.__dict__.items():
-                    if isinstance(factor_value, (int, float)) and factor_value > 70:
-                        risk_factors.append(f"High {factor_name.replace('_', ' ')} complexity")
-            
-            # Add time-based risk factors
-            if time_risk['risk_factors']:
-                risk_factors.extend(time_risk['risk_factors'])
-            
-            # Add priority-based risk factors
-            if task.priority == 'high' or getattr(task, 'priority_score', 0) > 70:
-                risk_factors.append("High priority task requiring immediate attention")
+            # 8. Determine if task is outdoor/indoor
+            weather_service = get_weather_service()
+            is_outdoor_task = weather_service.is_outdoor_task(task.description or '', task.name)
+            task_environment = "outdoor" if is_outdoor_task else "indoor"
 
-            # Generate recommendations
-            recommendations = []
-            if risk_score > 70:
-                recommendations.append("Immediate attention required - High risk task")
-            if complexity_analysis.total_score > 70:
-                recommendations.append("Consider breaking down the task into smaller subtasks")
-            if time_risk['is_at_risk']:
-                recommendations.append(f"Review timeline - Task may be delayed by {time_risk['estimated_delay_days']} days")
-            
-            risk_analysis = {
+            # 9. Get task dependencies
+            task_dependencies = [
+                {
+                    'id': dep.id,
+                    'name': dep.name,
+                    'description': dep.description,
+                    'state': dep.state,
+                    'progress': dep.progress
+                } for dep in task.depends_on
+            ]
+
+            # 10. Get dependent tasks (tasks that depend on this task)
+            dependent_tasks = [
+                {
+                    'id': dep.id,
+                    'name': dep.name,
+                    'description': dep.description,
+                    'state': dep.state,
+                    'progress': dep.progress
+                } for dep in task.dependent_tasks
+            ]
+
+            # 11. Get task metrics if available
+            task_metrics = self.db.query(TaskMetrics).filter(TaskMetrics.task_id == task_id).first()
+            metrics_data = None
+            if task_metrics:
+                metrics_data = {
+                    'actual_duration': task_metrics.actual_duration,
+                    'time_estimate_accuracy': task_metrics.time_estimate_accuracy,
+                    'complexity_score': task_metrics.complexity_score,
+                    'dependency_count': task_metrics.dependency_count,
+                    'comment_count': task_metrics.comment_count,
+                    'handover_count': task_metrics.handover_count
+                }
+
+            # Return all collected data without analysis
+            return {
                 "task_id": task_id,
-                "risk_score": risk_score,
-                "risk_level": risk_level,
-                "risk_factors": risk_factors,
-                "risk_breakdown": {
-                    "complexity": round(risk_components['complexity'], 1),
-                    "time_sensitivity": round(risk_components['time_sensitivity'], 1),
-                    "priority": round(risk_components['priority'], 1)
-                },
-                "recommendations": recommendations,
-                "metrics": {
-                    "time": time_risk,
-                    "role_match": role_match_analysis['details'],
-                    "complexity": {
-                        "score": complexity_analysis.total_score,
-                        "factors": complexity_analysis.factors.__dict__
-                    }
+                "data_collection_timestamp": current_time.isoformat(),
+                "analysis_performed": False,
+                "collected_data": {
+                    # 1. Task dueness (20% weight later)
+                    "task_dueness": {
+                        "days_to_deadline": time_data['days_to_deadline'],
+                        "is_overdue": time_data['is_overdue'],
+                        "overdue_days": time_data['overdue_days'],
+                        "deadline": time_data['task_deadline'],
+                        "start_date": time_data['task_start_date'],
+                        "created_at": time_data['task_created_at']
                     },
-                "updated_at": datetime.now(timezone.utc).isoformat()
+                    
+                    # 2. Task complexity (20% weight later)
+                    "task_complexity": {
+                        "complexity_score": complexity_analysis.total_score,
+                        "complexity_factors": complexity_analysis.factors.__dict__,
+                        "environment_type": complexity_analysis.environment_type.value,
+                        "weather_impact": complexity_analysis.weather_impact.__dict__ if complexity_analysis.weather_impact else None
+                    },
+                    
+                    # 3. Assigned person analysis (20% weight later - 10% role match + 10% active tasks)
+                    "assigned_person": {
+                        "assignee_data": assignee_data,
+                        "role_match_analysis_needed": True,  # Will be done by AI later
+                        "active_tasks_count": len(assignee_active_tasks),
+                        "active_tasks": assignee_data['active_tasks'] if assignee_data else []
+                    },
+                    
+                    # 4. Task dependency analysis (10% weight later)
+                    "task_dependencies": {
+                        "current_task": {
+                            'id': task.id,
+                            'name': task.name,
+                            'description': task.description,
+                            'project_id': task.project_id
+                        },
+                        "project_context": {
+                            'project_name': project.name,
+                            'project_description': project.description,
+                            'total_project_tasks': len(project_tasks_data)
+                        },
+                        "dependencies": task_dependencies,
+                        "dependent_tasks": dependent_tasks,
+                        "all_project_tasks": project_tasks_data,
+                        "dependency_analysis_needed": True  # Will be done by AI later
+                    },
+                    
+                    # 5. Comments analysis (10% weight later)
+                    "comments_analysis": {
+                        "task_comments": comments_data,
+                        "project_comments": project_comments_data,
+                        "total_task_comments": len(comments_data),
+                        "total_project_comments": len(project_comments_data),
+                        "sentiment_analysis_needed": True  # Will be done by AI later
+                    },
+                    
+                    # 6. Task environment (10% weight later)
+                    "task_environment": {
+                        "is_outdoor": is_outdoor_task,
+                        "environment_type": task_environment,
+                        "weather_impact_analysis_needed": is_outdoor_task  # Only if outdoor task
+                    },
+                    
+                    # Additional context data
+                    "task_details": {
+                        "name": task.name,
+                        "description": task.description,
+                        "state": task.state,
+                        "priority": task.priority,
+                        "progress": task.progress,
+                        "planned_hours": task.planned_hours,
+                        "created_at": task.created_at.isoformat(),
+                        "updated_at": task.updated_at.isoformat() if task.updated_at else None
+                    },
+                    
+                    "project_details": {
+                        "id": project.id,
+                        "name": project.name,
+                        "description": project.description,
+                        "start_date": project.start_date.isoformat() if project.start_date else None,
+                        "end_date": project.end_date.isoformat() if project.end_date else None,
+                        "progress": project.progress
+                    },
+                    
+                    "metrics": metrics_data
+                }
             }
-            
-            # Store the risk analysis
-            self._store_risk_analysis(task_id, risk_analysis)
-            return risk_analysis
 
         except Exception as e:
             print(f"Error in analyze_task_risk: {str(e)}")
