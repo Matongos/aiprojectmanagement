@@ -13,6 +13,9 @@ from schemas.task_complexity import (
 from services.weather_service import get_weather_service
 from services.weather_cache_service import get_weather_cache_service
 from config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ComplexityService:
     def __init__(self):
@@ -69,23 +72,41 @@ class ComplexityService:
         )
 
     async def _analyze_task_text(self, name: str, description: str) -> Dict[str, Any]:
-        """Analyze task name and description using Ollama's codellama model"""
-        prompt = f"""Analyze the following task and provide complexity scores:
+        """Analyze task name and description using AI for universal complexity assessment"""
+        prompt = f"""Analyze the following task and provide complexity scores for ANY industry or field:
+
         Task Name: {name}
         Description: {description}
 
-        Please analyze the technical complexity, scope, and provide scores on a scale of 0-100.
-        Consider:
-        1. Technical terms and required expertise
-        2. Number of subtasks and requirements
-        3. Dependencies and interactions
-        4. Clarity of requirements
-        5. Potential challenges
+Please analyze the complexity across ALL industries and provide scores on a scale of 0-100.
+
+UNIVERSAL COMPLEXITY FACTORS TO CONSIDER:
+1. Technical Complexity (0-100):
+   - Required technical skills, tools, or equipment
+   - Specialized knowledge or certifications needed
+   - Complexity of procedures or processes
+   - Examples: Software development, medical procedures, construction techniques, financial analysis
+
+2. Scope Complexity (0-100):
+   - Number of subtasks and requirements
+   - Dependencies and interactions
+   - Clarity of requirements
+   - Potential challenges and risks
+   - Examples: Large marketing campaigns, construction projects, research studies, event planning
+
+3. Industry-Specific Considerations:
+   - Healthcare: Patient safety, regulatory compliance, medical procedures
+   - Construction: Safety regulations, building codes, physical labor
+   - Marketing: Creative requirements, target audience, campaign coordination
+   - Education: Curriculum development, student engagement, assessment methods
+   - Manufacturing: Quality control, production processes, safety protocols
+   - Retail: Customer service, inventory management, sales processes
+   - Finance: Regulatory compliance, accuracy requirements, risk assessment
 
         Provide response in JSON format with:
         - technical_score (0-100)
         - scope_score (0-100)
-        - summary (brief analysis)
+- summary (brief analysis of complexity factors)
         - confidence (0-1)
 
         Return only valid JSON, no other text.
@@ -94,7 +115,7 @@ class ComplexityService:
         response = requests.post(
             self.ollama_url,
             json={
-                "model": "codellama",
+                "model": "mistral",  # Changed from codellama to mistral for better universal analysis
                 "prompt": prompt,
                 "stream": False
             }
@@ -109,26 +130,184 @@ class ComplexityService:
             return {
                 "technical_score": 50,
                 "scope_score": 50,
-                "summary": "Unable to analyze task complexity",
+                "summary": "Unable to analyze task complexity - using default scores",
                 "confidence": 0.5
             }
 
     async def _classify_task_environment(self, name: str, description: str) -> TaskEnvironment:
-        """Determine if task is indoor, outdoor, or hybrid"""
-        # Use the existing weather service's outdoor task detection
-        is_outdoor = self.weather_service.is_outdoor_task(description, name)
-        
-        # If clearly outdoor, return OUTDOOR
-        if is_outdoor:
-            return TaskEnvironment.OUTDOOR
-            
-        # For tasks that might have both indoor/outdoor components
-        hybrid_keywords = ['installation', 'maintenance', 'setup', 'event', 'inspection']
+        """AI-powered classification to determine if task is indoor, outdoor, or hybrid"""
+        try:
+            prompt = f"""Analyze the following task and determine its work environment:
+
+TASK:
+Name: {name}
+Description: {description}
+
+ENVIRONMENT CLASSIFICATION:
+Classify the task into one of these categories:
+
+1. INDOOR: Tasks performed primarily inside buildings, offices, or controlled environments
+   - Software development, coding, design work
+   - Office work, administration, management
+   - Content creation, writing, marketing
+   - Financial work, accounting, analysis
+   - Indoor manufacturing, assembly
+   - Indoor healthcare, education, research
+
+2. OUTDOOR: Tasks performed primarily outside or in uncontrolled environments
+   - Construction, building, landscaping
+   - Agriculture, farming, gardening
+   - Outdoor maintenance, repair, installation
+   - Transportation, delivery, field work
+   - Outdoor events, concerts, festivals
+   - Outdoor healthcare (home visits, emergency response)
+
+3. HYBRID: Tasks that involve both indoor and outdoor work
+   - Installation work that requires both setup and outdoor access
+   - Maintenance that involves both office work and field work
+   - Events that have both indoor and outdoor components
+   - Service calls that require travel and on-site work
+
+You MUST return ONLY valid JSON in this exact format:
+{{
+    "environment": "indoor",
+    "reasoning": "Brief explanation of why this classification was chosen",
+    "confidence": 0.95
+}}
+
+Return only valid JSON, no other text."""
+
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "mistral",
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                response_text = result["response"]
+                analysis = json.loads(response_text)
+                
+                environment = analysis.get("environment", "indoor").lower()
+                reasoning = analysis.get("reasoning", "AI analysis provided")
+                confidence = analysis.get("confidence", 0.8)
+                
+                logger.info(f"AI environment classification for '{name}': {environment} (confidence: {confidence}) - {reasoning}")
+                
+                # Map AI response to TaskEnvironment enum
+                if environment == "outdoor":
+                    return TaskEnvironment.OUTDOOR
+                elif environment == "hybrid":
+                    return TaskEnvironment.HYBRID
+                else:
+                    return TaskEnvironment.INDOOR
+                    
+            else:
+                logger.warning(f"AI environment classification failed, falling back to rule-based: {response.status_code}")
+                return self._fallback_environment_classification(name, description)
+                
+        except Exception as e:
+            logger.error(f"Error in AI environment classification: {str(e)}")
+            return self._fallback_environment_classification(name, description)
+
+    def _fallback_environment_classification(self, name: str, description: str) -> TaskEnvironment:
+        """Fallback rule-based classification when AI fails"""
         text = f"{name} {description}".lower()
         
+        # INDOOR TASKS (clear indoor indicators)
+        indoor_keywords = [
+            # Software & IT
+            'develop', 'code', 'programming', 'software', 'website', 'app', 'application',
+            'html', 'css', 'javascript', 'database', 'api', 'backend', 'frontend',
+            'design', 'ui', 'ux', 'wireframe', 'mockup', 'prototype',
+            'testing', 'debug', 'deploy', 'hosting', 'server', 'cloud',
+            
+            # Office & Administrative
+            'admin', 'management', 'coordination', 'planning', 'organization',
+            'reporting', 'documentation', 'meeting', 'presentation', 'analysis',
+            'research', 'data', 'report', 'study', 'survey', 'investigation',
+            
+            # Creative & Content
+            'content', 'writing', 'copy', 'text', 'creative', 'art', 'graphic',
+            'marketing', 'advertising', 'social media', 'seo', 'campaign',
+            
+            # Financial & Business
+            'financial', 'accounting', 'budget', 'expense', 'invoice', 'tax',
+            'audit', 'reporting', 'sales', 'customer', 'client', 'business',
+            
+            # Healthcare (indoor)
+            'patient care', 'medical', 'treatment', 'diagnosis', 'consultation',
+            'laboratory', 'testing', 'examination', 'therapy', 'counseling',
+            
+            # Education (indoor)
+            'teaching', 'education', 'training', 'curriculum', 'lesson',
+            'student', 'learning', 'classroom', 'lecture', 'workshop',
+            
+            # Manufacturing (indoor)
+            'manufacturing', 'production', 'assembly', 'quality control',
+            'factory', 'warehouse', 'inventory', 'processing'
+        ]
+        
+        # OUTDOOR TASKS (clear outdoor indicators)
+        outdoor_keywords = [
+            # Construction & Manual (physical outdoor work)
+            'construction', 'building', 'roofing', 'landscaping', 'gardening', 'excavation',
+            'outdoor', 'field', 'site', 'ground', 'yard', 'park', 'street', 'road',
+            'paint exterior', 'repair exterior', 'build exterior', 'inspect exterior',
+            
+            # Agriculture & Farming
+            'farming', 'agriculture', 'harvest', 'planting', 'irrigation', 'livestock',
+            'crop', 'soil', 'fertilizer', 'pesticide',
+            
+            # Transportation & Delivery (physical)
+            'delivery', 'transportation', 'driving', 'shipping', 'logistics',
+            'truck', 'vehicle', 'route', 'dispatch',
+            
+            # Events & Entertainment (outdoor)
+            'outdoor event', 'concert', 'festival', 'venue setup', 'outdoor venue',
+            'stadium', 'amphitheater', 'park event',
+            
+            # Maintenance & Services (outdoor)
+            'outdoor maintenance', 'outdoor repair', 'outdoor installation', 
+            'outdoor inspection', 'outdoor survey', 'outdoor cleaning',
+            
+            # Healthcare (outdoor)
+            'home visit', 'mobile clinic', 'field hospital', 'emergency response',
+            'ambulance', 'paramedic', 'outdoor medical',
+            
+            # Sales & Marketing (outdoor)
+            'door-to-door', 'street marketing', 'outdoor advertising', 'trade show',
+            'outdoor sales', 'outdoor promotion',
+            
+            # Education (outdoor)
+            'field trip', 'outdoor education', 'sports', 'recreation',
+            'outdoor activity', 'outdoor training'
+        ]
+        
+        # HYBRID TASKS (mix of indoor/outdoor)
+        hybrid_keywords = [
+            'installation', 'maintenance', 'repair', 'setup', 'event', 'inspection', 'survey',
+            'delivery', 'service call', 'home visit', 'site visit', 'field work',
+            'mobile', 'on-site', 'client visit', 'meeting', 'presentation'
+        ]
+        
+        # Check for indoor tasks first (most specific)
+        if any(keyword in text for keyword in indoor_keywords):
+            return TaskEnvironment.INDOOR
+            
+        # Check for outdoor tasks
+        if any(keyword in text for keyword in outdoor_keywords):
+            return TaskEnvironment.OUTDOOR
+            
+        # Check for hybrid tasks
         if any(keyword in text for keyword in hybrid_keywords):
             return TaskEnvironment.HYBRID
             
+        # Default to indoor (office, factory, hospital, school, etc.)
         return TaskEnvironment.INDOOR
 
     async def _get_weather_impact(self, task: Task, location: Optional[str] = None) -> Optional[WeatherImpact]:

@@ -288,6 +288,46 @@ async def analyze_task_risk(
             detail=f"Error analyzing task risk: {str(e)}"
         )
 
+@router.get("/task/{task_id}/risk-summary")
+async def analyze_task_risk_summary(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Perform comprehensive task risk analysis and calculate total risk score.
+    
+    This endpoint provides a complete risk assessment with:
+    - Total weighted risk score (can exceed 100 due to weighted components)
+    - Risk breakdown by component:
+      * Complexity (20% weight, max 20 points)
+      * Time Risk (30% weight, max 30 points)
+      * Role/Workload (20% weight, max 20 points)
+      * Dependencies (10% weight, max 10 points)
+      * Comments Analysis (10% weight, max 10 points)
+      * Environment (10% weight, max 10 points)
+    - Overall risk level (very_low, low, medium, high, very_high, extreme)
+    - Summary comments for each component with timestamps
+    - Actionable recommendations
+    - Detailed analysis data
+    
+    Results are automatically stored in the database for historical tracking.
+    """
+    try:
+        ai_service = get_ai_service(db)
+        summary = await ai_service.analyze_task_risk_summary(task_id)
+        
+        return summary
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=404,
+            detail=str(ve)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error analyzing task risk summary: {str(e)}"
+        )
+
 @router.get("/project/{project_id}/tasks/risk")
 async def analyze_project_tasks_risk(
     project_id: int,

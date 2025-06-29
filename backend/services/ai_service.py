@@ -522,7 +522,7 @@ class AIService:
                     'handover_count': task_metrics.handover_count
                 }
 
-            # 12. Get cached time risk data
+            # 12. Get cached time risk data or calculate if not available
             time_risk_data = None
             try:
                 cached_time_risk = self.get_cached_time_risk(task_id)
@@ -540,20 +540,43 @@ class AIService:
                         "cache_status": "valid"
                     }
                 else:
-                    time_risk_data = {
-                        "cached_time_risk": None,
-                        "weighted_risk_score": 0,
-                        "calculation": "No cached data available",
-                        "risk_level": "unknown",
-                        "time_data": {},
-                        "cache_status": "not_found"
-                    }
+                    # No cache found - calculate time risk on-demand
+                    logger.info(f"No cached time risk found for task {task_id}, calculating on-demand...")
+                    calculated_time_risk = await self._analyze_time_risks(task)
+                    
+                    if calculated_time_risk:
+                        # Weight the calculated time risk against 30
+                        time_risk_percentage = calculated_time_risk.get('time_risk_percentage', 0)
+                        weighted_risk_score = (time_risk_percentage / 100) * 30
+                        
+                        # Store the calculated result in cache for future use
+                        self.store_time_risk_cache(task_id, calculated_time_risk, expiration_seconds=3600)
+                        
+                        time_risk_data = {
+                            "cached_time_risk": calculated_time_risk,
+                            "weighted_risk_score": round(weighted_risk_score, 2),
+                            "calculation": f"({time_risk_percentage} / 100) * 30 = {weighted_risk_score}",
+                            "risk_level": calculated_time_risk.get('risk_level', 'unknown'),
+                            "time_data": calculated_time_risk.get('time_data', {}),
+                            "cache_status": "calculated_and_cached"
+                        }
+                    else:
+                        # Fallback if calculation fails
+                        time_risk_data = {
+                            "cached_time_risk": None,
+                            "weighted_risk_score": 15.0,  # Default medium risk (50% of 30)
+                            "calculation": "Calculation failed, using default medium risk",
+                            "risk_level": "medium",
+                            "time_data": {},
+                            "cache_status": "calculation_failed"
+                        }
             except Exception as e:
+                logger.error(f"Error in time risk analysis for task {task_id}: {str(e)}")
                 time_risk_data = {
                     "cached_time_risk": None,
-                    "weighted_risk_score": 0,
-                    "calculation": f"Error retrieving cache: {str(e)}",
-                    "risk_level": "unknown",
+                    "weighted_risk_score": 15.0,  # Default medium risk (50% of 30)
+                    "calculation": f"Error in time risk analysis: {str(e)}",
+                    "risk_level": "medium",
                     "time_data": {},
                     "cache_status": "error"
                 }
@@ -562,7 +585,7 @@ class AIService:
             role_match_analysis = None
             try:
                 role_match_analysis = await self._analyze_role_task_match_ai(
-                    task_name=task.name,
+                task_name=task.name,
                     task_description=task.description or "",
                     assignee_data=assignee_data,
                     active_tasks_count=len(assignee_active_tasks),
@@ -576,6 +599,63 @@ class AIService:
                     "workload_score": 0,
                     "total_score": 0,
                     "analysis_details": "AI analysis failed"
+                }
+
+            # 14. Perform AI analysis for comments (out of 10 points)
+            comments_analysis = None
+            try:
+                comments_analysis = await self._analyze_comments_ai(
+                    task_comments=comments_data,
+                    project_comments=project_comments_data,
+                    task_name=task.name,
+                    task_deadline=task.deadline,
+                    current_time=current_time
+                )
+            except Exception as e:
+                comments_analysis = {
+                    "ai_analysis_performed": False,
+                    "error": str(e),
+                    "communication_score": 5,  # Default medium risk
+                    "analysis_details": "AI analysis failed"
+                }
+
+            # 15. Perform AI analysis for task dependencies (out of 10 points)
+            dependency_analysis = None
+            try:
+                logger.info(f"Starting dependency analysis for task {task.name} with {len(project_tasks_data)} project tasks")
+                
+                dependency_analysis = await self._analyze_task_dependencies_ai(
+                    current_task={
+                        'id': task.id,
+                        'name': task.name,
+                        'description': task.description or ""
+                    },
+                    project_tasks=project_tasks_data,
+                    project_context={
+                        'project_name': project.name,
+                        'project_description': project.description or "",
+                        'total_project_tasks': len(project_tasks_data)
+                    }
+                )
+                
+                logger.info(f"Dependency analysis completed: {dependency_analysis}")
+                
+            except Exception as e:
+                logger.error(f"Error in dependency analysis for task {task.id}: {str(e)}")
+                dependency_analysis = {
+                    "ai_analysis_performed": False,
+                    "error": str(e),
+                    "dependency_score": 0.0,  # Default no dependency risk
+                    "analysis_details": f"AI dependency analysis failed: {str(e)}",
+                    "risk_level": "low",
+                    "dependent_tasks": [],
+                    "total_dependent_tasks": 0,
+                    "critical_dependencies": 0,
+                    "dependency_impact": "low",
+                    "blocking_potential": "low",
+                    "recommendations": ["Manual dependency review recommended"],
+                    "overall_assessment": "Unable to assess dependencies due to analysis failure",
+                    "project_tasks_analyzed": len(project_tasks_data)
                 }
 
             # Return all collected data without analysis
@@ -629,17 +709,14 @@ class AIService:
                         "dependencies": task_dependencies,
                         "dependent_tasks": dependent_tasks,
                         "all_project_tasks": project_tasks_data,
-                        "dependency_analysis_needed": True  # Will be done by AI later
+                        "ai_analysis": dependency_analysis,
+                        "dependency_score": dependency_analysis.get('dependency_score', 0.0) if dependency_analysis else 0.0,
+                        "dependency_risk_level": dependency_analysis.get('risk_level', 'low') if dependency_analysis else 'low',
+                        "dependency_analysis_needed": False  # Now done by AI
                     },
                     
                     # 5. Comments analysis (10% weight later)
-                    "comments_analysis": {
-                        "task_comments": comments_data,
-                        "project_comments": project_comments_data,
-                        "total_task_comments": len(comments_data),
-                        "total_project_comments": len(project_comments_data),
-                        "sentiment_analysis_needed": True  # Will be done by AI later
-                    },
+                    "comments_analysis": comments_analysis,
                     
                     # 6. Task environment (10% weight later)
                     "task_environment": {
@@ -734,12 +811,22 @@ class AIService:
         if not assignee_data:
             return {
                 "ai_analysis_performed": True,
-                "role_match_score": 0,
-                "workload_score": 0,
-                "total_score": 0,
-                "analysis_details": "No assignee - task is unassigned",
-                    "risk_level": "high",
-                "recommendations": ["Assign task to a team member"]
+                "role_match_score": 10,  # Maximum risk - no role match possible
+                "workload_score": 10,    # Maximum risk - no workload assessment possible
+                "total_score": 20,       # Maximum risk - unassigned task
+                "analysis_details": {
+                    "role_match_reasoning": "No assignee - task is unassigned (maximum risk)",
+                    "workload_reasoning": "No assignee - cannot assess workload (maximum risk)",
+                    "risk_level": "extreme",
+                    "skill_gaps": ["No assignee identified"],
+                    "workload_concerns": ["Task is unassigned"]
+                },
+                "risk_level": "extreme",
+                "recommendations": [
+                    "Assign task to a team member immediately",
+                    "Review task requirements and identify suitable assignee",
+                    "Consider task priority and urgency"
+                ]
             }
 
         try:
@@ -749,7 +836,7 @@ class AIService:
                 active_tasks_summary.append(f"Task: {task.get('name', 'Unknown')} - {task.get('state', 'unknown')} - {task.get('progress', 0)}% complete")
 
             # Enhanced prompt with more specific instructions
-            prompt = f"""You are an expert project manager analyzing task assignments. Analyze the following task and assignee match.
+            prompt = f"""You are an expert project manager analyzing task assignments across ALL industries and fields. Analyze the following task and assignee match.
 
 TASK TO ANALYZE:
 Name: {task_name}
@@ -761,8 +848,8 @@ Job Title: {assignee_data.get('job_title', 'Unknown')}
 Profession: {assignee_data.get('profession', 'Unknown')}
 Skills: {', '.join(assignee_data.get('skills', [])) if assignee_data.get('skills') else 'No skills listed'}
 Expertise: {', '.join(assignee_data.get('expertise', [])) if assignee_data.get('expertise') else 'No expertise listed'}
-Experience Level: {assignee_data.get('experience_level', 'Unknown')}
-
+            Experience Level: {assignee_data.get('experience_level', 'Unknown')}
+            
 CURRENT WORKLOAD:
 Active Tasks Count: {active_tasks_count}
 Active Tasks:
@@ -771,9 +858,29 @@ Active Tasks:
 ANALYSIS REQUIREMENTS:
 1. Role/Task Match (Score out of 10):
    - Evaluate if the assignee's job title, skills, and expertise align with task requirements
-   - Consider technical skills, domain knowledge, and experience level
+   - Consider ALL industries: Software, Marketing, Sales, Construction, Healthcare, Education, Manufacturing, Retail, Finance, etc.
    - Score 0 = perfect match (no risk), 10 = complete mismatch (high risk)
-   - For example: A backend developer assigned to content writing would score 8-9/10 (high risk)
+   
+   UNIVERSAL ROLE ANALYSIS PRINCIPLES:
+   - Consider transferable skills across industries
+   - Evaluate experience level and adaptability
+   - Look for logical role progression and skill overlap
+   - Consider industry-specific knowledge requirements
+   
+   EXAMPLES ACROSS INDUSTRIES:
+   - Marketing Manager + Content Creation = 1-2/10 (perfect match)
+   - Sales Rep + Customer Research = 2-3/10 (good match)
+   - Construction Worker + Safety Training = 1-2/10 (perfect match)
+   - Nurse + Patient Care = 1-2/10 (perfect match)
+   - Teacher + Curriculum Development = 1-2/10 (perfect match)
+   - Accountant + Financial Analysis = 1-2/10 (perfect match)
+   - Designer + Creative Task = 1-2/10 (perfect match)
+   - Developer + Technical Task = 1-2/10 (perfect match)
+   
+   MISMATCH EXAMPLES:
+   - Accountant + Surgery = 9-10/10 (complete mismatch)
+   - Teacher + Construction = 8-9/10 (poor match)
+   - Sales Rep + Software Development = 8-9/10 (poor match)
 
 2. Workload Assessment (Score out of 10):
    - Evaluate current workload based on active tasks count and task states
@@ -783,14 +890,14 @@ ANALYSIS REQUIREMENTS:
 
 You MUST return ONLY valid JSON in this exact format:
 {{
-    "role_match_score": 8.0,
+    "role_match_score": 2.0,
     "workload_score": 0.0,
-    "total_score": 8.0,
-    "role_match_reasoning": "Backend developer assigned to content writing task - significant skill mismatch (high risk)",
+    "total_score": 2.0,
+    "role_match_reasoning": "Job title and skills align well with task requirements for this industry",
     "workload_reasoning": "Assignee has no active tasks, can easily take on this task (no workload risk)",
-    "risk_level": "medium",
-    "recommendations": ["Consider reassigning to content writer", "Provide training if keeping assignment"],
-    "skill_gaps": ["Content writing skills", "SEO knowledge"],
+    "risk_level": "low",
+    "recommendations": ["Assignment looks good", "Consider providing additional training if needed"],
+    "skill_gaps": [],
     "workload_concerns": []
 }}"""
 
@@ -798,7 +905,7 @@ You MUST return ONLY valid JSON in this exact format:
             
             # Use streaming to see AI response as it comes
             logger.info("Starting AI analysis with streaming...")
-            
+
             response = requests.post(
                 self.ollama_url,
                 json={
@@ -883,8 +990,31 @@ You MUST return ONLY valid JSON in this exact format:
         Fallback analysis when AI fails or provides incomplete data.
         Uses rule-based logic to provide reasonable scores.
         HIGHER SCORES = HIGHER RISK
+        UNIVERSAL - Works for ALL industries and fields
         """
         try:
+            # Handle unassigned tasks (maximum risk)
+            if not assignee_data:
+                return {
+                    "ai_analysis_performed": False,
+                    "role_match_score": 10,  # Maximum risk - no role match possible
+                    "workload_score": 10,    # Maximum risk - no workload assessment possible
+                    "total_score": 20,       # Maximum risk - unassigned task
+                    "analysis_details": {
+                        "role_match_reasoning": "No assignee - task is unassigned (maximum risk)",
+                        "workload_reasoning": "No assignee - cannot assess workload (maximum risk)",
+                        "risk_level": "extreme",
+                        "skill_gaps": ["No assignee identified"],
+                        "workload_concerns": ["Task is unassigned"]
+                    },
+                    "risk_level": "extreme",
+                    "recommendations": [
+                        "Assign task to a team member immediately",
+                        "Review task requirements and identify suitable assignee",
+                        "Consider task priority and urgency"
+                    ]
+                }
+            
             # Rule-based role match analysis
             job_title = assignee_data.get('job_title', '').lower() if assignee_data else ''
             task_name_lower = task_name.lower()
@@ -892,32 +1022,115 @@ You MUST return ONLY valid JSON in this exact format:
             
             role_match_score = 5.0  # Default middle score (medium risk)
             
-            # Content writing tasks
-            if any(word in task_name_lower or word in task_desc_lower for word in ['content', 'writing', 'text', 'copy', 'seo']):
-                if any(word in job_title for word in ['content', 'writer', 'marketing', 'seo']):
-                    role_match_score = 1.0  # Perfect match (low risk)
-                elif any(word in job_title for word in ['frontend', 'backend', 'developer', 'engineer']):
-                    role_match_score = 8.0  # Poor match (high risk)
-                else:
-                    role_match_score = 4.0  # Unknown match (medium risk)
+            # UNIVERSAL INDUSTRY ANALYSIS
             
-            # Development tasks
-            elif any(word in task_name_lower or word in task_desc_lower for word in ['develop', 'code', 'programming', 'frontend', 'backend', 'api']):
-                if any(word in job_title for word in ['developer', 'engineer', 'programmer']):
+            # Marketing & Content Tasks
+            if any(word in task_name_lower or word in task_desc_lower for word in ['content', 'writing', 'text', 'copy', 'seo', 'marketing', 'social', 'campaign', 'advertising']):
+                if any(word in job_title for word in ['marketing', 'content', 'writer', 'seo', 'social', 'advertising', 'communications']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'coordinator']):
                     role_match_score = 2.0  # Good match (low risk)
-                elif any(word in job_title for word in ['content', 'writer', 'marketing']):
-                    role_match_score = 8.0  # Poor match (high risk)
-                else:
-                    role_match_score = 4.0  # Unknown match (medium risk)
-            
-            # Design tasks
-            elif any(word in task_name_lower or word in task_desc_lower for word in ['design', 'ui', 'ux', 'wireframe', 'mockup']):
-                if any(word in job_title for word in ['designer', 'ui', 'ux']):
-                    role_match_score = 1.0  # Perfect match (low risk)
-                elif any(word in job_title for word in ['developer', 'engineer']):
-                    role_match_score = 4.0  # Moderate match (medium risk)
                 else:
                     role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Sales & Customer Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['sales', 'customer', 'client', 'prospect', 'lead', 'pitch', 'presentation']):
+                if any(word in job_title for word in ['sales', 'account', 'customer', 'client', 'business']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'representative']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Financial & Accounting Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['financial', 'accounting', 'budget', 'expense', 'invoice', 'tax', 'audit', 'reporting']):
+                if any(word in job_title for word in ['accountant', 'financial', 'finance', 'bookkeeper', 'auditor']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'analyst']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 7.0  # Poor match (high risk)
+            
+            # Healthcare & Medical Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['patient', 'medical', 'healthcare', 'treatment', 'care', 'nursing', 'doctor', 'clinic']):
+                if any(word in job_title for word in ['nurse', 'doctor', 'medical', 'healthcare', 'patient', 'clinical']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'coordinator']):
+                    role_match_score = 3.0  # Moderate match (medium risk)
+                else:
+                    role_match_score = 8.0  # Poor match (high risk)
+            
+            # Education & Training Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['teaching', 'education', 'training', 'curriculum', 'lesson', 'student', 'learning']):
+                if any(word in job_title for word in ['teacher', 'educator', 'trainer', 'instructor', 'professor']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'coordinator']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Construction & Manual Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['construction', 'building', 'repair', 'maintenance', 'installation', 'assembly', 'manual']):
+                if any(word in job_title for word in ['construction', 'worker', 'technician', 'mechanic', 'installer', 'maintenance']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['supervisor', 'manager', 'foreman']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 7.0  # Poor match (high risk)
+            
+            # Manufacturing & Production Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['manufacturing', 'production', 'assembly', 'quality', 'inventory', 'warehouse', 'factory']):
+                if any(word in job_title for word in ['manufacturing', 'production', 'operator', 'technician', 'quality', 'warehouse']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['supervisor', 'manager', 'coordinator']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Retail & Customer Service Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['retail', 'customer service', 'store', 'shop', 'inventory', 'display', 'merchandise']):
+                if any(word in job_title for word in ['retail', 'sales', 'customer service', 'cashier', 'clerk']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'supervisor', 'coordinator']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 5.0  # Moderate match (medium risk)
+            
+            # IT & Software Development Tasks (keeping existing logic but making it more flexible)
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['develop', 'code', 'programming', 'software', 'system', 'database', 'api', 'website']):
+                if any(word in job_title for word in ['developer', 'engineer', 'programmer', 'software', 'it', 'technical']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'architect']):
+                    role_match_score = 3.0  # Moderate match (medium risk)
+                else:
+                    role_match_score = 7.0  # Poor match (high risk)
+            
+            # Design & Creative Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['design', 'creative', 'art', 'graphic', 'visual', 'ui', 'ux', 'wireframe', 'mockup']):
+                if any(word in job_title for word in ['designer', 'creative', 'artist', 'graphic', 'ui', 'ux']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['developer', 'manager', 'director']):
+                    role_match_score = 3.0  # Moderate match (medium risk)
+                else:
+                    role_match_score = 6.0  # Poor match (medium-high risk)
+            
+            # Administrative & Management Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['admin', 'management', 'coordination', 'planning', 'organization', 'reporting', 'documentation']):
+                if any(word in job_title for word in ['manager', 'director', 'coordinator', 'administrator', 'assistant']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['supervisor', 'lead', 'specialist']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 4.0  # Moderate match (medium risk)
+            
+            # Research & Analysis Tasks
+            elif any(word in task_name_lower or word in task_desc_lower for word in ['research', 'analysis', 'data', 'report', 'study', 'survey', 'investigation']):
+                if any(word in job_title for word in ['analyst', 'researcher', 'specialist', 'scientist']):
+                    role_match_score = 1.0  # Perfect match (no risk)
+                elif any(word in job_title for word in ['manager', 'director', 'coordinator']):
+                    role_match_score = 2.0  # Good match (low risk)
+                else:
+                    role_match_score = 5.0  # Moderate match (medium risk)
             
             # Workload analysis (HIGHER SCORE = HIGHER RISK)
             if active_tasks_count == 0:
@@ -977,7 +1190,7 @@ You MUST return ONLY valid JSON in this exact format:
                 "workload_score": 5.0,    # Default medium risk
                 "total_score": 10.0,      # Default medium risk
                 "analysis_details": f"Fallback analysis failed: {str(e)}",
-                "risk_level": "medium",
+                    "risk_level": "medium",
                 "recommendations": ["Review task assignment manually"]
             }
 
@@ -1340,9 +1553,7 @@ You MUST return ONLY valid JSON in this exact format:
                 elif required_rate > actual_rate * 2:
                     score += 0.25  # Need to work 2x faster
                 elif required_rate > actual_rate * 1.5:
-                    score += 0.2  # Need to work 1.5x faster
-                elif required_rate > actual_rate:
-                    score += 0.15  # Need to work somewhat faster
+                    score += 0.2  # Need to work somewhat faster
                 else:
                     score += 0.1  # Current pace is sufficient
 
@@ -1448,10 +1659,46 @@ You MUST return ONLY valid JSON in this exact format:
                     risk_factors.append(f"Behind schedule: {timeline['progress_percentage']}% complete vs {int(expected_progress)}% expected")
                     is_at_risk = True
 
+        # Calculate time risk percentage using the formula: Risk (%) = (T_alloc / (T_left + ε)) * 100
+        time_risk_percentage = 0
+        if timeline['deadline']:
+            allocated_hours = timeline['planned_hours']
+            time_left_hours = max(0, (timeline['deadline'] - current_time).total_seconds() / 3600)
+            epsilon = 1  # Small number to avoid division by zero
+            
+            if time_left_hours + epsilon > 0:
+                time_risk_percentage = (allocated_hours / (time_left_hours + epsilon)) * 100
+            else:
+                time_risk_percentage = 200  # Extreme risk when no time left
+
+        # Determine risk level based on percentage
+        risk_level = "low"
+        if time_risk_percentage >= 200:
+            risk_level = "extreme"
+        elif time_risk_percentage >= 150:
+            risk_level = "critical"
+        elif time_risk_percentage >= 100:
+            risk_level = "high"
+        elif time_risk_percentage >= 60:
+            risk_level = "medium"
+        elif time_risk_percentage >= 30:
+            risk_level = "low"
+        else:
+            risk_level = "minimal"
+
+        # Add cache_info for proper cache management
+        cache_info = {
+            "next_update": (current_time + timedelta(hours=1)).isoformat(),
+            "update_frequency": "1 hour",
+            "last_calculated": current_time.isoformat()
+        }
+
         return {
             "is_at_risk": is_at_risk,
             "risk_factors": risk_factors,
             "estimated_delay_days": estimated_delay_days,
+            "time_risk_percentage": round(time_risk_percentage, 2),
+            "risk_level": risk_level,
             "timeline": {
                 "created_at": timeline['created_at'].isoformat(),
                 "started_at": timeline['started_at'].isoformat() if timeline['started_at'] else None,
@@ -1463,8 +1710,1144 @@ You MUST return ONLY valid JSON in this exact format:
             },
             "overdue": overdue,
             "days_to_deadline": days_to_deadline,
-            "progress": timeline['progress_percentage']
+            "progress": timeline['progress_percentage'],
+            "cache_info": cache_info
         }
+
+    async def _analyze_comments_ai(
+        self,
+        task_comments: List[Dict],
+        project_comments: List[Dict],
+        task_name: str,
+        task_deadline: Optional[datetime],
+        current_time: datetime
+    ) -> Dict:
+        """
+        Advanced AI analysis for comments to assess communication risk and sentiment.
+        Analyzes comments for sentiment, urgency, promises, and risk indicators.
+        Returns a comprehensive analysis with actionable insights.
+        """
+        try:
+            # Combine and sort all comments by date (most recent first)
+            all_comments = []
+            
+            for comment in task_comments:
+                all_comments.append({
+                    **comment,
+                    'type': 'task',
+                    'date': datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+                })
+            
+            for comment in project_comments:
+                all_comments.append({
+                    **comment,
+                    'type': 'project',
+                    'date': datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+                })
+            
+            # Sort by date (most recent first) and take last 10 for better context
+            all_comments.sort(key=lambda x: x['date'], reverse=True)
+            recent_comments = all_comments[:10]
+            
+            # Enhanced prompt for comprehensive comments analysis
+            prompt = f"""You are an expert project manager and communication analyst. Analyze the following task and its communication patterns to assess risk and provide actionable insights.
+
+CRITICAL RULE: Communication and sentiment are SEPARATE factors that combine to create the total risk score.
+
+TASK CONTEXT:
+Task Name: {task_name}
+Task Deadline: {task_deadline.isoformat() if task_deadline else 'No deadline'}
+Current Date: {current_time.isoformat()}
+Days to Deadline: {(task_deadline - current_time).days if task_deadline else 'No deadline'}
+
+COMMUNICATION ANALYSIS:
+{self._format_comments_for_analysis(recent_comments, current_time)}
+
+ANALYSIS REQUIREMENTS:
+
+1. COMMUNICATION SCORE (0-10) - SEPARATE FROM SENTIMENT:
+   - 0-2: Excellent communication, clear updates, realistic promises, active engagement
+   - 3-4: Good communication, some clarity issues, generally positive
+   - 5-6: Moderate communication, some concerns, mixed signals
+   - 7-8: Poor communication, vague responses, concerning patterns, delays
+   - 9-10: Very poor communication, red flags, broken promises, no engagement
+
+2. SENTIMENT SCORE (0-10) - SEPARATE FROM COMMUNICATION:
+   - 0-2: Very positive sentiment, confidence, enthusiasm, solutions
+   - 3-4: Positive sentiment, generally optimistic, constructive
+   - 5-6: Neutral sentiment, mixed emotions, balanced
+   - 7-8: Negative sentiment, frustration, confusion, delays
+   - 9-10: Very negative sentiment, anger, blame, hopelessness
+
+3. COMBINED RISK SCORE (0-10):
+   - Communication Score (50% weight) + Sentiment Score (50% weight)
+   - Example: Communication 6 + Sentiment 4 = Combined Score 5.0
+
+4. NO COMMENTS SCENARIO:
+   If no comments exist:
+   - Communication Score: 10 (maximum risk - no communication)
+   - Sentiment Score: 5 (neutral - no sentiment to analyze)
+   - Combined Score: 7.5
+
+5. SENTIMENT ANALYSIS (CRITICAL FOR RISK ASSESSMENT):
+   - Positive: Confidence, progress, solutions, collaboration, enthusiasm
+   - Neutral: Informational, status updates, questions, balanced
+   - Negative: Frustration, confusion, delays, problems, blame, anger
+   - Urgent: Time pressure, deadlines, immediate action needed
+
+6. RISK FACTORS TO IDENTIFY:
+   - Promises made vs. timeline reality
+   - Communication frequency and quality
+   - Signs of stress, confusion, or delays
+   - Commitment level and accountability
+   - Technical vs. non-technical communication gaps
+   - Team collaboration issues
+   - Scope creep or requirement changes
+   - Resource or dependency problems
+
+You MUST return ONLY valid JSON in this exact format:
+{{
+    "communication_score": 5.0,
+    "sentiment_score": 4.0,
+    "combined_score": 4.5,
+    "risk_level": "medium",
+    "sentiment_overall": "neutral",
+    "sentiment_breakdown": {{
+        "positive": 0.3,
+        "neutral": 0.5,
+        "negative": 0.2,
+        "urgent": 0.1
+    }},
+    "analysis_details": "Detailed analysis of communication patterns and risk factors",
+    "promises_made": ["List of specific promises found in comments"],
+    "promises_kept": ["List of promises that appear to be fulfilled"],
+    "promises_broken": ["List of promises that appear to be broken"],
+    "risk_indicators": ["List of specific risk indicators found"],
+    "communication_quality": "Good/Poor/Excellent/Concerning",
+    "timeline_commitments": ["List of timeline commitments mentioned"],
+    "collaboration_issues": ["List of collaboration problems identified"],
+    "technical_challenges": ["List of technical issues mentioned"],
+    "scope_changes": ["List of scope or requirement changes"],
+    "urgency_signals": ["List of urgent or time-sensitive mentions"],
+    "positive_signals": ["List of positive progress indicators"],
+    "recommendations": ["List of actionable recommendations"],
+    "overall_assessment": "Summary of communication risk assessment",
+    "engagement_level": "High/Medium/Low",
+    "communication_frequency": "Frequent/Occasional/Rare/None",
+    "no_comments_risk": "High/Medium/Low (only if no comments exist)"
+}}
+
+IMPORTANT: 
+- Communication score and sentiment score are SEPARATE
+- Combined score = (communication_score + sentiment_score) / 2
+- If there are comments, communication score should be LOWER (better)
+- Sentiment score reflects the emotional tone of the comments
+
+Return only valid JSON, no other text."""
+
+            logger.info(f"Starting advanced AI comments analysis for task {task_name} with {len(recent_comments)} comments")
+            
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "mistral",
+                    "prompt": prompt,
+                    "stream": True
+                },
+                timeout=60,
+                stream=True
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"AI service returned status {response.status_code}: {response.text}")
+                raise Exception(f"AI service error: {response.status_code}")
+            
+            # Collect streaming response
+            ai_response_text = ""
+            logger.info("Receiving AI comments analysis stream:")
+            
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        if 'response' in chunk:
+                            ai_response_text += chunk['response']
+                            logger.info(f"AI comments chunk: {chunk['response']}")
+                        if chunk.get('done', False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+            
+            logger.info(f"Complete AI comments response: {ai_response_text}")
+            
+            # Try to parse JSON response
+            try:
+                analysis = json.loads(ai_response_text)
+                logger.info(f"Parsed AI comments analysis: {json.dumps(analysis, indent=2)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI comments JSON response: {e}")
+                logger.error(f"Raw AI comments response: {ai_response_text}")
+                # Fallback to enhanced manual analysis
+                return self._enhanced_fallback_comments_analysis(recent_comments, current_time, task_name, task_deadline)
+            
+            # Validate required fields
+            required_fields = ['communication_score', 'sentiment_score', 'combined_score', 'risk_level', 'sentiment_overall', 'sentiment_breakdown', 'analysis_details', 'promises_made', 'promises_kept', 'promises_broken', 'risk_indicators', 'communication_quality', 'timeline_commitments', 'collaboration_issues', 'technical_challenges', 'scope_changes', 'urgency_signals', 'positive_signals', 'recommendations', 'overall_assessment', 'engagement_level', 'communication_frequency', 'no_comments_risk']
+            missing_fields = [field for field in required_fields if field not in analysis]
+            
+            if missing_fields:
+                logger.warning(f"AI comments response missing fields: {missing_fields}")
+                return self._enhanced_fallback_comments_analysis(recent_comments, current_time, task_name, task_deadline)
+            
+            return {
+                "ai_analysis_performed": True,
+                "communication_score": round(float(analysis.get('communication_score', 5)), 2),
+                "sentiment_score": round(float(analysis.get('sentiment_score', 4)), 2),
+                "combined_score": round(float(analysis.get('combined_score', 4.5)), 2),
+                "risk_level": analysis.get('risk_level', 'medium'),
+                "sentiment_overall": analysis.get('sentiment_overall', 'neutral'),
+                "sentiment_breakdown": analysis.get('sentiment_breakdown', {}),
+                "analysis_details": analysis.get('analysis_details', 'No analysis details provided'),
+                "promises_made": analysis.get('promises_made', []),
+                "promises_kept": analysis.get('promises_kept', []),
+                "promises_broken": analysis.get('promises_broken', []),
+                "risk_indicators": analysis.get('risk_indicators', []),
+                "communication_quality": analysis.get('communication_quality', 'Unknown'),
+                "timeline_commitments": analysis.get('timeline_commitments', []),
+                "collaboration_issues": analysis.get('collaboration_issues', []),
+                "technical_challenges": analysis.get('technical_challenges', []),
+                "scope_changes": analysis.get('scope_changes', []),
+                "urgency_signals": analysis.get('urgency_signals', []),
+                "positive_signals": analysis.get('positive_signals', []),
+                "recommendations": analysis.get('recommendations', []),
+                "overall_assessment": analysis.get('overall_assessment', 'No assessment provided'),
+                "engagement_level": analysis.get('engagement_level', 'Unknown'),
+                "communication_frequency": analysis.get('communication_frequency', 'Unknown'),
+                "no_comments_risk": analysis.get('no_comments_risk', None),
+                "comments_analyzed": len(recent_comments),
+                "recent_comments": recent_comments
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in AI comments analysis: {str(e)}")
+            return self._enhanced_fallback_comments_analysis(task_comments + project_comments, current_time, task_name, task_deadline)
+
+    def _format_comments_for_analysis(self, comments: List[Dict], current_time: datetime) -> str:
+        """Format comments for AI analysis with context"""
+        if not comments:
+            return "NO COMMENTS FOUND - This could indicate communication issues or lack of engagement."
+        
+        formatted_comments = []
+        for comment in comments:
+            days_ago = (current_time - comment['date']).days
+            hours_ago = (current_time - comment['date']).total_seconds() / 3600
+            
+            if hours_ago < 24:
+                time_str = f"{int(hours_ago)} hours ago"
+            else:
+                time_str = f"{days_ago} days ago"
+            
+            comment_type = comment.get('type', 'unknown')
+            author = comment.get('author_name', 'Unknown')
+            content = comment.get('content', '')
+            
+            formatted_comments.append(f"[{time_str}] {author} ({comment_type}): {content}")
+        
+        return "\n".join(formatted_comments)
+
+    def _enhanced_fallback_comments_analysis(
+        self,
+        comments: List[Dict],
+        current_time: datetime,
+        task_name: str,
+        task_deadline: Optional[datetime]
+    ) -> Dict:
+        """
+        Enhanced fallback analysis when AI fails.
+        Provides intelligent analysis even without AI, including no-comments scenarios.
+        NO COMMENTS = MAXIMUM RISK (10/10) - Lack of communication is a major red flag.
+        """
+        try:
+            if not comments:
+                # NO COMMENTS = MAXIMUM RISK (10/10) - This is a major red flag
+                communication_score = 10.0  # MAXIMUM RISK
+                sentiment_score = 5.0  # NEUTRAL - NO SENTIMENT
+                combined_score = 7.5  # COMBINED SCORE
+                risk_level = "extreme"
+                
+                # Provide detailed analysis of why no comments is high risk
+                if task_deadline and (task_deadline - current_time).days < 0:
+                    analysis_details = "CRITICAL: Task is overdue with NO COMMUNICATION - EXTREME RISK (10/10). No comments indicates: 1) Task is completely stuck and assignee is not asking for help, 2) Task is being ignored or forgotten, 3) Complete communication breakdown, 4) Task requirements are unclear and no one is clarifying, 5) Team is not engaged at all."
+                elif task_deadline and (task_deadline - current_time).days <= 3:
+                    analysis_details = "HIGH RISK: Task due soon with NO COMMUNICATION - EXTREME RISK (10/10). No comments indicates: 1) Task is likely stuck and assignee is not communicating, 2) Task requirements are unclear and no questions are being asked, 3) Team is not engaged or aware of the task, 4) Potential for complete failure due to lack of communication."
+                else:
+                    analysis_details = "HIGH RISK: Task with NO COMMUNICATION - EXTREME RISK (10/10). No comments indicates: 1) Task is unclear and team is not asking questions, 2) Lack of team engagement and ownership, 3) Task may be progressing silently (unlikely) or completely stuck, 4) No accountability or progress tracking."
+                
+                return {
+                    "ai_analysis_performed": False,
+                    "communication_score": communication_score,  # MAXIMUM RISK
+                    "sentiment_score": sentiment_score,  # NEUTRAL - NO SENTIMENT
+                    "combined_score": combined_score,  # COMBINED SCORE
+                    "risk_level": risk_level,
+                    "sentiment_overall": "negative",  # No communication = negative sentiment
+                    "sentiment_breakdown": {"positive": 0.0, "neutral": 0.0, "negative": 1.0, "urgent": 0.0},
+                    "analysis_details": analysis_details,
+                    "promises_made": [],
+                    "promises_kept": [],
+                    "promises_broken": [],
+                    "risk_indicators": [
+                        "NO COMMUNICATION - Major red flag",
+                        "Lack of team engagement", 
+                        "Unclear task status",
+                        "No progress tracking",
+                        "Potential for complete failure"
+                    ],
+                    "communication_quality": "Critical",  # No communication = critical quality
+                    "timeline_commitments": [],
+                    "collaboration_issues": [
+                        "Complete lack of team communication",
+                        "No collaboration happening",
+                        "Task may be forgotten or ignored"
+                    ],
+                    "technical_challenges": [],
+                    "scope_changes": [],
+                    "urgency_signals": [],
+                    "positive_signals": [],
+                    "recommendations": [
+                        "IMMEDIATE ACTION REQUIRED: Schedule emergency team meeting",
+                        "Contact assignee immediately to check task status",
+                        "Clarify task requirements and expectations",
+                        "Establish daily communication check-ins",
+                        "Consider reassigning task if current assignee is unresponsive"
+                    ],
+                    "overall_assessment": f"CRITICAL: No communication detected - EXTREME RISK (10/10). Task requires immediate attention and intervention.",
+                    "engagement_level": "None",  # No engagement
+                    "communication_frequency": "None",  # No communication
+                    "no_comments_risk": "extreme",  # Maximum risk
+                    "comments_analyzed": 0,
+                    "recent_comments": []
+                }
+            
+            # Enhanced rule-based analysis for existing comments
+            communication_score = 5.0  # Default medium risk
+            sentiment_score = 4.0  # NEUTRAL - NO SENTIMENT
+            combined_score = 4.5  # COMBINED SCORE
+            risk_indicators = []
+            promises_made = []
+            promises_kept = []
+            promises_broken = []
+            positive_signals = []
+            urgency_signals = []
+            technical_challenges = []
+            collaboration_issues = []
+            
+            # Analyze comment content for various indicators
+            for comment in comments:
+                content = comment.get('content', '').lower()
+                author = comment.get('author_name', 'Unknown')
+                days_ago = (current_time - comment['date']).days
+                
+                # Check for risk indicators
+                if any(word in content for word in ['delay', 'late', 'problem', 'issue', 'stuck', 'blocked', 'error', 'fail', 'broken']):
+                    risk_indicators.append(f"Risk indicator in comment by {author}: {comment.get('content', '')[:50]}...")
+                    communication_score += 1
+                
+                # Check for promises
+                if any(word in content for word in ['will', 'promise', 'commit', 'finish', 'complete', 'done', 'deliver']):
+                    promise_text = f"Promise by {author}: {comment.get('content', '')[:50]}..."
+                    promises_made.append(promise_text)
+                    
+                    # Check if promise was kept (if it's an old comment)
+                    if days_ago > 3:
+                        if any(word in content for word in ['completed', 'finished', 'done', 'delivered']):
+                            promises_kept.append(promise_text)
+                        else:
+                            promises_broken.append(promise_text)
+                            communication_score += 1
+                
+                # Check for positive indicators
+                if any(word in content for word in ['progress', 'done', 'completed', 'finished', 'success', 'working', 'good', 'great']):
+                    positive_signals.append(f"Positive signal from {author}: {comment.get('content', '')[:50]}...")
+                    sentiment_score -= 0.5
+                
+                # Check for urgency
+                if any(word in content for word in ['urgent', 'asap', 'immediately', 'deadline', 'critical', 'emergency']):
+                    urgency_signals.append(f"Urgency signal from {author}: {comment.get('content', '')[:50]}...")
+                    communication_score += 0.5
+                
+                # Check for technical challenges
+                if any(word in content for word in ['bug', 'error', 'technical', 'complex', 'difficult', 'challenge', 'issue']):
+                    technical_challenges.append(f"Technical challenge mentioned by {author}: {comment.get('content', '')[:50]}...")
+                    sentiment_score += 0.5
+                
+                # Check for collaboration issues
+                if any(word in content for word in ['waiting', 'blocked', 'dependency', 'need help', 'confused', 'unclear']):
+                    collaboration_issues.append(f"Collaboration issue from {author}: {comment.get('content', '')[:50]}...")
+                    communication_score += 0.5
+            
+            # Cap score between 0 and 10
+            communication_score = max(0, min(10, communication_score))
+            sentiment_score = max(0, min(10, sentiment_score))
+            
+            # Calculate combined score
+            combined_score = (communication_score + sentiment_score) / 2
+            
+            # Determine risk level
+            if communication_score <= 3:
+                risk_level = "low"
+                communication_quality = "Good"
+            elif communication_score <= 6:
+                risk_level = "medium"
+                communication_quality = "Moderate"
+            else:
+                risk_level = "high"
+                communication_quality = "Poor"
+            
+            # Determine sentiment overall
+            if sentiment_score <= 2:
+                sentiment_overall = "positive"
+            elif sentiment_score <= 4:
+                sentiment_overall = "neutral"
+            else:
+                sentiment_overall = "negative"
+            
+            # Determine engagement level
+            if len(comments) >= 5:
+                engagement_level = "High"
+                communication_frequency = "Frequent"
+            elif len(comments) >= 2:
+                engagement_level = "Medium"
+                communication_frequency = "Occasional"
+            else:
+                engagement_level = "Low"
+                communication_frequency = "Rare"
+            
+            # Generate recommendations
+            recommendations = []
+            if communication_score > 6:
+                recommendations.append("Schedule a team meeting to address communication issues")
+                recommendations.append("Establish regular status update frequency")
+            if technical_challenges:
+                recommendations.append("Provide technical support or resources")
+            if collaboration_issues:
+                recommendations.append("Improve team collaboration and dependency management")
+            if not positive_signals:
+                recommendations.append("Encourage positive progress reporting")
+            
+            return {
+                "ai_analysis_performed": False,
+                "communication_score": round(communication_score, 2),
+                "sentiment_score": round(sentiment_score, 2),
+                "combined_score": round(combined_score, 2),
+                "risk_level": risk_level,
+                "sentiment_overall": sentiment_overall,
+                "sentiment_breakdown": {"positive": 0.3, "neutral": 0.5, "negative": 0.2, "urgent": 0.1},
+                "analysis_details": f"Enhanced rule-based analysis of {len(comments)} comments",
+                "promises_made": promises_made,
+                "promises_kept": promises_kept,
+                "promises_broken": promises_broken,
+                "risk_indicators": risk_indicators,
+                "communication_quality": communication_quality,
+                "timeline_commitments": [],
+                "collaboration_issues": collaboration_issues,
+                "technical_challenges": technical_challenges,
+                "scope_changes": [],
+                "urgency_signals": urgency_signals,
+                "positive_signals": positive_signals,
+                "recommendations": recommendations,
+                "overall_assessment": f"Communication risk score: {communication_score}/10, Sentiment score: {sentiment_score}/10, Combined: {combined_score}/10 - {risk_level.upper()} RISK",
+                "engagement_level": engagement_level,
+                "communication_frequency": communication_frequency,
+                "no_comments_risk": None,
+                "comments_analyzed": len(comments),
+                "recent_comments": comments[:5]  # Last 5 comments
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced fallback comments analysis: {str(e)}")
+            return {
+                "ai_analysis_performed": False,
+                "error": str(e),
+                "communication_score": 10.0,  # Default to maximum risk on error
+                "sentiment_score": 10.0,  # Default to maximum risk on error
+                "combined_score": 10.0,  # Default to maximum risk on error
+                "analysis_details": f"Enhanced fallback analysis failed: {str(e)}",
+                "risk_level": "extreme",
+                "no_comments_risk": "extreme"  # Maximum risk
+            }
+
+    def _fallback_comments_analysis(
+        self,
+        comments: List[Dict],
+        current_time: datetime
+    ) -> Dict:
+        """
+        Fallback analysis when AI fails or provides incomplete data.
+        Now calls the enhanced fallback analysis for better results.
+        """
+        return self._enhanced_fallback_comments_analysis(comments, current_time, "Unknown Task", None)
+
+    async def _analyze_task_dependencies_ai(
+        self,
+        current_task: Dict,
+        project_tasks: List[Dict],
+        project_context: Dict
+    ) -> Dict:
+        """
+        AI-powered analysis to determine which tasks truly depend on the current task.
+        Analyzes task relationships and calculates dependency risk score.
+        """
+        try:
+            logger.info(f"Starting AI dependency analysis for task: {current_task['name']}")
+            logger.info(f"Project context: {project_context['project_name']}")
+            logger.info(f"Number of project tasks to analyze: {len(project_tasks)}")
+            
+            # Prepare project context for AI analysis
+            project_tasks_formatted = []
+            for task in project_tasks:
+                project_tasks_formatted.append({
+                    'id': task['id'],
+                    'name': task['name'],
+                    'description': task['description'],
+                    'state': task['state'],
+                    'progress': task['progress']
+                })
+            
+            # Create comprehensive AI prompt for dependency analysis
+            prompt = f"""You are an expert project manager analyzing task dependencies. Analyze which tasks in the project truly depend on the current task.
+
+PROJECT CONTEXT:
+Project Name: {project_context['project_name']}
+Project Description: {project_context['project_description']}
+Total Project Tasks: {project_context['total_project_tasks']}
+
+CURRENT TASK (being analyzed):
+Name: {current_task['name']}
+Description: {current_task['description']}
+
+AVAILABLE TASKS IN PROJECT:
+{self._format_project_tasks_for_analysis(project_tasks_formatted)}
+
+DEPENDENCY ANALYSIS REQUIREMENTS:
+
+1. DEPENDENCY SCORE (0-10):
+   - 0: No tasks depend on this task
+   - 1-3: Few tasks depend on this task (low impact)
+   - 4-6: Several tasks depend on this task (medium impact)
+   - 7-9: Many tasks depend on this task (high impact)
+   - 10: ALL tasks depend on this task (critical blocker)
+
+2. DEPENDENCY TYPES TO CONSIDER:
+   - Direct Dependencies: Tasks that cannot start without this task
+   - Sequential Dependencies: Tasks that follow this task in workflow
+   - Resource Dependencies: Tasks that need resources from this task
+   - Data Dependencies: Tasks that need data/output from this task
+   - Infrastructure Dependencies: Tasks that need setup/infrastructure from this task
+
+3. ANALYSIS CRITERIA:
+   - Logical workflow dependencies
+   - Resource sharing dependencies
+   - Data flow dependencies
+   - Infrastructure dependencies
+   - Timeline dependencies
+
+4. RISK ASSESSMENT:
+   - If this task is delayed, how many other tasks are affected?
+   - What is the criticality of dependent tasks?
+   - Are there alternative paths if this task fails?
+
+You MUST return ONLY valid JSON in this exact format:
+{{
+    "dependency_score": 7.5,
+    "risk_level": "high",
+    "analysis_details": "Detailed explanation of dependency analysis",
+    "dependent_tasks": [
+        {{
+            "task_name": "Task Name",
+            "dependency_type": "direct/sequential/resource/data/infrastructure",
+            "dependency_strength": "high/medium/low",
+            "reasoning": "Why this task depends on the current task"
+        }}
+    ],
+    "total_dependent_tasks": 3,
+    "critical_dependencies": 2,
+    "dependency_impact": "high/medium/low",
+    "blocking_potential": "high/medium/low",
+    "recommendations": [
+        "List of recommendations based on dependency analysis"
+    ],
+    "overall_assessment": "Summary of dependency risk assessment"
+}}
+
+Return only valid JSON, no other text."""
+
+            logger.info(f"AI dependency prompt created, length: {len(prompt)} characters")
+            logger.info(f"Making AI request to: {self.ollama_url}")
+            
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "mistral",
+                    "prompt": prompt,
+                    "stream": True
+                },
+                timeout=60,
+                stream=True
+            )
+            
+            logger.info(f"AI service response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"AI service returned status {response.status_code}: {response.text}")
+                raise Exception(f"AI service error: {response.status_code}")
+            
+            # Collect streaming response
+            ai_response_text = ""
+            logger.info("Receiving AI dependency analysis stream:")
+            
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        if 'response' in chunk:
+                            ai_response_text += chunk['response']
+                            logger.info(f"AI dependency chunk: {chunk['response']}")
+                        if chunk.get('done', False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+            
+            logger.info(f"Complete AI dependency response: {ai_response_text}")
+            
+            # Try to parse JSON response
+            try:
+                analysis = json.loads(ai_response_text)
+                logger.info(f"Parsed AI dependency analysis: {json.dumps(analysis, indent=2)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI dependency JSON response: {e}")
+                logger.error(f"Raw AI dependency response: {ai_response_text}")
+                # Fallback to enhanced manual analysis
+                logger.info("Falling back to enhanced manual dependency analysis")
+                return self._enhanced_fallback_dependency_analysis(current_task, project_tasks, project_context)
+            
+            # Validate required fields
+            required_fields = ['dependency_score', 'risk_level', 'analysis_details']
+            missing_fields = [field for field in required_fields if field not in analysis]
+            
+            if missing_fields:
+                logger.warning(f"AI dependency response missing fields: {missing_fields}")
+                logger.info("Falling back to enhanced manual dependency analysis due to missing fields")
+                return self._enhanced_fallback_dependency_analysis(current_task, project_tasks, project_context)
+            
+            result = {
+                "ai_analysis_performed": True,
+                "dependency_score": round(float(analysis.get('dependency_score', 0)), 2),
+                "risk_level": analysis.get('risk_level', 'low'),
+                "analysis_details": analysis.get('analysis_details', 'No analysis details provided'),
+                "dependent_tasks": analysis.get('dependent_tasks', []),
+                "total_dependent_tasks": analysis.get('total_dependent_tasks', 0),
+                "critical_dependencies": analysis.get('critical_dependencies', 0),
+                "dependency_impact": analysis.get('dependency_impact', 'low'),
+                "blocking_potential": analysis.get('blocking_potential', 'low'),
+                "recommendations": analysis.get('recommendations', []),
+                "overall_assessment": analysis.get('overall_assessment', 'No assessment provided'),
+                "project_tasks_analyzed": len(project_tasks)
+            }
+            
+            logger.info(f"Dependency analysis result: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in AI dependency analysis: {str(e)}")
+            logger.info("Falling back to enhanced manual dependency analysis due to error")
+            return self._enhanced_fallback_dependency_analysis(current_task, project_tasks, project_context)
+
+    def _format_project_tasks_for_analysis(self, project_tasks: List[Dict]) -> str:
+        """Format project tasks for AI analysis"""
+        if not project_tasks:
+            return "No other tasks in project"
+        
+        formatted_tasks = []
+        for task in project_tasks:
+            formatted_tasks.append(f"- {task['name']}: {task['description']} (State: {task['state']}, Progress: {task['progress']}%)")
+        
+        return "\n".join(formatted_tasks)
+
+    def _enhanced_fallback_dependency_analysis(
+        self,
+        current_task: Dict,
+        project_tasks: List[Dict],
+        project_context: Dict
+    ) -> Dict:
+        """
+        Enhanced fallback dependency analysis when AI fails.
+        Uses intelligent rule-based analysis to determine task dependencies.
+        """
+        try:
+            if not project_tasks:
+                return {
+                    "ai_analysis_performed": False,
+                    "dependency_score": 0.0,
+                    "risk_level": "low",
+                    "analysis_details": "No other tasks in project to analyze dependencies",
+                    "dependent_tasks": [],
+                    "total_dependent_tasks": 0,
+                    "critical_dependencies": 0,
+                    "dependency_impact": "low",
+                    "blocking_potential": "low",
+                    "recommendations": ["No dependencies to manage"],
+                    "overall_assessment": "No dependency risk - single task project",
+                    "project_tasks_analyzed": 0
+                }
+            
+            # Rule-based dependency analysis
+            current_task_name = current_task['name'].lower()
+            current_task_desc = (current_task['description'] or '').lower()
+            
+            dependent_tasks = []
+            dependency_score = 0.0
+            critical_dependencies = 0
+            
+            logger.info(f"Analyzing dependencies for task: {current_task['name']}")
+            logger.info(f"Current task keywords: {current_task_name}")
+            
+            # Analyze each project task for dependencies
+            for task in project_tasks:
+                task_name = task['name'].lower()
+                task_desc = (task['description'] or '').lower()
+                dependency_strength = "low"
+                dependency_type = "sequential"
+                reasoning = ""
+                
+                logger.info(f"Checking if task '{task['name']}' depends on '{current_task['name']}'")
+                
+                # Check for various types of dependencies
+                
+                # 1. Infrastructure/Hosting Dependencies
+                if any(word in current_task_name for word in ['hosting', 'server', 'deploy', 'setup', 'infrastructure']):
+                    if any(word in task_name for word in ['content', 'seo', 'develop', 'design', 'test']):
+                        dependency_strength = "high"
+                        dependency_type = "infrastructure"
+                        reasoning = f"Task '{task['name']}' requires hosting infrastructure to be ready"
+                        dependency_score += 2.5
+                        critical_dependencies += 1
+                        logger.info(f"Found infrastructure dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 2. Design Dependencies (CRITICAL FOR DESIGN HOMEPAGE)
+                elif any(word in current_task_name for word in ['design', 'wireframe', 'mockup', 'ui', 'ux']):
+                    if any(word in task_name for word in ['develop', 'code', 'implement', 'build', 'html', 'css']):
+                        dependency_strength = "high"
+                        dependency_type = "sequential"
+                        reasoning = f"Task '{task['name']}' cannot start without design being completed"
+                        dependency_score += 2.5
+                        critical_dependencies += 1
+                        logger.info(f"Found design dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 2.5. Specific check for "Design Homepage" -> "Develop Homepage" dependency
+                elif current_task_name == "design homepage" and task_name == "develop homepage":
+                    dependency_strength = "high"
+                    dependency_type = "sequential"
+                    reasoning = f"Task '{task['name']}' cannot start without design being completed - direct dependency"
+                    dependency_score += 3.0  # Higher score for direct dependency
+                    critical_dependencies += 1
+                    logger.info(f"Found direct design->development dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 3. Development Dependencies
+                elif any(word in current_task_name for word in ['develop', 'code', 'build', 'implement']):
+                    if any(word in task_name for word in ['test', 'deploy', 'hosting', 'content']):
+                        dependency_strength = "medium"
+                        dependency_type = "sequential"
+                        reasoning = f"Task '{task['name']}' depends on development being completed"
+                        dependency_score += 1.5
+                        logger.info(f"Found development dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 4. Content Dependencies
+                elif any(word in current_task_name for word in ['content', 'write', 'text', 'copy']):
+                    if any(word in task_name for word in ['seo', 'deploy', 'publish']):
+                        dependency_strength = "medium"
+                        dependency_type = "data"
+                        reasoning = f"Task '{task['name']}' needs content to be ready"
+                        dependency_score += 1.5
+                        logger.info(f"Found content dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 5. SEO Dependencies
+                elif any(word in current_task_name for word in ['seo', 'optimization', 'metadata']):
+                    if any(word in task_name for word in ['deploy', 'publish', 'launch']):
+                        dependency_strength = "medium"
+                        dependency_type = "data"
+                        reasoning = f"Task '{task['name']}' depends on SEO optimization"
+                        dependency_score += 1.5
+                        logger.info(f"Found SEO dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 6. Testing Dependencies
+                elif any(word in current_task_name for word in ['test', 'testing', 'qa', 'quality']):
+                    if any(word in task_name for word in ['deploy', 'publish', 'launch']):
+                        dependency_strength = "high"
+                        dependency_type = "sequential"
+                        reasoning = f"Task '{task['name']}' cannot proceed without testing completion"
+                        dependency_score += 2.0
+                        critical_dependencies += 1
+                        logger.info(f"Found testing dependency: {task['name']} depends on {current_task['name']}")
+                
+                # 7. Deployment Dependencies
+                elif any(word in current_task_name for word in ['deploy', 'publish', 'launch', 'release']):
+                    if any(word in task_name for word in ['monitor', 'maintain', 'support']):
+                        dependency_strength = "medium"
+                        dependency_type = "sequential"
+                        reasoning = f"Task '{task['name']}' depends on deployment being completed"
+                        dependency_score += 1.5
+                        logger.info(f"Found deployment dependency: {task['name']} depends on {current_task['name']}")
+                
+                # If dependency found, add to list
+                if dependency_strength != "low":
+                    dependent_tasks.append({
+                        "task_name": task['name'],
+                        "dependency_type": dependency_type,
+                        "dependency_strength": dependency_strength,
+                        "reasoning": reasoning
+                    })
+                    logger.info(f"Added dependency: {task['name']} -> {current_task['name']} ({dependency_strength})")
+            
+            # Calculate final dependency score (cap at 10)
+            dependency_score = min(dependency_score, 10.0)
+            
+            logger.info(f"Final dependency score: {dependency_score}/10")
+            logger.info(f"Critical dependencies: {critical_dependencies}")
+            logger.info(f"Total dependent tasks: {len(dependent_tasks)}")
+            
+            # Determine risk level
+            if dependency_score >= 7:
+                risk_level = "high"
+                dependency_impact = "high"
+                blocking_potential = "high"
+            elif dependency_score >= 4:
+                risk_level = "medium"
+                dependency_impact = "medium"
+                blocking_potential = "medium"
+            else:
+                risk_level = "low"
+                dependency_impact = "low"
+                blocking_potential = "low"
+            
+            # Generate recommendations
+            recommendations = []
+            if dependency_score > 5:
+                recommendations.append("Prioritize this task as it blocks multiple other tasks")
+                recommendations.append("Monitor dependent tasks for delays")
+            if critical_dependencies > 0:
+                recommendations.append("Focus on critical dependencies first")
+            if len(dependent_tasks) > 3:
+                recommendations.append("Consider breaking this task into smaller parts")
+            
+            if not recommendations:
+                recommendations.append("No significant dependency risks identified")
+            
+            return {
+                "ai_analysis_performed": False,
+                "dependency_score": round(dependency_score, 2),
+                "risk_level": risk_level,
+                "analysis_details": f"Rule-based analysis of {len(project_tasks)} project tasks found {len(dependent_tasks)} dependencies",
+                "dependent_tasks": dependent_tasks,
+                "total_dependent_tasks": len(dependent_tasks),
+                "critical_dependencies": critical_dependencies,
+                "dependency_impact": dependency_impact,
+                "blocking_potential": blocking_potential,
+                "recommendations": recommendations,
+                "overall_assessment": f"Dependency risk score: {dependency_score}/10 - {risk_level.upper()} RISK",
+                "project_tasks_analyzed": len(project_tasks)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced fallback dependency analysis: {str(e)}")
+            return {
+                "ai_analysis_performed": False,
+                "error": str(e),
+                "dependency_score": 0.0,
+                "risk_level": "low",
+                "analysis_details": f"Enhanced fallback analysis failed: {str(e)}",
+                "dependent_tasks": [],
+                "total_dependent_tasks": 0,
+                "critical_dependencies": 0,
+                "dependency_impact": "low",
+                "blocking_potential": "low",
+                "recommendations": ["Analysis failed - manual review recommended"],
+                "overall_assessment": "Unable to assess dependencies",
+                "project_tasks_analyzed": 0
+            }
+
+    async def analyze_task_risk_summary(self, task_id: int) -> Dict:
+        """
+        Perform comprehensive task risk analysis and calculate total risk score.
+        Returns a summary with total risk score and stores results in database.
+        """
+        try:
+            # Get the detailed analysis data
+            analysis_data = await self.analyze_task_risk(task_id)
+            
+            # Extract components for risk calculation
+            collected_data = analysis_data["collected_data"]
+            
+            # Calculate weighted risk scores for each component
+            risk_breakdown = self._calculate_risk_breakdown(collected_data)
+            
+            # Calculate total risk score (can exceed 100 due to weighted components)
+            total_risk_score = self._calculate_total_risk_score(risk_breakdown)
+            
+            # Determine overall risk level
+            overall_risk_level = self._determine_risk_level(total_risk_score)
+            
+            # Generate comprehensive summary
+            summary = {
+                "task_id": task_id,
+                "analysis_timestamp": analysis_data["data_collection_timestamp"],
+                "total_risk_score": round(total_risk_score, 2),
+                "overall_risk_level": overall_risk_level,
+                "risk_breakdown": risk_breakdown,
+                "summary_comments": self._generate_summary_comments(risk_breakdown, overall_risk_level),
+                "recommendations": self._generate_recommendations(risk_breakdown, overall_risk_level),
+                "analysis_details": analysis_data["collected_data"]
+            }
+            
+            # Store the analysis results in database
+            self._store_comprehensive_risk_analysis(task_id, summary)
+            
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Error in task risk summary analysis for task {task_id}: {str(e)}")
+            raise ValueError(f"Error analyzing task risk summary: {str(e)}")
+
+    def _calculate_risk_breakdown(self, collected_data: Dict) -> Dict:
+        """
+        Calculate weighted risk scores for each component.
+        Returns breakdown with individual scores and explanations.
+        """
+        breakdown = {}
+        
+        # 1. Complexity Score (20% weight, max 20 points)
+        complexity_score = collected_data.get("task_complexity", {}).get("complexity_score", 0)
+        weighted_complexity = (complexity_score / 100) * 20
+        breakdown["complexity"] = {
+            "raw_score": complexity_score,
+            "weighted_score": round(weighted_complexity, 2),
+            "weight": "20%",
+            "max_points": 20,
+            "calculation": f"({complexity_score} / 100) * 20 = {weighted_complexity:.2f}",
+            "comment": f"Task complexity analysis shows {complexity_score}% complexity level"
+        }
+        
+        # 2. Time Risk Score (30% weight, max 30 points)
+        time_risk_data = collected_data.get("time_risk_analysis", {})
+        weighted_time_risk = time_risk_data.get("weighted_risk_score", 0)
+        breakdown["time_risk"] = {
+            "raw_score": time_risk_data.get("cached_time_risk", {}).get("time_risk_percentage", 0),
+            "weighted_score": round(weighted_time_risk, 2),
+            "weight": "30%",
+            "max_points": 30,
+            "calculation": time_risk_data.get("calculation", "Calculation not available"),
+            "comment": f"Time risk analysis indicates {time_risk_data.get('risk_level', 'unknown')} risk level"
+        }
+        
+        # 3. Role Match and Workload Score (20% weight, max 20 points)
+        assigned_person = collected_data.get("assigned_person", {})
+        role_match_score = assigned_person.get("role_match_score", 0)
+        workload_score = assigned_person.get("workload_score", 0)
+        total_role_score = role_match_score + workload_score
+        weighted_role_score = (total_role_score / 20) * 20  # Normalize to 20 points
+        breakdown["role_workload"] = {
+            "role_match_score": role_match_score,
+            "workload_score": workload_score,
+            "total_raw_score": total_role_score,
+            "weighted_score": round(weighted_role_score, 2),
+            "weight": "20%",
+            "max_points": 20,
+            "calculation": f"({total_role_score} / 20) * 20 = {weighted_role_score:.2f}",
+            "comment": f"Role match: {role_match_score}/10, Workload: {workload_score}/10"
+        }
+        
+        # 4. Dependency Score (10% weight, max 10 points)
+        dependency_data = collected_data.get("task_dependencies", {})
+        dependency_score = dependency_data.get("dependency_score", 0)
+        weighted_dependency = (dependency_score / 10) * 10  # Normalize to 10 points
+        breakdown["dependencies"] = {
+            "raw_score": dependency_score,
+            "weighted_score": round(weighted_dependency, 2),
+            "weight": "10%",
+            "max_points": 10,
+            "calculation": f"({dependency_score} / 10) * 10 = {weighted_dependency:.2f}",
+            "comment": f"Dependency analysis shows {dependency_score}/10 risk level"
+        }
+        
+        # 5. Comments Analysis Score (10% weight, max 10 points)
+        comments_analysis = collected_data.get("comments_analysis", {})
+        combined_score = comments_analysis.get("combined_score", 0)
+        weighted_comments = (combined_score / 10) * 10  # Normalize to 10 points
+        breakdown["comments"] = {
+            "communication_score": comments_analysis.get("communication_score", 0),
+            "sentiment_score": comments_analysis.get("sentiment_score", 0),
+            "combined_raw_score": combined_score,
+            "weighted_score": round(weighted_comments, 2),
+            "weight": "10%",
+            "max_points": 10,
+            "calculation": f"({combined_score} / 10) * 10 = {weighted_comments:.2f}",
+            "comment": f"Communication: {comments_analysis.get('communication_score', 0)}/10, Sentiment: {comments_analysis.get('sentiment_score', 0)}/10"
+        }
+        
+        # 6. Environment Score (10% weight, max 10 points)
+        task_environment = collected_data.get("task_environment", {})
+        is_outdoor = task_environment.get("is_outdoor", False)
+        environment_score = 8 if is_outdoor else 2  # Outdoor tasks have higher risk
+        weighted_environment = (environment_score / 10) * 10
+        breakdown["environment"] = {
+            "is_outdoor": is_outdoor,
+            "raw_score": environment_score,
+            "weighted_score": round(weighted_environment, 2),
+            "weight": "10%",
+            "max_points": 10,
+            "calculation": f"({environment_score} / 10) * 10 = {weighted_environment:.2f}",
+            "comment": f"Environment: {'Outdoor' if is_outdoor else 'Indoor'} task"
+        }
+        
+        return breakdown
+
+    def _calculate_total_risk_score(self, risk_breakdown: Dict) -> float:
+        """
+        Calculate total risk score from all weighted components.
+        Can exceed 100 due to weighted nature of components.
+        """
+        total_score = 0
+        
+        for component, data in risk_breakdown.items():
+            total_score += data["weighted_score"]
+        
+        return total_score
+
+    def _determine_risk_level(self, total_score: float) -> str:
+        """
+        Determine overall risk level based on total risk score.
+        """
+        if total_score <= 20:
+            return "very_low"
+        elif total_score <= 40:
+            return "low"
+        elif total_score <= 60:
+            return "medium"
+        elif total_score <= 80:
+            return "high"
+        elif total_score <= 100:
+            return "very_high"
+        else:
+            return "extreme"
+
+    def _generate_summary_comments(self, risk_breakdown: Dict, overall_risk_level: str) -> Dict:
+        """
+        Generate summary comments for each risk component.
+        """
+        comments = {}
+        
+        for component, data in risk_breakdown.items():
+            score = data["weighted_score"]
+            max_points = data["max_points"]
+            percentage = (score / max_points) * 100
+            
+            if percentage <= 20:
+                level = "very_low"
+            elif percentage <= 40:
+                level = "low"
+            elif percentage <= 60:
+                level = "medium"
+            elif percentage <= 80:
+                level = "high"
+            else:
+                level = "very_high"
+            
+            comments[component] = {
+                "score": score,
+                "max_possible": max_points,
+                "percentage": round(percentage, 1),
+                "risk_level": level,
+                "comment": data["comment"],
+                "timestamp": self._get_current_time().isoformat()
+            }
+        
+        return comments
+
+    def _generate_recommendations(self, risk_breakdown: Dict, overall_risk_level: str) -> List[str]:
+        """
+        Generate recommendations based on risk breakdown and overall level.
+        """
+        recommendations = []
+        
+        # Overall risk level recommendations
+        if overall_risk_level in ["very_high", "extreme"]:
+            recommendations.append("Immediate attention required - consider task prioritization or resource reallocation")
+            recommendations.append("Schedule regular check-ins and progress reviews")
+        
+        # Component-specific recommendations
+        if risk_breakdown["time_risk"]["weighted_score"] > 20:
+            recommendations.append("Time risk is high - consider extending deadline or adding resources")
+        
+        if risk_breakdown["role_workload"]["weighted_score"] > 15:
+            recommendations.append("Role/workload risk detected - consider reassignment or workload reduction")
+        
+        if risk_breakdown["dependencies"]["weighted_score"] > 7:
+            recommendations.append("High dependency risk - ensure dependent tasks are properly sequenced")
+        
+        if risk_breakdown["comments"]["weighted_score"] > 7:
+            recommendations.append("Communication issues detected - improve team communication and updates")
+        
+        if risk_breakdown["environment"]["is_outdoor"]:
+            recommendations.append("Outdoor task - monitor weather conditions and have contingency plans")
+        
+        # Add general recommendations
+        recommendations.append("Monitor task progress regularly and adjust plans as needed")
+        recommendations.append("Maintain clear communication channels with all stakeholders")
+        
+        return recommendations
+
+    def _store_comprehensive_risk_analysis(self, task_id: int, summary: Dict) -> None:
+        """
+        Store comprehensive risk analysis results in the database.
+        """
+        try:
+            # Prepare risk factors for storage
+            risk_factors = []
+            for component, data in summary["risk_breakdown"].items():
+                risk_factors.append({
+                    "component": component,
+                    "weighted_score": data["weighted_score"],
+                    "max_points": data["max_points"],
+                    "risk_level": summary["summary_comments"][component]["risk_level"]
+                })
+            
+            # Create new TaskRisk entry with comprehensive data
+            task_risk = TaskRisk(
+                task_id=task_id,
+                risk_score=summary["total_risk_score"],
+                risk_level=summary["overall_risk_level"],
+                time_sensitivity=summary["risk_breakdown"]["time_risk"]["weighted_score"],
+                complexity=summary["risk_breakdown"]["complexity"]["weighted_score"],
+                priority=summary["risk_breakdown"]["role_workload"]["weighted_score"],
+                risk_factors=risk_factors,
+                recommendations=summary["recommendations"],
+                metrics={
+                    "dependency_score": summary["risk_breakdown"]["dependencies"]["weighted_score"],
+                    "comments_score": summary["risk_breakdown"]["comments"]["weighted_score"],
+                    "environment_score": summary["risk_breakdown"]["environment"]["weighted_score"],
+                    "analysis_timestamp": summary["analysis_timestamp"],
+                    "summary_comments": summary["summary_comments"]
+                }
+            )
+            
+            # Add and commit to database
+            self.db.add(task_risk)
+            self.db.commit()
+            
+            logger.info(f"Comprehensive risk analysis stored for task {task_id} with score {summary['total_risk_score']}")
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error storing comprehensive risk analysis for task {task_id}: {str(e)}")
+            # Don't raise the error - we want the analysis to still be returned even if storage fails
 
 # Create a singleton instance
 _ai_service = None

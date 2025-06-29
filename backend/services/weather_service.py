@@ -4,12 +4,17 @@ from datetime import datetime, timedelta
 import json
 from sqlalchemy.orm import Session
 from config.settings import get_settings
+import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WeatherService:
     def __init__(self):
         self.settings = get_settings()
         self.api_key = self.settings.OPENWEATHER_API_KEY
         self.base_url = "http://api.openweathermap.org/data/2.5"
+        self.ollama_url = "http://localhost:11434/api/generate"
         
     async def get_forecast(self, city: str, days: int = 15) -> List[Dict]:
         """Get weather forecast for a city."""
@@ -127,7 +132,79 @@ class WeatherService:
         return None
 
     def is_outdoor_task(self, description: str, name: str) -> bool:
-        """Determine if a task is outdoor-related based on its description and name."""
+        """AI-powered classification to determine if a task is outdoor-related"""
+        try:
+            prompt = f"""Analyze the following task and determine if it requires outdoor work:
+
+TASK:
+Name: {name}
+Description: {description}
+
+OUTDOOR CLASSIFICATION:
+Determine if this task requires working outdoors or in uncontrolled environments.
+
+OUTDOOR TASKS include:
+- Construction, building, landscaping, gardening
+- Agriculture, farming, outdoor maintenance
+- Transportation, delivery, field work
+- Outdoor events, concerts, festivals
+- Outdoor installation, repair, inspection
+- Home visits, mobile services
+- Outdoor healthcare (emergency response, home visits)
+- Outdoor sales, marketing, door-to-door
+- Sports, recreation, outdoor education
+
+INDOOR TASKS include:
+- Software development, coding, design work
+- Office work, administration, management
+- Content creation, writing, marketing (office-based)
+- Financial work, accounting, analysis
+- Indoor manufacturing, assembly
+- Indoor healthcare, education, research
+- Indoor events, meetings, presentations
+
+You MUST return ONLY valid JSON in this exact format:
+{{
+    "is_outdoor": true,
+    "reasoning": "Brief explanation of why this classification was chosen",
+    "confidence": 0.95
+}}
+
+Return only valid JSON, no other text."""
+
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "mistral",
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                response_text = result["response"]
+                analysis = json.loads(response_text)
+                
+                is_outdoor = analysis.get("is_outdoor", False)
+                reasoning = analysis.get("reasoning", "AI analysis provided")
+                confidence = analysis.get("confidence", 0.8)
+                
+                logger.info(f"AI outdoor classification for '{name}': {is_outdoor} (confidence: {confidence}) - {reasoning}")
+                
+                return is_outdoor
+                    
+            else:
+                logger.warning(f"AI outdoor classification failed, falling back to rule-based: {response.status_code}")
+                return self._fallback_outdoor_classification(description, name)
+                
+        except Exception as e:
+            logger.error(f"Error in AI outdoor classification: {str(e)}")
+            return self._fallback_outdoor_classification(description, name)
+
+    def _fallback_outdoor_classification(self, description: str, name: str) -> bool:
+        """Fallback rule-based classification when AI fails"""
         # Keywords indicating outdoor activities
         outdoor_keywords = [
             'outdoor', 'outside', 'exterior', 'field', 'site', 'construction',
