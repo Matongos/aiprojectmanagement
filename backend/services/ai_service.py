@@ -6,6 +6,7 @@ import json
 from zoneinfo import ZoneInfo
 import logging
 import requests
+import traceback
 
 from services.ollama_service import get_ollama_client
 from services.vector_service import VectorService
@@ -21,6 +22,7 @@ from services.complexity_service import ComplexityService
 from models.task_risk import TaskRisk
 from models.comment import Comment
 from models.metrics import TaskMetrics
+from crud.task_risk import TaskRiskCRUD
 
 logger = logging.getLogger(__name__)
 
@@ -2572,282 +2574,285 @@ Return only valid JSON, no other text."""
                 "recommendations": ["Analysis failed - manual review recommended"],
                 "overall_assessment": "Unable to assess dependencies",
                 "project_tasks_analyzed": 0
-            }
+        }
 
-    async def analyze_task_risk_summary(self, task_id: int) -> Dict:
-        """
-        Perform comprehensive task risk analysis and calculate total risk score.
-        Returns a summary with total risk score and stores results in database.
-        """
-        try:
-            # Get the detailed analysis data
-            analysis_data = await self.analyze_task_risk(task_id)
-            
-            # Extract components for risk calculation
-            collected_data = analysis_data["collected_data"]
-            
-            # Calculate weighted risk scores for each component
-            risk_breakdown = self._calculate_risk_breakdown(collected_data)
-            
-            # Calculate total risk score (can exceed 100 due to weighted components)
-            total_risk_score = self._calculate_total_risk_score(risk_breakdown)
-            
-            # Determine overall risk level
-            overall_risk_level = self._determine_risk_level(total_risk_score)
-            
-            # Generate comprehensive summary
-            summary = {
-                "task_id": task_id,
-                "analysis_timestamp": analysis_data["data_collection_timestamp"],
-                "total_risk_score": round(total_risk_score, 2),
-                "overall_risk_level": overall_risk_level,
-                "risk_breakdown": risk_breakdown,
-                "summary_comments": self._generate_summary_comments(risk_breakdown, overall_risk_level),
-                "recommendations": self._generate_recommendations(risk_breakdown, overall_risk_level),
-                "analysis_details": analysis_data["collected_data"]
-            }
-            
-            # Store the analysis results in database
-            self._store_comprehensive_risk_analysis(task_id, summary)
-            
-            return summary
-            
-        except Exception as e:
-            logger.error(f"Error in task risk summary analysis for task {task_id}: {str(e)}")
-            raise ValueError(f"Error analyzing task risk summary: {str(e)}")
-
-    def _calculate_risk_breakdown(self, collected_data: Dict) -> Dict:
-        """
-        Calculate weighted risk scores for each component.
-        Returns breakdown with individual scores and explanations.
-        """
-        breakdown = {}
-        
-        # 1. Complexity Score (20% weight, max 20 points)
-        complexity_score = collected_data.get("task_complexity", {}).get("complexity_score", 0)
-        weighted_complexity = (complexity_score / 100) * 20
-        breakdown["complexity"] = {
-            "raw_score": complexity_score,
-            "weighted_score": round(weighted_complexity, 2),
-            "weight": "20%",
-            "max_points": 20,
-            "calculation": f"({complexity_score} / 100) * 20 = {weighted_complexity:.2f}",
-            "comment": f"Task complexity analysis shows {complexity_score}% complexity level"
-        }
-        
-        # 2. Time Risk Score (30% weight, max 30 points)
-        time_risk_data = collected_data.get("time_risk_analysis", {})
-        weighted_time_risk = time_risk_data.get("weighted_risk_score", 0)
-        breakdown["time_risk"] = {
-            "raw_score": time_risk_data.get("cached_time_risk", {}).get("time_risk_percentage", 0),
-            "weighted_score": round(weighted_time_risk, 2),
-            "weight": "30%",
-            "max_points": 30,
-            "calculation": time_risk_data.get("calculation", "Calculation not available"),
-            "comment": f"Time risk analysis indicates {time_risk_data.get('risk_level', 'unknown')} risk level"
-        }
-        
-        # 3. Role Match and Workload Score (20% weight, max 20 points)
-        assigned_person = collected_data.get("assigned_person", {})
-        role_match_score = assigned_person.get("role_match_score", 0)
-        workload_score = assigned_person.get("workload_score", 0)
-        total_role_score = role_match_score + workload_score
-        weighted_role_score = (total_role_score / 20) * 20  # Normalize to 20 points
-        breakdown["role_workload"] = {
-            "role_match_score": role_match_score,
-            "workload_score": workload_score,
-            "total_raw_score": total_role_score,
-            "weighted_score": round(weighted_role_score, 2),
-            "weight": "20%",
-            "max_points": 20,
-            "calculation": f"({total_role_score} / 20) * 20 = {weighted_role_score:.2f}",
-            "comment": f"Role match: {role_match_score}/10, Workload: {workload_score}/10"
-        }
-        
-        # 4. Dependency Score (10% weight, max 10 points)
-        dependency_data = collected_data.get("task_dependencies", {})
-        dependency_score = dependency_data.get("dependency_score", 0)
-        weighted_dependency = (dependency_score / 10) * 10  # Normalize to 10 points
-        breakdown["dependencies"] = {
-            "raw_score": dependency_score,
-            "weighted_score": round(weighted_dependency, 2),
-            "weight": "10%",
-            "max_points": 10,
-            "calculation": f"({dependency_score} / 10) * 10 = {weighted_dependency:.2f}",
-            "comment": f"Dependency analysis shows {dependency_score}/10 risk level"
-        }
-        
-        # 5. Comments Analysis Score (10% weight, max 10 points)
-        comments_analysis = collected_data.get("comments_analysis", {})
-        combined_score = comments_analysis.get("combined_score", 0)
-        weighted_comments = (combined_score / 10) * 10  # Normalize to 10 points
-        breakdown["comments"] = {
-            "communication_score": comments_analysis.get("communication_score", 0),
-            "sentiment_score": comments_analysis.get("sentiment_score", 0),
-            "combined_raw_score": combined_score,
-            "weighted_score": round(weighted_comments, 2),
-            "weight": "10%",
-            "max_points": 10,
-            "calculation": f"({combined_score} / 10) * 10 = {weighted_comments:.2f}",
-            "comment": f"Communication: {comments_analysis.get('communication_score', 0)}/10, Sentiment: {comments_analysis.get('sentiment_score', 0)}/10"
-        }
-        
-        # 6. Environment Score (10% weight, max 10 points)
-        task_environment = collected_data.get("task_environment", {})
-        is_outdoor = task_environment.get("is_outdoor", False)
-        environment_score = 8 if is_outdoor else 2  # Outdoor tasks have higher risk
-        weighted_environment = (environment_score / 10) * 10
-        breakdown["environment"] = {
-            "is_outdoor": is_outdoor,
-            "raw_score": environment_score,
-            "weighted_score": round(weighted_environment, 2),
-            "weight": "10%",
-            "max_points": 10,
-            "calculation": f"({environment_score} / 10) * 10 = {weighted_environment:.2f}",
-            "comment": f"Environment: {'Outdoor' if is_outdoor else 'Indoor'} task"
-        }
-        
-        return breakdown
-
-    def _calculate_total_risk_score(self, risk_breakdown: Dict) -> float:
-        """
-        Calculate total risk score from all weighted components.
-        Can exceed 100 due to weighted nature of components.
-        """
-        total_score = 0
-        
-        for component, data in risk_breakdown.items():
-            total_score += data["weighted_score"]
-        
-        return total_score
-
-    def _determine_risk_level(self, total_score: float) -> str:
-        """
-        Determine overall risk level based on total risk score.
-        """
-        if total_score <= 20:
-            return "very_low"
-        elif total_score <= 40:
-            return "low"
-        elif total_score <= 60:
-            return "medium"
-        elif total_score <= 80:
-            return "high"
-        elif total_score <= 100:
-            return "very_high"
+    def _serialize_datetime_objects(self, obj):
+        """Recursively convert datetime objects to ISO format strings for JSON serialization"""
+        if isinstance(obj, dict):
+            return {key: self._serialize_datetime_objects(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._serialize_datetime_objects(item) for item in obj]
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
         else:
-            return "extreme"
+            return obj
 
-    def _generate_summary_comments(self, risk_breakdown: Dict, overall_risk_level: str) -> Dict:
+    async def calculate_complete_task_risk(self, task_id: int) -> Dict:
         """
-        Generate summary comments for each risk component.
-        """
-        comments = {}
+        Calculate complete weighted risk analysis for a task and store in database.
         
-        for component, data in risk_breakdown.items():
-            score = data["weighted_score"]
-            max_points = data["max_points"]
-            percentage = (score / max_points) * 100
-            
-            if percentage <= 20:
-                level = "very_low"
-            elif percentage <= 40:
-                level = "low"
-            elif percentage <= 60:
-                level = "medium"
-            elif percentage <= 80:
-                level = "high"
-            else:
-                level = "very_high"
-            
-            comments[component] = {
-                "score": score,
-                "max_possible": max_points,
-                "percentage": round(percentage, 1),
-                "risk_level": level,
-                "comment": data["comment"],
-                "timestamp": self._get_current_time().isoformat()
-            }
+        This method:
+        1. Collects all risk data using analyze_task_risk
+        2. Calculates weighted component scores
+        3. Computes final weighted risk score
+        4. Stores results in TaskRisk table
+        5. Returns complete analysis with stored data
         
-        return comments
-
-    def _generate_recommendations(self, risk_breakdown: Dict, overall_risk_level: str) -> List[str]:
-        """
-        Generate recommendations based on risk breakdown and overall level.
-        """
-        recommendations = []
-        
-        # Overall risk level recommendations
-        if overall_risk_level in ["very_high", "extreme"]:
-            recommendations.append("Immediate attention required - consider task prioritization or resource reallocation")
-            recommendations.append("Schedule regular check-ins and progress reviews")
-        
-        # Component-specific recommendations
-        if risk_breakdown["time_risk"]["weighted_score"] > 20:
-            recommendations.append("Time risk is high - consider extending deadline or adding resources")
-        
-        if risk_breakdown["role_workload"]["weighted_score"] > 15:
-            recommendations.append("Role/workload risk detected - consider reassignment or workload reduction")
-        
-        if risk_breakdown["dependencies"]["weighted_score"] > 7:
-            recommendations.append("High dependency risk - ensure dependent tasks are properly sequenced")
-        
-        if risk_breakdown["comments"]["weighted_score"] > 7:
-            recommendations.append("Communication issues detected - improve team communication and updates")
-        
-        if risk_breakdown["environment"]["is_outdoor"]:
-            recommendations.append("Outdoor task - monitor weather conditions and have contingency plans")
-        
-        # Add general recommendations
-        recommendations.append("Monitor task progress regularly and adjust plans as needed")
-        recommendations.append("Maintain clear communication channels with all stakeholders")
-        
-        return recommendations
-
-    def _store_comprehensive_risk_analysis(self, task_id: int, summary: Dict) -> None:
-        """
-        Store comprehensive risk analysis results in the database.
+        Component weights:
+        - Time sensitivity: 30 points (30%)
+        - Complexity: 20 points (20%)
+        - Priority: 20 points (20%)
+        - Role match: 20 points (20%)
+        - Dependencies: 10 points (10%)
+        - Comments: 10 points (10%)
         """
         try:
-            # Prepare risk factors for storage
-            risk_factors = []
-            for component, data in summary["risk_breakdown"].items():
-                risk_factors.append({
-                    "component": component,
-                    "weighted_score": data["weighted_score"],
-                    "max_points": data["max_points"],
-                    "risk_level": summary["summary_comments"][component]["risk_level"]
-                })
+            # Get all risk data
+            risk_data = await self.analyze_task_risk(task_id)
             
-            # Create new TaskRisk entry with comprehensive data
-            task_risk = TaskRisk(
-                task_id=task_id,
-                risk_score=summary["total_risk_score"],
-                risk_level=summary["overall_risk_level"],
-                time_sensitivity=summary["risk_breakdown"]["time_risk"]["weighted_score"],
-                complexity=summary["risk_breakdown"]["complexity"]["weighted_score"],
-                priority=summary["risk_breakdown"]["role_workload"]["weighted_score"],
-                risk_factors=risk_factors,
-                recommendations=summary["recommendations"],
-                metrics={
-                    "dependency_score": summary["risk_breakdown"]["dependencies"]["weighted_score"],
-                    "comments_score": summary["risk_breakdown"]["comments"]["weighted_score"],
-                    "environment_score": summary["risk_breakdown"]["environment"]["weighted_score"],
-                    "analysis_timestamp": summary["analysis_timestamp"],
-                    "summary_comments": summary["summary_comments"]
-                }
+            if "error" in risk_data:
+                raise ValueError(f"Error collecting risk data: {risk_data['error']}")
+            
+            collected_data = risk_data.get("collected_data", {})
+            
+            # Extract component scores
+            time_risk_data = collected_data.get("time_risk_analysis", {})
+            complexity_data = collected_data.get("task_complexity", {})
+            assigned_person_data = collected_data.get("assigned_person", {})
+            dependency_data = collected_data.get("task_dependencies", {})
+            comments_data = collected_data.get("comments_analysis", {})
+            task_details = collected_data.get("task_details", {})
+            
+            # Calculate component scores
+            time_sensitivity_score = time_risk_data.get("weighted_risk_score", 15.0)
+            
+            # Handle complexity score conversion properly
+            raw_complexity_score = complexity_data.get("complexity_score", 0)
+            if isinstance(raw_complexity_score, (int, float)):
+                complexity_score = (raw_complexity_score / 100) * 20  # Convert to 20-point scale
+            else:
+                complexity_score = 10.0  # Default medium complexity
+            
+            priority_score = self._calculate_priority_risk_score(task_details.get("priority", "medium"))
+            role_match_score = assigned_person_data.get("total_score", 0)  # Already out of 20
+            
+            # Handle dependency score conversion properly
+            raw_dependency_score = dependency_data.get("dependency_score", 0)
+            if isinstance(raw_dependency_score, (int, float)):
+                dependency_score = raw_dependency_score * 10  # Convert to 10-point scale
+            else:
+                dependency_score = 0.0  # Default no dependency risk
+            
+            comments_score = comments_data.get("communication_score", 5)  # Already out of 10
+            
+            # Calculate final weighted risk score (out of 100)
+            final_risk_score = (
+                time_sensitivity_score +
+                complexity_score +
+                priority_score +
+                role_match_score +
+                dependency_score +
+                comments_score
             )
             
-            # Add and commit to database
-            self.db.add(task_risk)
-            self.db.commit()
+            # Determine risk level based on final score
+            if final_risk_score >= 80:
+                risk_level = "extreme"
+            elif final_risk_score >= 60:
+                risk_level = "critical"
+            elif final_risk_score >= 40:
+                risk_level = "high"
+            elif final_risk_score >= 20:
+                risk_level = "medium"
+            elif final_risk_score >= 10:
+                risk_level = "low"
+            else:
+                risk_level = "minimal"
             
-            logger.info(f"Comprehensive risk analysis stored for task {task_id} with score {summary['total_risk_score']}")
+            # Prepare risk factors and recommendations
+            risk_factors = {
+                "time_sensitivity": {
+                    "score": time_sensitivity_score,
+                    "details": time_risk_data.get("cached_time_risk", {}),
+                    "risk_level": time_risk_data.get("risk_level", "medium")
+                },
+                "complexity": {
+                    "score": complexity_score,
+                    "details": complexity_data,
+                    "risk_level": "high" if complexity_score > 10 else "medium" if complexity_score > 5 else "low"
+                },
+                "priority": {
+                    "score": priority_score,
+                    "details": {"priority": task_details.get("priority", "medium")},
+                    "risk_level": "high" if priority_score > 10 else "medium" if priority_score > 5 else "low"
+                },
+                "role_match": {
+                    "score": role_match_score,
+                    "details": assigned_person_data.get("ai_analysis", {}),
+                    "risk_level": "high" if role_match_score > 10 else "medium" if role_match_score > 5 else "low"
+                },
+                "dependencies": {
+                    "score": dependency_score,
+                    "details": dependency_data.get("ai_analysis", {}),
+                    "risk_level": dependency_data.get("dependency_risk_level", "low")
+                },
+                "comments": {
+                    "score": comments_score,
+                    "details": comments_data,
+                    "risk_level": "high" if comments_score > 5 else "medium" if comments_score > 2 else "low"
+                }
+            }
+            
+            # Generate recommendations
+            recommendations = {
+                "immediate_actions": [],
+                "short_term": [],
+                "long_term": []
+            }
+            
+            # Time-based recommendations
+            if time_sensitivity_score > 20:
+                recommendations["immediate_actions"].append("Review task timeline and consider deadline extension")
+            elif time_sensitivity_score > 15:
+                recommendations["short_term"].append("Monitor task progress closely")
+            
+            # Complexity recommendations
+            if complexity_score > 10:
+                recommendations["immediate_actions"].append("Break down complex task into smaller subtasks")
+            
+            # Role match recommendations
+            if role_match_score > 15:
+                recommendations["immediate_actions"].append("Consider reassigning task to better-suited team member")
+            elif role_match_score > 10:
+                recommendations["short_term"].append("Provide additional training or support to assigned team member")
+            
+            # Dependency recommendations
+            if dependency_score > 5:
+                recommendations["short_term"].append("Review and resolve task dependencies")
+            
+            # Comments recommendations
+            if comments_score > 5:
+                recommendations["short_term"].append("Improve communication and collaboration on this task")
+            
+            # Store in database
+            task_risk_crud = TaskRiskCRUD(self.db)
+            
+            # Serialize datetime objects for JSON storage
+            serialized_risk_factors = self._serialize_datetime_objects(risk_factors)
+            serialized_recommendations = self._serialize_datetime_objects(recommendations)
+            serialized_metrics = self._serialize_datetime_objects(collected_data.get("metrics"))
+            
+            # Debug logging
+            logger.info(f"Storing risk analysis for task {task_id}:")
+            logger.info(f"  Risk score: {final_risk_score}")
+            logger.info(f"  Risk level: {risk_level}")
+            logger.info(f"  Component scores: time={time_sensitivity_score}, complexity={complexity_score}, priority={priority_score}, role={role_match_score}, deps={dependency_score}, comments={comments_score}")
+            
+            # Try to store in database, but don't fail if it doesn't work
+            stored_risk = None
+            database_record_id = None
+            stored_in_database = False
+            
+            try:
+                stored_risk = task_risk_crud.create_risk_analysis(
+                    task_id=task_id,
+                    risk_score=final_risk_score,
+                    risk_level=risk_level,
+                    time_sensitivity=time_sensitivity_score,
+                    complexity=complexity_score,
+                    priority=priority_score,
+                    risk_factors=serialized_risk_factors,
+                    recommendations=serialized_recommendations,
+                    metrics=serialized_metrics
+                )
+                database_record_id = stored_risk.id
+                stored_in_database = True
+                logger.info(f"Successfully stored risk analysis in database with ID: {database_record_id}")
+            except Exception as db_error:
+                logger.warning(f"Failed to store risk analysis in database: {str(db_error)}")
+                logger.warning("Continuing with analysis results without database storage")
+                stored_in_database = False
+            
+            # Return complete analysis
+            return {
+                "task_id": task_id,
+                "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
+                "risk_score": round(final_risk_score, 2),
+                "risk_level": risk_level,
+                
+                # Component scores
+                "time_sensitivity": round(time_sensitivity_score, 2),
+                "complexity": round(complexity_score, 2),
+                "priority": round(priority_score, 2),
+                "role_match": round(role_match_score, 2),
+                "dependencies": round(dependency_score, 2),
+                "comments": round(comments_score, 2),
+                
+                # Detailed analysis
+                "risk_factors": risk_factors,
+                "recommendations": recommendations,
+                "metrics": collected_data.get("metrics"),
+                
+                # Analysis metadata
+                "analysis_version": "1.0",
+                "calculation_method": "weighted_component_analysis",
+                "stored_in_database": stored_in_database,
+                "database_record_id": database_record_id,
+                
+                # Component breakdown
+                "component_breakdown": {
+                    "time_sensitivity": {
+                        "score": round(time_sensitivity_score, 2),
+                        "weight": "30%",
+                        "max_score": 30
+                    },
+                    "complexity": {
+                        "score": round(complexity_score, 2),
+                        "weight": "20%",
+                        "max_score": 20
+                    },
+                    "priority": {
+                        "score": round(priority_score, 2),
+                        "weight": "20%",
+                        "max_score": 20
+                    },
+                    "role_match": {
+                        "score": round(role_match_score, 2),
+                        "weight": "20%",
+                        "max_score": 20
+                    },
+                    "dependencies": {
+                        "score": round(dependency_score, 2),
+                        "weight": "10%",
+                        "max_score": 10
+                    },
+                    "comments": {
+                        "score": round(comments_score, 2),
+                        "weight": "10%",
+                        "max_score": 10
+                    }
+                },
+                
+                # Raw data for reference
+                "raw_analysis_data": risk_data
+            }
             
         except Exception as e:
-            self.db.rollback()
-            logger.error(f"Error storing comprehensive risk analysis for task {task_id}: {str(e)}")
-            # Don't raise the error - we want the analysis to still be returned even if storage fails
+            logger.error(f"Error in complete risk analysis for task {task_id}: {str(e)}")
+            logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise ValueError(f"Error calculating complete risk analysis: {str(e)}")
+
+    def _calculate_priority_risk_score(self, priority: str) -> float:
+        """Calculate priority risk score (0-20) based on task priority"""
+        priority_scores = {
+            "critical": 20.0,
+            "high": 15.0,
+            "medium": 10.0,
+            "low": 5.0,
+            "minimal": 2.0
+        }
+        return priority_scores.get(priority.lower(), 10.0)
 
 # Create a singleton instance
 _ai_service = None

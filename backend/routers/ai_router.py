@@ -8,6 +8,8 @@ from services.ai_service import get_ai_service
 from models.task import Task
 from models.task_risk import TaskRisk
 from services.redis_service import get_redis_client
+from crud.task_risk import TaskRiskCRUD
+from schemas.task_risk import TaskRiskAnalysisResponse, TaskRiskHistoryResponse, ProjectRiskSummaryResponse
 
 router = APIRouter(
     prefix="/ai",
@@ -254,26 +256,31 @@ async def analyze_task_risk(
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Perform comprehensive AI risk analysis on a task.
+    Perform comprehensive AI risk analysis on a task and store results in database.
     
     This endpoint analyzes multiple risk factors including:
-    - Role/skill match between assignee and task
-    - Time-based risks (deadlines, progress)
-    - Dependencies and blockers
+    - Role/skill match between assignee and task (20%)
+    - Time-based risks (deadlines, progress) (30%)
+    - Dependencies and blockers (10%)
     - Workload and resource allocation
     - Project context
-    - Communication sentiment
+    - Communication sentiment (10%)
+    - Task complexity (20%)
+    - Task priority (20%)
     
     Returns a detailed risk assessment with:
-    - Overall risk score
+    - Overall weighted risk score (0-100)
+    - Component breakdown with individual scores
     - Specific risk factors
     - Detailed metrics
     - Actionable recommendations
-    - Estimated potential delays
+    - Database storage confirmation
+    
+    The analysis is automatically stored in the TaskRisk table for future retrieval.
     """
     try:
         ai_service = get_ai_service(db)
-        analysis = await ai_service.analyze_task_risk(task_id)
+        analysis = await ai_service.calculate_complete_task_risk(task_id)
         
         if "error" in analysis:
             raise HTTPException(
@@ -286,46 +293,6 @@ async def analyze_task_risk(
         raise HTTPException(
             status_code=500,
             detail=f"Error analyzing task risk: {str(e)}"
-        )
-
-@router.get("/task/{task_id}/risk-summary")
-async def analyze_task_risk_summary(
-    task_id: int,
-    db: Session = Depends(get_db)
-) -> Dict:
-    """
-    Perform comprehensive task risk analysis and calculate total risk score.
-    
-    This endpoint provides a complete risk assessment with:
-    - Total weighted risk score (can exceed 100 due to weighted components)
-    - Risk breakdown by component:
-      * Complexity (20% weight, max 20 points)
-      * Time Risk (30% weight, max 30 points)
-      * Role/Workload (20% weight, max 20 points)
-      * Dependencies (10% weight, max 10 points)
-      * Comments Analysis (10% weight, max 10 points)
-      * Environment (10% weight, max 10 points)
-    - Overall risk level (very_low, low, medium, high, very_high, extreme)
-    - Summary comments for each component with timestamps
-    - Actionable recommendations
-    - Detailed analysis data
-    
-    Results are automatically stored in the database for historical tracking.
-    """
-    try:
-        ai_service = get_ai_service(db)
-        summary = await ai_service.analyze_task_risk_summary(task_id)
-        
-        return summary
-    except ValueError as ve:
-        raise HTTPException(
-            status_code=404,
-            detail=str(ve)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing task risk summary: {str(e)}"
         )
 
 @router.get("/project/{project_id}/tasks/risk")
@@ -459,14 +426,79 @@ async def generate_project_insights(
             detail=f"Error generating project insights: {str(e)}"
         )
 
+@router.get("/task/{task_id}/risk/stored")
+async def get_stored_task_risk(
+    task_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Retrieve the most recent stored risk analysis for a task from the database.
+    
+    This endpoint returns the latest risk analysis that was previously calculated
+    and stored in the TaskRisk table, without performing a new analysis.
+    
+    Returns:
+    - Latest risk analysis data
+    - Analysis timestamp
+    - Component scores
+    - Risk factors and recommendations
+    """
+    try:
+        # Verify task exists
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Task {task_id} not found"
+            )
+        
+        # Get latest stored risk analysis
+        task_risk_crud = TaskRiskCRUD(db)
+        latest_risk = task_risk_crud.get_latest_risk_analysis(task_id)
+        
+        if not latest_risk:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No risk analysis found for task {task_id}. Please run /ai/task/{task_id}/risk first."
+            )
+        
+        return {
+            "task_id": task_id,
+            "analysis_timestamp": latest_risk.created_at.isoformat(),
+            "risk_score": latest_risk.risk_score,
+            "risk_level": latest_risk.risk_level,
+            
+            # Component scores
+            "time_sensitivity": latest_risk.time_sensitivity,
+            "complexity": latest_risk.complexity,
+            "priority": latest_risk.priority,
+            
+            # Detailed analysis
+            "risk_factors": latest_risk.risk_factors or {},
+            "recommendations": latest_risk.recommendations or {},
+            "metrics": latest_risk.metrics,
+            
+            # Metadata
+            "database_record_id": latest_risk.id,
+            "data_source": "stored_analysis"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving stored risk analysis: {str(e)}"
+        )
+
 @router.get("/task/{task_id}/risk/history")
 async def get_task_risk_history(
     task_id: int,
     days: int = 7,  # Default to last 7 days
     db: Session = Depends(get_db)
-) -> List[Dict]:
+) -> Dict:
     """
-    Get historical risk analysis data for a task.
+    Get historical risk analysis data for a task from the database.
     
     Parameters:
     - task_id: The ID of the task
@@ -475,7 +507,7 @@ async def get_task_risk_history(
     Returns a list of risk analyses ordered by date, including:
     - Risk scores over time
     - Risk levels
-    - Risk breakdowns (time sensitivity, complexity, priority)
+    - Component breakdowns
     - Risk factors at each point
     - Recommendations history
     """
@@ -488,30 +520,182 @@ async def get_task_risk_history(
                 detail=f"Task {task_id} not found"
             )
             
-        # Get risk analyses for the specified time period
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
-        risk_analyses = db.query(TaskRisk).filter(
-            TaskRisk.task_id == task_id,
-            TaskRisk.created_at >= cutoff_date
-        ).order_by(TaskRisk.created_at.desc()).all()
+        # Get risk analysis history
+        task_risk_crud = TaskRiskCRUD(db)
+        risk_history = task_risk_crud.get_risk_analysis_history(task_id, days)
         
-        return [{
-            "task_id": analysis.task_id,
-            "risk_score": analysis.risk_score,
-            "risk_level": analysis.risk_level,
-            "risk_breakdown": {
-                "time_sensitivity": analysis.time_sensitivity,
-                "complexity": analysis.complexity,
-                "priority": analysis.priority
-            },
-            "risk_factors": analysis.risk_factors,
-            "recommendations": analysis.recommendations,
-            "metrics": analysis.metrics,
-            "created_at": analysis.created_at.isoformat()
-        } for analysis in risk_analyses]
+        if not risk_history:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No risk analysis history found for task {task_id} in the last {days} days"
+            )
         
+        # Calculate statistics
+        risk_scores = [risk.risk_score for risk in risk_history]
+        avg_risk_score = sum(risk_scores) / len(risk_scores) if risk_scores else 0
+        
+        # Determine trend
+        if len(risk_scores) >= 2:
+            if risk_scores[0] > risk_scores[-1] + 5:
+                trend = "decreasing"
+            elif risk_scores[0] < risk_scores[-1] - 5:
+                trend = "increasing"
+            else:
+                trend = "stable"
+        else:
+            trend = "insufficient_data"
+        
+        # Format history data
+        history_data = []
+        for risk in risk_history:
+            history_data.append({
+                "analysis_timestamp": risk.created_at.isoformat(),
+                "risk_score": risk.risk_score,
+                "risk_level": risk.risk_level,
+                "time_sensitivity": risk.time_sensitivity,
+                "complexity": risk.complexity,
+                "priority": risk.priority,
+                "risk_factors": risk.risk_factors or {},
+                "recommendations": risk.recommendations or {},
+                "database_record_id": risk.id
+            })
+        
+        return {
+            "task_id": task_id,
+            "history_period_days": days,
+            "total_analyses": len(risk_history),
+            "average_risk_score": round(avg_risk_score, 2),
+            "risk_trend": trend,
+            "history": history_data,
+            "statistics": {
+                "highest_risk_score": max(risk_scores) if risk_scores else 0,
+                "lowest_risk_score": min(risk_scores) if risk_scores else 0,
+                "risk_level_distribution": {
+                    "minimal": len([r for r in risk_history if r.risk_level == "minimal"]),
+                    "low": len([r for r in risk_history if r.risk_level == "low"]),
+                    "medium": len([r for r in risk_history if r.risk_level == "medium"]),
+                    "high": len([r for r in risk_history if r.risk_level == "high"]),
+                    "critical": len([r for r in risk_history if r.risk_level == "critical"]),
+                    "extreme": len([r for r in risk_history if r.risk_level == "extreme"])
+                }
+            }
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving risk history: {str(e)}"
-        ) 
+        )
+
+@router.get("/project/{project_id}/risks/stored")
+async def get_project_stored_risks(
+    project_id: int,
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Get stored risk analyses for all tasks in a project.
+    
+    Returns:
+    - Risk summary for the project
+    - Individual task risk data
+    - Risk distribution statistics
+    - High-risk task identification
+    """
+    try:
+        # Get project tasks
+        tasks = db.query(Task).filter(Task.project_id == project_id).all()
+        if not tasks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No tasks found for project {project_id}"
+            )
+        
+        # Get risk analyses for all tasks
+        task_risk_crud = TaskRiskCRUD(db)
+        project_risks = task_risk_crud.get_project_risk_analyses(project_id)
+        
+        if not project_risks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No risk analyses found for project {project_id}. Please run risk analysis on individual tasks first."
+            )
+        
+        # Get statistics
+        risk_statistics = task_risk_crud.get_risk_statistics(project_id)
+        
+        # Get high-risk tasks
+        high_risk_tasks = task_risk_crud.get_high_risk_tasks(threshold=0.6)
+        project_high_risk_tasks = [r for r in high_risk_tasks if r.task.project_id == project_id]
+        
+        # Format task risk data
+        task_risks = []
+        for risk in project_risks:
+            task_risks.append({
+                "task_id": risk.task_id,
+                "task_name": risk.task.name if risk.task else "Unknown Task",
+                "analysis_timestamp": risk.created_at.isoformat(),
+                "risk_score": risk.risk_score,
+                "risk_level": risk.risk_level,
+                "time_sensitivity": risk.time_sensitivity,
+                "complexity": risk.complexity,
+                "priority": risk.priority,
+                "database_record_id": risk.id
+            })
+        
+        # Generate recommendations
+        recommendations = []
+        if risk_statistics["average_risk_score"] > 50:
+            recommendations.append("Project has high overall risk - consider timeline review")
+        if len(project_high_risk_tasks) > len(tasks) * 0.3:
+            recommendations.append("High proportion of risky tasks - review resource allocation")
+        if risk_statistics["risk_distribution"]["critical"] > 0 or risk_statistics["risk_distribution"]["extreme"] > 0:
+            recommendations.append("Critical/extreme risk tasks detected - immediate attention required")
+        
+        return {
+            "project_id": project_id,
+            "total_tasks": len(tasks),
+            "analyzed_tasks": len(project_risks),
+            "average_risk_score": round(risk_statistics["average_risk_score"], 2),
+            "risk_distribution": risk_statistics["risk_distribution"],
+            "high_risk_tasks": [
+                {
+                    "task_id": risk.task_id,
+                    "task_name": risk.task.name if risk.task else "Unknown Task",
+                    "risk_score": risk.risk_score,
+                    "risk_level": risk.risk_level
+                } for risk in project_high_risk_tasks
+            ],
+            "recommendations": recommendations,
+            "task_risks": task_risks,
+            "statistics": risk_statistics
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving project risks: {str(e)}"
+        )
+
+@router.get("/test/task-risks-table")
+async def test_task_risks_table(db: Session = Depends(get_db)) -> Dict:
+    """
+    Test endpoint to check if the task_risks table exists and is accessible.
+    """
+    try:
+        # Try to query the table
+        result = db.execute("SELECT COUNT(*) FROM task_risks").scalar()
+        return {
+            "status": "success",
+            "message": "Task risks table exists and is accessible",
+            "record_count": result
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Task risks table error: {str(e)}",
+            "error_type": type(e).__name__
+        } 
