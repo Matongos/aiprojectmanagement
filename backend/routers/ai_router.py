@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Dict, List
+from typing import Dict, List, Any
 from datetime import datetime, timedelta, timezone
+from celery.result import AsyncResult
 
 from database import get_db
 from services.ai_service import get_ai_service
@@ -10,6 +11,7 @@ from models.task_risk import TaskRisk
 from services.redis_service import get_redis_client
 from crud.task_risk import TaskRiskCRUD
 from schemas.task_risk import TaskRiskAnalysisResponse, TaskRiskHistoryResponse, ProjectRiskSummaryResponse
+from tasks.task_risk import calculate_task_risk_analysis_task
 
 router = APIRouter(
     prefix="/ai",
@@ -256,9 +258,14 @@ async def analyze_task_risk(
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Perform comprehensive AI risk analysis on a task and store results in database.
+    Queue a background job to perform comprehensive AI risk analysis on a task and store results in database.
     
-    This endpoint analyzes multiple risk factors including:
+    This endpoint:
+    1. Queues a background job to perform comprehensive risk analysis
+    2. Returns a job ID for status tracking
+    3. The job will perform analysis and store results in the database when complete
+    
+    The analysis includes multiple risk factors:
     - Role/skill match between assignee and task (20%)
     - Time-based risks (deadlines, progress) (30%)
     - Dependencies and blockers (10%)
@@ -268,31 +275,41 @@ async def analyze_task_risk(
     - Task complexity (20%)
     - Task priority (20%)
     
-    Returns a detailed risk assessment with:
-    - Overall weighted risk score (0-100)
-    - Component breakdown with individual scores
-    - Specific risk factors
-    - Detailed metrics
-    - Actionable recommendations
-    - Database storage confirmation
-    
-    The analysis is automatically stored in the TaskRisk table for future retrieval.
+    Returns:
+        Dict containing:
+        - status: "queued"
+        - task_id: int
+        - celery_task_id: str (for status checking)
     """
     try:
-        ai_service = get_ai_service(db)
-        analysis = await ai_service.calculate_complete_task_risk(task_id)
-        
-        if "error" in analysis:
+        # Check if task exists
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
             raise HTTPException(
                 status_code=404,
                 detail=f"Task {task_id} not found"
             )
             
-        return analysis
+        # Queue the Celery task with 4-second delay
+        celery_task = calculate_task_risk_analysis_task.apply_async(
+            args=[task_id], 
+            countdown=4  # 4-second delay
+        )
+        
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "celery_task_id": celery_task.id,
+            "message": "Risk analysis job queued successfully with 4-second delay. Use the celery_task_id to check status.",
+            "delay_seconds": 4
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error analyzing task risk: {str(e)}"
+            detail=f"Error queuing risk analysis: {str(e)}"
         )
 
 @router.get("/project/{project_id}/tasks/risk")
@@ -301,13 +318,21 @@ async def analyze_project_tasks_risk(
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Analyze risk levels for all tasks in a project.
-    Returns aggregated risk metrics and identifies high-risk tasks.
+    Queue background jobs to analyze risk levels for all tasks in a project.
+    
+    This endpoint:
+    1. Gets all tasks for the project
+    2. Queues individual risk analysis jobs for each task
+    3. Returns a summary of queued jobs
+    
+    Returns:
+        Dict containing:
+        - status: "queued"
+        - project_id: int
+        - total_tasks: int
+        - queued_tasks: List of task IDs and their celery task IDs
     """
     try:
-        # Get AI service
-        ai_service = get_ai_service(db)
-        
         # Get all tasks for the project
         tasks = db.query(Task).filter(Task.project_id == project_id).all()
         if not tasks:
@@ -316,50 +341,22 @@ async def analyze_project_tasks_risk(
                 detail=f"No tasks found for project {project_id}"
             )
             
-        # Analyze each task
-        task_analyses = []
-        high_risk_tasks = []
-        total_risk_score = 0
-        
+        # Queue risk analysis for each task
+        queued_tasks = []
         for task in tasks:
-            analysis = await ai_service.analyze_task_risk(task.id)
-            task_analyses.append(analysis)
-            
-            if analysis.get("risk_score", 0) > 0.7:  # High risk threshold
-                high_risk_tasks.append({
+            celery_task = calculate_task_risk_analysis_task.delay(task.id)
+            queued_tasks.append({
                     "task_id": task.id,
-                    "name": task.name,
-                    "risk_score": analysis["risk_score"],
-                    "risk_factors": analysis["risk_factors"]
-                })
-                
-            total_risk_score += analysis.get("risk_score", 0)
-            
-        # Calculate project-level metrics
-        avg_risk_score = total_risk_score / len(tasks) if tasks else 0
-        risk_distribution = {
-            "low": len([a for a in task_analyses if a.get("risk_score", 0) < 0.4]),
-            "medium": len([a for a in task_analyses if 0.4 <= a.get("risk_score", 0) <= 0.7]),
-            "high": len([a for a in task_analyses if a.get("risk_score", 0) > 0.7])
-        }
-        
-        # Generate project-level recommendations
-        recommendations = []
-        if high_risk_tasks:
-            recommendations.append(f"Address {len(high_risk_tasks)} high-risk tasks immediately")
-        if risk_distribution["medium"] > len(tasks) * 0.4:
-            recommendations.append("Review resource allocation across tasks")
-        if avg_risk_score > 0.5:
-            recommendations.append("Consider project timeline and resource review")
+                "task_name": task.name,
+                "celery_task_id": celery_task.id
+            })
             
         return {
+            "status": "queued",
             "project_id": project_id,
-            "overall_risk_score": round(avg_risk_score, 2),
-            "risk_distribution": risk_distribution,
-            "high_risk_tasks": high_risk_tasks,
-            "recommendations": recommendations,
-            "task_count": len(tasks),
-            "detailed_analyses": task_analyses
+            "total_tasks": len(tasks),
+            "queued_tasks": queued_tasks,
+            "message": f"Risk analysis queued for {len(tasks)} tasks in project {project_id}. Use individual celery_task_ids to check status."
         }
         
     except HTTPException:
@@ -367,7 +364,7 @@ async def analyze_project_tasks_risk(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error analyzing project tasks: {str(e)}"
+            detail=f"Error queuing project risk analysis: {str(e)}"
         )
 
 @router.get("/projects/{project_id}/risks")
@@ -698,4 +695,90 @@ async def test_task_risks_table(db: Session = Depends(get_db)) -> Dict:
             "status": "error",
             "message": f"Task risks table error: {str(e)}",
             "error_type": type(e).__name__
-        } 
+        }
+
+@router.get("/task/{task_id}/risk/status/{celery_task_id}")
+async def get_risk_analysis_status(
+    task_id: int,
+    celery_task_id: str,
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Check the status of a risk analysis job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, PROGRESS, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+        - meta: Dict (progress information if in progress)
+    """
+    try:
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None,
+            "meta": result.info if hasattr(result, 'info') and result.info else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking risk analysis status: {str(e)}"
+        )
+
+@router.post("/project/{project_id}/tasks/risk/batch")
+async def analyze_project_tasks_risk_batch(
+    project_id: int,
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Queue background jobs to analyze risk levels for all tasks in a project.
+    
+    This endpoint:
+    1. Gets all tasks for the project
+    2. Queues individual risk analysis jobs for each task
+    3. Returns a summary of queued jobs
+    
+    Returns:
+        Dict containing:
+        - status: "queued"
+        - project_id: int
+        - total_tasks: int
+        - queued_tasks: List of task IDs and their celery task IDs
+    """
+    try:
+        # Get all tasks for the project
+        tasks = db.query(Task).filter(Task.project_id == project_id).all()
+        if not tasks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No tasks found for project {project_id}"
+            )
+            
+        # Queue risk analysis for each task
+        queued_tasks = []
+        for task in tasks:
+            celery_task = calculate_task_risk_analysis_task.delay(task.id)
+            queued_tasks.append({
+                "task_id": task.id,
+                "task_name": task.name,
+                "celery_task_id": celery_task.id
+            })
+            
+        return {
+            "status": "queued",
+            "project_id": project_id,
+            "total_tasks": len(tasks),
+            "queued_tasks": queued_tasks,
+            "message": f"Risk analysis queued for {len(tasks)} tasks in project {project_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error queuing project risk analysis: {str(e)}"
+        ) 

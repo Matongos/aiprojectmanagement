@@ -529,14 +529,14 @@ class AIService:
             try:
                 cached_time_risk = self.get_cached_time_risk(task_id)
                 if cached_time_risk:
-                    # Weight the time risk against 30 (every 100% = 30 points)
+                    # Weight the time risk against 35 (every 100% = 35 points)
                     time_risk_percentage = cached_time_risk.get('time_risk_percentage', 0)
-                    weighted_risk_score = (time_risk_percentage / 100) * 30
+                    weighted_risk_score = (time_risk_percentage / 100) * 35
                     
                     time_risk_data = {
                         "cached_time_risk": cached_time_risk,
                         "weighted_risk_score": round(weighted_risk_score, 2),
-                        "calculation": f"({time_risk_percentage} / 100) * 30 = {weighted_risk_score}",
+                        "calculation": f"({time_risk_percentage} / 100) * 35 = {weighted_risk_score}",
                         "risk_level": cached_time_risk.get('risk_level', 'unknown'),
                         "time_data": cached_time_risk.get('time_data', {}),
                         "cache_status": "valid"
@@ -547,9 +547,9 @@ class AIService:
                     calculated_time_risk = await self._analyze_time_risks(task)
                     
                     if calculated_time_risk:
-                        # Weight the calculated time risk against 30
+                        # Weight the calculated time risk against 35
                         time_risk_percentage = calculated_time_risk.get('time_risk_percentage', 0)
-                        weighted_risk_score = (time_risk_percentage / 100) * 30
+                        weighted_risk_score = (time_risk_percentage / 100) * 35
                         
                         # Store the calculated result in cache for future use
                         self.store_time_risk_cache(task_id, calculated_time_risk, expiration_seconds=3600)
@@ -557,7 +557,7 @@ class AIService:
                         time_risk_data = {
                             "cached_time_risk": calculated_time_risk,
                             "weighted_risk_score": round(weighted_risk_score, 2),
-                            "calculation": f"({time_risk_percentage} / 100) * 30 = {weighted_risk_score}",
+                            "calculation": f"({time_risk_percentage} / 100) * 35 = {weighted_risk_score}",
                             "risk_level": calculated_time_risk.get('risk_level', 'unknown'),
                             "time_data": calculated_time_risk.get('time_data', {}),
                             "cache_status": "calculated_and_cached"
@@ -566,7 +566,7 @@ class AIService:
                         # Fallback if calculation fails
                         time_risk_data = {
                             "cached_time_risk": None,
-                            "weighted_risk_score": 15.0,  # Default medium risk (50% of 30)
+                            "weighted_risk_score": 17.5,  # Default medium risk (50% of 35)
                             "calculation": "Calculation failed, using default medium risk",
                             "risk_level": "medium",
                             "time_data": {},
@@ -576,7 +576,7 @@ class AIService:
                 logger.error(f"Error in time risk analysis for task {task_id}: {str(e)}")
                 time_risk_data = {
                     "cached_time_risk": None,
-                    "weighted_risk_score": 15.0,  # Default medium risk (50% of 30)
+                    "weighted_risk_score": 17.5,  # Default medium risk (50% of 35)
                     "calculation": f"Error in time risk analysis: {str(e)}",
                     "risk_level": "medium",
                     "time_data": {},
@@ -727,7 +727,7 @@ class AIService:
                         "weather_impact_analysis_needed": is_outdoor_task  # Only if outdoor task
                     },
                     
-                    # 7. Time risk analysis (weighted against 30)
+                    # 7. Time risk analysis (weighted against 35)
                     "time_risk_analysis": time_risk_data,
                     
                     # Additional context data

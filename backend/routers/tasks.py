@@ -27,6 +27,7 @@ from services.permission_service import PermissionService
 from services.priority_scoring_service import PriorityScoringService
 from tasks.task_priority import calculate_task_priority_score_task, auto_set_task_priority_task, update_all_task_priorities_task
 from tasks.task_complexity import calculate_task_complexity_task
+from tasks.task_risk import calculate_task_risk_analysis_task
 from celery.result import AsyncResult
 from tasks.project_progress import calculate_project_progress_task
 
@@ -66,6 +67,17 @@ async def create_task(
             logger.info(f"Queued complexity calculation for new task {created_task.id}")
         except Exception as e:
             logger.warning(f"Failed to queue complexity calculation for new task {created_task.id}: {str(e)}")
+        
+        # Auto-trigger risk analysis if task has a deadline
+        if created_task.deadline:
+            try:
+                calculate_task_risk_analysis_task.apply_async(
+                    args=[created_task.id], 
+                    countdown=4  # 4-second delay
+                )
+                logger.info(f"Queued comprehensive risk analysis for new task {created_task.id} with deadline (4s delay)")
+            except Exception as e:
+                logger.warning(f"Failed to trigger comprehensive risk analysis for new task {created_task.id}: {str(e)}")
         
         # Convert to dictionary and add additional fields
         task_dict = {
@@ -491,6 +503,27 @@ async def update_task(
                 logger.info(f"Queued time risk calculation for task {task_id} due to deadline change")
             except Exception as e:
                 logger.warning(f"Failed to trigger time risk calculation for task {task_id}: {str(e)}")
+            
+            # Trigger comprehensive task risk analysis with 4-second delay when deadline is activated
+            try:
+                calculate_task_risk_analysis_task.apply_async(
+                    args=[task_id], 
+                    countdown=4  # 4-second delay
+                )
+                logger.info(f"Queued comprehensive risk analysis for task {task_id} due to deadline activation (4s delay)")
+            except Exception as e:
+                logger.warning(f"Failed to trigger comprehensive risk analysis for task {task_id}: {str(e)}")
+
+        # Also trigger risk analysis when task becomes active (start_date is set)
+        if "start_date" in update_data and not task.start_date and update_data["start_date"]:
+            try:
+                calculate_task_risk_analysis_task.apply_async(
+                    args=[task_id], 
+                    countdown=4  # 4-second delay
+                )
+                logger.info(f"Queued comprehensive risk analysis for task {task_id} due to task activation (4s delay)")
+            except Exception as e:
+                logger.warning(f"Failed to trigger comprehensive risk analysis for task {task_id}: {str(e)}")
 
         # Convert the dictionary to TaskResponse
         return TaskResponse.model_validate(updated_task_dict)

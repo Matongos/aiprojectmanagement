@@ -474,7 +474,7 @@ def _is_significant_change(old_priority: str, new_priority: str) -> bool:
     priority_levels = {'LOW': 1, 'NORMAL': 2, 'HIGH': 3, 'URGENT': 4}
     old_level = priority_levels.get(old_priority, 0)
     new_level = priority_levels.get(new_priority, 0)
-    return abs(new_level - old_level) > 1  # Notify if change is more than one level
+    return abs(new_level - old_level) > 1  # Notify if change is more than one level 
 
 @celery_app.task(bind=True)
 def calculate_task_time_risk_task(self, task_id):

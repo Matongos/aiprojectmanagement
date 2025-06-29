@@ -11,6 +11,7 @@ celery_app = Celery(
         'tasks.productivity_updater',
         'tasks.task_priority',
         'tasks.project_progress',
+        'tasks.task_risk',
     ]
 )
 
