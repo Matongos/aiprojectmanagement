@@ -100,6 +100,146 @@ async def get_users(
     
     return users
 
+
+@router.get("/team-directory", response_model=List[dict])
+async def get_team_directory(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get team directory based on user permissions:
+    - Superusers: See all users in the system
+    - General users: See only members from their projects
+    """
+    try:
+        from models.task import Task
+        from models.project import Project, ProjectMember, ProjectRole
+        
+        if current_user.get("is_superuser"):
+            # Superusers see all users
+            users = user_service.get_users(db, skip=0, limit=1000)
+            
+            # Get task information for each user
+            team_members = []
+            for user in users:
+                # Get user's active tasks
+                user_tasks = db.query(Task).filter(
+                    Task.assigned_to == user["id"],
+                    Task.state.in_(['in_progress', 'approved', 'changes_requested'])
+                ).all()
+                
+                # Get projects where user is a member
+                user_projects = db.query(Project).join(
+                    ProjectMember, Project.id == ProjectMember.project_id
+                ).filter(
+                    ProjectMember.user_id == user["id"]
+                ).all()
+                
+                team_members.append({
+                    "id": user["id"],
+                    "name": user["full_name"] or user["username"],
+                    "job_title": user.get("job_title"),
+                    "project_names": [project.name for project in user_projects],
+                    "has_active_task": len(user_tasks) > 0,
+                    "tasks": [
+                        {
+                            "id": task.id,
+                            "name": task.name,
+                            "state": task.state,
+                            "project_id": task.project_id,
+                            "project_name": task.project.name if task.project else "Unknown",
+                            "deadline": task.deadline.isoformat() if task.deadline else None,
+                            "priority": task.priority,
+                            "assigned_to": task.assigned_to
+                        } for task in user_tasks
+                    ]
+                })
+            
+            return team_members
+            
+        else:
+            # General users see only members from their projects
+            # Get projects where user is a member or has tasks
+            user_projects = db.query(Project).join(
+                ProjectMember, Project.id == ProjectMember.project_id
+            ).filter(
+                ProjectMember.user_id == current_user["id"]
+            ).all()
+            
+            # Also get projects where user has assigned tasks
+            projects_with_tasks = db.query(Project).join(
+                Task, Project.id == Task.project_id
+            ).filter(
+                Task.assigned_to == current_user["id"]
+            ).all()
+            
+            # Combine and deduplicate projects
+            all_user_projects = list(set(user_projects + projects_with_tasks))
+            
+            if not all_user_projects:
+                return []
+            
+            # Get all members from these projects
+            project_ids = [project.id for project in all_user_projects]
+            
+            # Get all project members from user's projects
+            project_members = db.query(ProjectMember).filter(
+                ProjectMember.project_id.in_(project_ids)
+            ).all()
+            
+            # Get unique user IDs
+            member_user_ids = list(set([pm.user_id for pm in project_members]))
+            
+            # Get user details
+            users = user_service.get_users_by_ids(db, member_user_ids)
+            
+            # Build team directory
+            team_members = []
+            for user in users:
+                # Get user's active tasks in user's projects
+                user_tasks = db.query(Task).filter(
+                    Task.assigned_to == user["id"],
+                    Task.project_id.in_(project_ids),
+                    Task.state.in_(['in_progress', 'approved', 'changes_requested'])
+                ).all()
+                
+                # Get projects where this user is a member (from user's projects)
+                user_projects = db.query(Project).join(
+                    ProjectMember, Project.id == ProjectMember.project_id
+                ).filter(
+                    ProjectMember.user_id == user["id"],
+                    Project.id.in_(project_ids)
+                ).all()
+                
+                team_members.append({
+                    "id": user["id"],
+                    "name": user["full_name"] or user["username"],
+                    "job_title": user.get("job_title"),
+                    "project_names": [project.name for project in user_projects],
+                    "has_active_task": len(user_tasks) > 0,
+                    "tasks": [
+                        {
+                            "id": task.id,
+                            "name": task.name,
+                            "state": task.state,
+                            "project_id": task.project_id,
+                            "project_name": task.project.name if task.project else "Unknown",
+                            "deadline": task.deadline.isoformat() if task.deadline else None,
+                            "priority": task.priority,
+                            "assigned_to": task.assigned_to
+                        } for task in user_tasks
+                    ]
+                })
+            
+            return team_members
+            
+    except Exception as e:
+        logger.error(f"Error fetching team directory: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching team directory: {str(e)}"
+        )
+
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(current_user: dict = Depends(get_current_user)):
     """Get current user information."""

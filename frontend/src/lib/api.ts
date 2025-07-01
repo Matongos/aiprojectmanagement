@@ -281,17 +281,38 @@ export async function getActiveTasksCount(): Promise<TasksResponse> {
 }
 
 export const getProjectStages = async (projectId: number): Promise<Stage[]> => {
-  const response = await fetch(`${API_BASE_URL}/projects/${projectId}/stages`, {
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch project stages');
+  try {
+    return await fetchApi<Stage[]>(`/projects/${projectId}/stages`);
+  } catch (error) {
+    console.error('Error fetching project stages:', error);
+    return [];
   }
+};
 
-  const stages = await response.json();
-  return stages.sort((a: Stage, b: Stage) => a.order - b.order);
+// Team Directory API function
+export interface TeamDirectoryUser {
+  id: number;
+  name: string;
+  job_title?: string;
+  project_names: string[];
+  has_active_task: boolean;
+  tasks: {
+    id: number;
+    name: string;
+    state: string;
+    project_id: number;
+    project_name: string;
+    deadline?: string;
+    priority?: string;
+    assigned_to?: number;
+  }[];
+}
+
+export const getTeamDirectory = async (): Promise<TeamDirectoryUser[]> => {
+  try {
+    return await fetchApi<TeamDirectoryUser[]>('/users/team-directory');
+  } catch (error) {
+    console.error('Error fetching team directory:', error);
+    return [];
+  }
 }; 

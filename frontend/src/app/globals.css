@@ -152,6 +152,37 @@
   background-color: #94A3B8;
 }
 
+/* Team Directory scrollbar styles - very light and thin */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #F3F4F6 transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #F3F4F6;
+  border-radius: 1.5px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: #E5E7EB;
+}
+
+.scrollbar-thumb-gray-200::-webkit-scrollbar-thumb {
+  background-color: #F3F4F6;
+}
+
+.scrollbar-track-transparent::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* Scroll to latest button animations */
 .scroll-to-latest-enter {
   opacity: 0;

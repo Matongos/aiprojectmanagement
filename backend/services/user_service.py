@@ -1,5 +1,6 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from typing import List
 from services import auth_service
 
 def create_user(db: Session, user_data: dict):
@@ -162,6 +163,42 @@ def get_users(db: Session, skip: int = 0, limit: int = 100):
     """)
     
     results = db.execute(query, {"limit": limit, "skip": skip}).fetchall()
+    
+    users = []
+    for row in results:
+        users.append({
+            "id": row[0],
+            "username": row[1],
+            "email": row[2],
+            "full_name": row[3],
+            "is_active": row[4],
+            "is_superuser": row[5],
+            "profile_image_url": row[6],
+            "job_title": row[7],
+            "bio": row[8]
+        })
+    
+    return users
+
+
+def get_users_by_ids(db: Session, user_ids: List[int]):
+    """Get users by their IDs."""
+    if not user_ids:
+        return []
+    
+    # Convert list to tuple for SQL IN clause
+    user_ids_str = ','.join(map(str, user_ids))
+    
+    query = text(f"""
+    SELECT 
+        id, username, email, full_name, is_active, is_superuser, 
+        profile_image_url, job_title, bio
+    FROM users
+    WHERE id IN ({user_ids_str})
+    ORDER BY full_name, username
+    """)
+    
+    results = db.execute(query).fetchall()
     
     users = []
     for row in results:

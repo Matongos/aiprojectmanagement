@@ -248,6 +248,7 @@ export default function DashboardPage() {
   const [connectionStatus, setConnectionStatus] = useState<string>("");
   const [teamSearch, setTeamSearch] = useState("");
   const [aiSuggestionDisplayIndex, setAiSuggestionDisplayIndex] = useState<number>(0);
+  const [expandedTeamMembers, setExpandedTeamMembers] = useState<Set<number>>(new Set());
   const hasRotatedThisVisit = useRef<boolean>(false);
 
   // WebSocket connection
@@ -448,6 +449,8 @@ export default function DashboardPage() {
       return response.json();
     },
     enabled: !!token,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
   });
 
   // Add query for active tasks risk summary
@@ -517,6 +520,19 @@ export default function DashboardPage() {
       hasRotatedThisVisit.current = false;
     };
   }, []);
+
+  // Helper function to toggle team member expansion
+  const toggleTeamMemberExpansion = (memberId: number) => {
+    setExpandedTeamMembers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(memberId)) {
+        newSet.delete(memberId);
+      } else {
+        newSet.add(memberId);
+      }
+      return newSet;
+    });
+  };
 
   // Helper function to get current AI suggestion content
   const getCurrentAiSuggestionContent = () => {
@@ -1168,7 +1184,7 @@ export default function DashboardPage() {
                                   • {item}
                                 </p>
                               ))}
-                            </div>
+                          </div>
                           </div>
                           
                           {/* Display indicator */}
@@ -1186,11 +1202,11 @@ export default function DashboardPage() {
                           </div>
                           
 
-                          
-                          {/* Cache Status */}
-                          <div className="text-xs text-gray-500 text-center pt-2">
+
+                    {/* Cache Status */}
+                    <div className="text-xs text-gray-500 text-center pt-2">
                             AI insights cached • Click to see different recommendations
-                          </div>
+                        </div>
                         </>
                       );
                     })()}
@@ -1219,19 +1235,56 @@ export default function DashboardPage() {
                       <DialogHeader>
                         <DialogTitle>All Team Members</DialogTitle>
                       </DialogHeader>
-                      <div className="space-y-4 max-h-[400px] overflow-y-auto">
+                                            <div className="space-y-4 max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
                         <Input placeholder="Search team members..." className="mb-2" onChange={e => setTeamSearch(e.target.value)} />
                         {(teamDirectory.filter(u => u.name.toLowerCase().includes(teamSearch.toLowerCase()) || (u.job_title || '').toLowerCase().includes(teamSearch.toLowerCase()))).map((member) => (
-                          <div key={member.id} className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50">
-                            <Avatar className="h-10 w-10">
-                              <AvatarImage src={"/default-avatar.png"} alt={member.name} />
-                              <AvatarFallback>{member.name[0]}</AvatarFallback>
-                            </Avatar>
-                            <div className="flex-1">
-                              <p className="text-sm font-medium">{member.name}</p>
-                              <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                          <div key={member.id} className="p-3 rounded-lg border hover:bg-gray-50">
+                            <div className="flex items-center space-x-3">
+                              <Avatar className="h-10 w-10">
+                                <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                                <AvatarFallback>{member.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1">
+                                <p className="text-sm font-medium">{member.name}</p>
+                                <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">
+                                  {member.tasks.length} tasks
+                                </div>
+                                {member.tasks.length > 0 && (
+                                  <button
+                                    onClick={() => toggleTeamMemberExpansion(member.id)}
+                                    className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                                  >
+                                    {expandedTeamMembers.has(member.id) ? 'Hide' : 'Show'} tasks
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                            <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">{member.tasks.length} tasks</div>
+                            {/* Show active tasks only when expanded */}
+                            {member.tasks.length > 0 && expandedTeamMembers.has(member.id) && (
+                              <div className="mt-3 ml-12 space-y-1 border-t pt-2">
+                                <p className="text-xs text-gray-600 font-medium">Active Tasks:</p>
+                                {member.tasks.slice(0, 5).map((task) => (
+                                  <div key={task.id} className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-700 truncate flex-1 mr-2">{task.name}</span>
+                                    <span className={`px-1 py-0.5 rounded text-xs flex-shrink-0 ${
+                                      task.state === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                                      task.state === 'completed' ? 'bg-green-100 text-green-700' :
+                                      task.state === 'approved' ? 'bg-purple-100 text-purple-700' :
+                                      task.state === 'changes_requested' ? 'bg-yellow-100 text-yellow-700' :
+                                      'bg-gray-100 text-gray-700'
+                                    }`}>
+                                      {task.state.replace('_', ' ')}
+                                    </span>
+                                  </div>
+                                ))}
+                                {member.tasks.length > 5 && (
+                                  <p className="text-xs text-gray-500">+{member.tasks.length - 5} more tasks</p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1240,8 +1293,8 @@ export default function DashboardPage() {
                 )}
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
+                        <CardContent>
+              <div className="space-y-3 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
                 {isLoadingTeamDirectory ? (
                   <div className="flex justify-center py-4">
                     <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
@@ -1250,16 +1303,53 @@ export default function DashboardPage() {
                   <p className="text-sm text-red-500 text-center">Failed to load team directory</p>
                 ) : teamDirectory && teamDirectory.length > 0 ? (
                   teamDirectory.slice(0, 4).map((member) => (
-                    <div key={member.id} className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={"/default-avatar.png"} alt={member.name} />
-                        <AvatarFallback>{member.name[0]}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{member.name}</p>
-                        <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                    <div key={member.id} className="p-3 rounded-lg border hover:bg-gray-50">
+                      <div className="flex items-center space-x-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                          <AvatarFallback>{member.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{member.name}</p>
+                          <p className="text-xs text-gray-500 truncate">{member.job_title || 'No job title'}</p>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">
+                            {member.tasks.length} tasks
+                          </div>
+                          {member.tasks.length > 0 && (
+                            <button
+                              onClick={() => toggleTeamMemberExpansion(member.id)}
+                              className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                            >
+                              {expandedTeamMembers.has(member.id) ? 'Hide' : 'Show'} tasks
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">{member.tasks.length} tasks</div>
+                      {/* Show active tasks only when expanded */}
+                      {member.tasks.length > 0 && expandedTeamMembers.has(member.id) && (
+                        <div className="mt-3 ml-11 space-y-1 border-t pt-2">
+                          <p className="text-xs text-gray-600 font-medium">Active Tasks:</p>
+                          {member.tasks.slice(0, 3).map((task) => (
+                            <div key={task.id} className="flex items-center justify-between text-xs">
+                              <span className="text-gray-700 truncate flex-1 mr-2">{task.name}</span>
+                              <span className={`px-1 py-0.5 rounded text-xs flex-shrink-0 ${
+                                task.state === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                                task.state === 'completed' ? 'bg-green-100 text-green-700' :
+                                task.state === 'approved' ? 'bg-purple-100 text-purple-700' :
+                                task.state === 'changes_requested' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {task.state.replace('_', ' ')}
+                              </span>
+                            </div>
+                          ))}
+                          {member.tasks.length > 3 && (
+                            <p className="text-xs text-gray-500">+{member.tasks.length - 3} more tasks</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))
                 ) : (
