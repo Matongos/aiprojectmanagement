@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import Dict, List, Any
 from datetime import datetime, timedelta, timezone
 from celery.result import AsyncResult
+import json
 
 from database import get_db
 from services.ai_service import get_ai_service
@@ -226,30 +227,247 @@ async def get_time_risk_result(
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Get the cached time risk calculation result for a task.
-    If no cached result exists, returns an error suggesting to trigger calculation.
+    Get cached time risk result for a task
     """
     try:
-        ai_service = get_ai_service(db)
-        cached_result = ai_service.get_cached_time_risk(task_id)
+        redis_client = get_redis_client()
+        cache_key = f"task_time_risk:{task_id}"
+        cached_result = redis_client.get(cache_key)
         
         if cached_result:
             return {
-                "task_id": task_id,
-                "status": "cached",
-                "result": cached_result
+                "status": "success",
+                "source": "cached",
+                "data": cached_result
             }
         else:
             return {
-                "task_id": task_id,
-                "status": "not_ready",
-                "message": "No cached time risk found for this task. Please trigger calculation using /ai/task/{task_id}/time-risk"
+                "status": "not_found",
+                "message": "No cached time risk data found for this task"
             }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving cached time risk: {str(e)}"
+        )
+
+@router.get("/tasks/time-risk/all-active")
+async def calculate_all_active_tasks_time_risk(
+    project_id: int = None,  # Optional: filter by project
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Calculate time-based risk for ALL active tasks at once.
+    Uses the same logic as individual task time risk but processes multiple tasks efficiently.
+    
+    Optional query parameter:
+    - project_id: Filter tasks by specific project
+    
+    Returns comprehensive time risk analysis for all active tasks.
+    """
+    try:
+        # Get current time with timezone awareness
+        now = datetime.now(timezone.utc)
+        
+        # Build query for active tasks
+        query = db.query(Task).filter(
+            Task.state.in_(['in_progress', 'approved', 'changes_requested'])
+        )
+        
+        # Filter by project if specified
+        if project_id:
+            query = query.filter(Task.project_id == project_id)
+        
+        # Get all active tasks
+        active_tasks = query.all()
+        
+        if not active_tasks:
+            return {
+                "status": "success",
+                "message": "No active tasks found",
+                "total_tasks": 0,
+                "tasks_analyzed": 0,
+                "analysis_timestamp": now.isoformat(),
+                "results": []
+            }
+        
+        # Process each task using the same logic as individual endpoint
+        results = []
+        total_risk_score = 0
+        risk_distribution = {
+            "extreme": 0,
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "minimal": 0
+        }
+        
+        for task in active_tasks:
+            try:
+                # Get task time data
+                allocated_hours = task.planned_hours or 0
+                start_date = task.start_date
+                deadline = task.deadline
+                
+                # Ensure timezone awareness for datetime objects
+                def make_timezone_aware(dt):
+                    if dt is None:
+                        return None
+                    if dt.tzinfo is None:
+                        return dt.replace(tzinfo=timezone.utc)
+                    return dt
+                
+                start_date = make_timezone_aware(start_date)
+                deadline = make_timezone_aware(deadline)
+                
+                # Calculate time left until deadline (in hours)
+                if not deadline:
+                    time_left_hours = 0
+                    is_overdue = False
+                    overdue_hours = 0
+                else:
+                    time_left = deadline - now
+                    time_left_hours = max(0, time_left.total_seconds() / 3600)
+                    is_overdue = time_left.total_seconds() < 0
+                    overdue_hours = abs(time_left.total_seconds() / 3600) if is_overdue else 0
+                
+                # Calculate time passed since start (in hours)
+                time_passed_hours = 0
+                if start_date:
+                    time_passed = now - start_date
+                    time_passed_hours = max(0, time_passed.total_seconds() / 3600)
+                
+                # Calculate total time available (from start to deadline)
+                total_time_hours = 0
+                if start_date and deadline:
+                    total_time = deadline - start_date
+                    total_time_hours = max(0, total_time.total_seconds() / 3600)
+                
+                # Calculate time risk using the formula
+                epsilon = 1  # Small number to avoid division by zero
+                if time_left_hours <= 0:
+                    # Task is overdue - calculate how much time is needed vs how much is overdue
+                    overdue_hours = abs(time_left_hours)
+                    time_risk_percentage = (allocated_hours / (overdue_hours + epsilon)) * 100
+                else:
+                    # Allow risk to exceed 100% to show true severity
+                    time_risk_percentage = (allocated_hours / (time_left_hours + epsilon)) * 100
+                
+                # Optional: Calculate urgency ratio including time passed
+                urgency_ratio = 0
+                if total_time_hours > 0:
+                    urgency_ratio = (time_passed_hours + allocated_hours) / (total_time_hours + 1)
+                    urgency_ratio = min(1.0, urgency_ratio)  # Cap at 1.0
+                
+                # Apply risk boosts for critical time situations
+                risk_boosts = []
+                final_risk = time_risk_percentage
+                
+                if time_left_hours < 4:  # Less than 4 hours left
+                    final_risk += 10
+                    risk_boosts.append("Very close to deadline (< 4 hours)")
+                
+                if time_left_hours < allocated_hours / 2:  # Barely enough time left
+                    final_risk += 10
+                    risk_boosts.append("Insufficient time remaining")
+                
+                # Determine risk level based on uncapped risk
+                if final_risk >= 200:
+                    risk_level = "extreme"
+                elif final_risk >= 150:
+                    risk_level = "critical"
+                elif final_risk >= 100:
+                    risk_level = "high"
+                elif final_risk >= 60:
+                    risk_level = "medium"
+                elif final_risk >= 30:
+                    risk_level = "low"
+                else:
+                    risk_level = "minimal"
+                
+                # Update risk distribution
+                risk_distribution[risk_level] += 1
+                total_risk_score += final_risk
+                
+                # Prepare task result
+                task_result = {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "project_id": task.project_id,
+                    "project_name": task.project.name if task.project else "Unknown",
+                    "assignee_id": task.assigned_to,
+                    "assignee_name": task.assignee.full_name if task.assignee else "Unassigned",
+                    "state": task.state,
+                    "time_risk_percentage": round(final_risk, 2),
+                    "risk_level": risk_level,
+                    "time_data": {
+                        "allocated_hours": allocated_hours,
+                        "time_left_hours": round(time_left_hours, 2),
+                        "time_passed_hours": round(time_passed_hours, 2),
+                        "total_time_hours": round(total_time_hours, 2),
+                        "is_overdue": is_overdue,
+                        "overdue_hours": round(overdue_hours, 2) if is_overdue else 0,
+                        "deadline": deadline.isoformat() if deadline else None,
+                        "start_date": start_date.isoformat() if start_date else None
+                    },
+                    "urgency_ratio": round(urgency_ratio, 3),
+                    "risk_boosts": risk_boosts,
+                    "calculation_timestamp": now.isoformat()
+                }
+                
+                results.append(task_result)
+                
+            except Exception as task_error:
+                # Log error but continue processing other tasks
+                results.append({
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "error": f"Failed to calculate time risk: {str(task_error)}",
+                    "calculation_timestamp": now.isoformat()
+                })
+        
+        # Calculate summary statistics
+        successful_analyses = len([r for r in results if "error" not in r])
+        average_risk_score = total_risk_score / successful_analyses if successful_analyses > 0 else 0
+        
+        # Sort results by risk level (highest risk first)
+        risk_level_order = {"extreme": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "minimal": 1}
+        results.sort(key=lambda x: risk_level_order.get(x.get("risk_level", "minimal"), 0), reverse=True)
+        
+        # Prepare comprehensive response
+        response = {
+            "status": "success",
+            "total_tasks": len(active_tasks),
+            "tasks_analyzed": successful_analyses,
+            "analysis_timestamp": now.isoformat(),
+            "summary": {
+                "average_risk_score": round(average_risk_score, 2),
+                "highest_risk_score": max([r.get("time_risk_percentage", 0) for r in results if "error" not in r], default=0),
+                "lowest_risk_score": min([r.get("time_risk_percentage", 0) for r in results if "error" not in r], default=0),
+                "risk_distribution": risk_distribution,
+                "overdue_tasks": len([r for r in results if r.get("time_data", {}).get("is_overdue", False)]),
+                "critical_tasks": risk_distribution["extreme"] + risk_distribution["critical"] + risk_distribution["high"]
+            },
+            "results": results
+        }
+        
+        # Cache the results in Redis for quick access
+        try:
+            redis_client = get_redis_client()
+            cache_key = f"all_active_tasks_time_risk:{project_id or 'all'}"
+            # Cache for 30 minutes (1800 seconds)
+            redis_client.setex(cache_key, 1800, response)
+        except Exception as e:
+            # Don't fail the request if Redis is unavailable
+            response["cache_warning"] = f"Could not cache results: {str(e)}"
+        
+        return response
         
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error retrieving time risk result: {str(e)}"
+            detail=f"Error calculating time risk for all active tasks: {str(e)}"
 )
 
 @router.get("/task/{task_id}/risk")
@@ -782,3 +1000,378 @@ async def analyze_project_tasks_risk_batch(
             status_code=500,
             detail=f"Error queuing project risk analysis: {str(e)}"
         ) 
+
+@router.get("/tasks/suggest-optimized-due-dates")
+async def suggest_optimized_due_dates(
+    project_id: int = None,  # Optional: filter by project
+    target_risk_range: str = "20-50",  # Default optimal range
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Suggest optimized due dates for tasks based on their current time risk scores.
+    
+    This endpoint analyzes all active tasks and suggests new due dates to achieve
+    optimal time risk scores (default: 20-50%).
+    
+    Query Parameters:
+    - project_id: Optional - Filter tasks by specific project
+    - target_risk_range: Optional - Target risk range (e.g., "20-50", "30-60")
+    
+    The endpoint identifies:
+    1. Tasks with very low time risk (< 15%) - can be moved closer
+    2. Tasks with very high time risk (> 80%) - need more time
+    3. Tasks with extreme risk (> 150%) - urgent rescheduling needed
+    
+    Returns comprehensive optimization suggestions with impact analysis.
+    """
+    try:
+        # Parse target risk range
+        try:
+            min_target, max_target = map(float, target_risk_range.split("-"))
+        except ValueError:
+            min_target, max_target = 20.0, 50.0  # Default fallback
+        
+        # Get current time with timezone awareness
+        now = datetime.now(timezone.utc)
+        
+        # Build query for active tasks
+        query = db.query(Task).filter(
+            Task.state.in_(['in_progress', 'approved', 'changes_requested'])
+        )
+        
+        # Filter by project if specified
+        if project_id:
+            query = query.filter(Task.project_id == project_id)
+        
+        # Get all active tasks
+        active_tasks = query.all()
+        
+        if not active_tasks:
+            return {
+                "status": "success",
+                "message": "No active tasks found",
+                "total_tasks": 0,
+                "tasks_analyzed": 0,
+                "analysis_timestamp": now.isoformat(),
+                "suggestions": []
+            }
+        
+        # Process each task and generate optimization suggestions
+        suggestions = []
+        optimization_summary = {
+            "tasks_needing_earlier_deadline": 0,
+            "tasks_needing_later_deadline": 0,
+            "tasks_optimal": 0,
+            "total_risk_reduction": 0,
+            "average_risk_improvement": 0
+        }
+        
+        for task in active_tasks:
+            try:
+                # Calculate current time risk using the same logic
+                allocated_hours = task.planned_hours or 0
+                start_date = task.start_date
+                deadline = task.deadline
+                
+                # Ensure timezone awareness
+                def make_timezone_aware(dt):
+                    if dt is None:
+                        return None
+                    if dt.tzinfo is None:
+                        return dt.replace(tzinfo=timezone.utc)
+                    return dt
+                
+                start_date = make_timezone_aware(start_date)
+                deadline = make_timezone_aware(deadline)
+                
+                # Calculate current time risk
+                if not deadline:
+                    current_risk = 0
+                    time_left_hours = 0
+                    is_overdue = False
+                else:
+                    time_left = deadline - now
+                    time_left_hours = max(0, time_left.total_seconds() / 3600)
+                    is_overdue = time_left.total_seconds() < 0
+                    
+                    # Calculate current risk
+                    epsilon = 1
+                    if time_left_hours <= 0:
+                        overdue_hours = abs(time_left_hours)
+                        current_risk = (allocated_hours / (overdue_hours + epsilon)) * 100
+                    else:
+                        current_risk = (allocated_hours / (time_left_hours + epsilon)) * 100
+                
+                # Determine if optimization is needed
+                optimization_needed = False
+                optimization_type = None
+                reason = None
+                
+                if current_risk < 15:
+                    optimization_needed = True
+                    optimization_type = "move_closer"
+                    reason = "Very low time risk - deadline can be moved closer"
+                elif current_risk > 80:
+                    optimization_needed = True
+                    optimization_type = "extend_deadline"
+                    reason = "High time risk - needs more time"
+                elif current_risk > 150:
+                    optimization_needed = True
+                    optimization_type = "urgent_extend"
+                    reason = "Extreme time risk - urgent rescheduling needed"
+                
+                # Calculate suggested deadline
+                suggested_deadline = None
+                suggested_risk = current_risk
+                risk_improvement = 0
+                
+                if optimization_needed and allocated_hours > 0:
+                    # Calculate optimal time needed based on target risk
+                    target_risk = (min_target + max_target) / 2  # Use middle of range
+                    
+                    # Calculate required time: T_required = T_alloc / (target_risk / 100) - ε
+                    epsilon = 1
+                    required_hours = (allocated_hours / (target_risk / 100)) - epsilon
+                    required_hours = max(required_hours, allocated_hours * 0.5)  # Minimum 50% of allocated time
+                    
+                    # Calculate suggested deadline
+                    suggested_deadline = now + timedelta(hours=required_hours)
+                    
+                    # Calculate suggested risk
+                    suggested_risk = (allocated_hours / (required_hours + epsilon)) * 100
+                    risk_improvement = current_risk - suggested_risk
+                
+                # Prepare suggestion
+                suggestion = {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "project_id": task.project_id,
+                    "project_name": task.project.name if task.project else "Unknown",
+                    "assignee_id": task.assigned_to,
+                    "assignee_name": task.assignee.full_name if task.assignee else "Unassigned",
+                    "current_state": {
+                        "deadline": deadline.isoformat() if deadline else None,
+                        "allocated_hours": allocated_hours,
+                        "time_left_hours": round(time_left_hours, 2),
+                        "current_risk_score": round(current_risk, 2),
+                        "is_overdue": is_overdue
+                    },
+                    "optimization_needed": optimization_needed,
+                    "optimization_type": optimization_type,
+                    "reason": reason,
+                    "suggestion": {
+                        "suggested_deadline": suggested_deadline.isoformat() if suggested_deadline else None,
+                        "suggested_risk_score": round(suggested_risk, 2),
+                        "risk_improvement": round(risk_improvement, 2),
+                        "days_change": round((suggested_deadline - deadline).total_seconds() / 86400, 1) if suggested_deadline and deadline else 0
+                    },
+                    "priority": "high" if current_risk > 150 else "medium" if current_risk > 80 else "low",
+                    "analysis_timestamp": now.isoformat()
+                }
+                
+                suggestions.append(suggestion)
+                
+                # Update summary
+                if optimization_needed:
+                    if optimization_type in ["move_closer"]:
+                        optimization_summary["tasks_needing_earlier_deadline"] += 1
+                    else:
+                        optimization_summary["tasks_needing_later_deadline"] += 1
+                    optimization_summary["total_risk_reduction"] += risk_improvement
+                else:
+                    optimization_summary["tasks_optimal"] += 1
+                
+            except Exception as task_error:
+                # Log error but continue processing other tasks
+                suggestions.append({
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "error": f"Failed to analyze task: {str(task_error)}",
+                    "analysis_timestamp": now.isoformat()
+                })
+        
+        # Calculate summary statistics
+        successful_analyses = len([s for s in suggestions if "error" not in s])
+        optimization_summary["average_risk_improvement"] = (
+            optimization_summary["total_risk_reduction"] / 
+            (optimization_summary["tasks_needing_earlier_deadline"] + optimization_summary["tasks_needing_later_deadline"])
+            if (optimization_summary["tasks_needing_earlier_deadline"] + optimization_summary["tasks_needing_later_deadline"]) > 0 
+            else 0
+        )
+        
+        # Sort suggestions by priority and risk improvement
+        suggestions.sort(key=lambda x: (
+            {"high": 3, "medium": 2, "low": 1}.get(x.get("priority", "low"), 0),
+            x.get("suggestion", {}).get("risk_improvement", 0)
+        ), reverse=True)
+        
+        # Prepare comprehensive response
+        response = {
+            "status": "success",
+            "total_tasks": len(active_tasks),
+            "tasks_analyzed": successful_analyses,
+            "target_risk_range": f"{min_target}-{max_target}%",
+            "analysis_timestamp": now.isoformat(),
+            "optimization_summary": {
+                "tasks_needing_optimization": optimization_summary["tasks_needing_earlier_deadline"] + optimization_summary["tasks_needing_later_deadline"],
+                "tasks_optimal": optimization_summary["tasks_optimal"],
+                "tasks_needing_earlier_deadline": optimization_summary["tasks_needing_earlier_deadline"],
+                "tasks_needing_later_deadline": optimization_summary["tasks_needing_later_deadline"],
+                "total_risk_reduction": round(optimization_summary["total_risk_reduction"], 2),
+                "average_risk_improvement": round(optimization_summary["average_risk_improvement"], 2)
+            },
+            "suggestions": suggestions
+        }
+        
+        # Cache the results in Redis for quick access
+        try:
+            redis_client = get_redis_client()
+            cache_key = f"optimized_due_dates:{project_id or 'all'}:{target_risk_range}"
+            # Cache for 15 minutes (900 seconds)
+            redis_client.setex(cache_key, 900, response)
+        except Exception as e:
+            # Don't fail the request if Redis is unavailable
+            response["cache_warning"] = f"Could not cache results: {str(e)}"
+        
+        return response
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error suggesting optimized due dates: {str(e)}"
+        )
+
+@router.post("/tasks/apply-optimized-due-dates")
+async def apply_optimized_due_dates(
+    task_updates: List[Dict],  # List of {task_id, new_deadline, reason}
+    db: Session = Depends(get_db)
+) -> Dict:
+    """
+    Apply suggested optimized due dates to tasks.
+    
+    This endpoint takes a list of task updates and applies the new deadlines.
+    Each update should contain:
+    - task_id: ID of the task to update
+    - new_deadline: ISO format datetime string for the new deadline
+    - reason: Optional reason for the change
+    
+    Returns summary of applied changes and any errors.
+    """
+    try:
+        results = []
+        successful_updates = 0
+        failed_updates = 0
+        
+        for update in task_updates:
+            try:
+                task_id = update.get("task_id")
+                new_deadline_str = update.get("new_deadline")
+                reason = update.get("reason", "AI-optimized deadline")
+                
+                if not task_id or not new_deadline_str:
+                    results.append({
+                        "task_id": task_id,
+                        "status": "failed",
+                        "error": "Missing task_id or new_deadline"
+                    })
+                    failed_updates += 1
+                    continue
+                
+                # Get task from database
+                task = db.query(Task).filter(Task.id == task_id).first()
+                if not task:
+                    results.append({
+                        "task_id": task_id,
+                        "status": "failed",
+                        "error": "Task not found"
+                    })
+                    failed_updates += 1
+                    continue
+                
+                # Parse new deadline
+                try:
+                    new_deadline = datetime.fromisoformat(new_deadline_str.replace('Z', '+00:00'))
+                    if new_deadline.tzinfo is None:
+                        new_deadline = new_deadline.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    results.append({
+                        "task_id": task_id,
+                        "status": "failed",
+                        "error": "Invalid deadline format"
+                    })
+                    failed_updates += 1
+                    continue
+                
+                # Store old deadline for comparison
+                old_deadline = task.deadline
+                
+                # Update task deadline
+                task.deadline = new_deadline
+                
+                # Add activity log or comment about the change
+                # (You can implement this based on your activity logging system)
+                
+                # Commit the change
+                db.commit()
+                
+                results.append({
+                    "task_id": task_id,
+                    "task_name": task.name,
+                    "status": "success",
+                    "old_deadline": old_deadline.isoformat() if old_deadline else None,
+                    "new_deadline": new_deadline.isoformat(),
+                    "reason": reason,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                })
+                successful_updates += 1
+                
+            except Exception as update_error:
+                db.rollback()
+                results.append({
+                    "task_id": update.get("task_id"),
+                    "status": "failed",
+                    "error": f"Update failed: {str(update_error)}"
+                })
+                failed_updates += 1
+        
+        return {
+            "status": "completed",
+            "total_updates": len(task_updates),
+            "successful_updates": successful_updates,
+            "failed_updates": failed_updates,
+            "results": results,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error applying optimized due dates: {str(e)}"
+        )
+
+@router.get("/projects/{project_id}/optimize-timeline/latest")
+async def get_latest_timeline_optimization(
+    project_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch the latest optimized due dates for all tasks in a project by calling the suggest_optimized_due_dates logic (not Redis).
+    Returns: { "suggested_schedule": [ { "task_id": int, "new_due_date": str }, ... ] }
+    """
+    try:
+        # Call the suggest_optimized_due_dates logic directly
+        result = await suggest_optimized_due_dates(project_id=project_id, db=db)
+        # Reformat the result to the expected format
+        suggested_schedule = []
+        for suggestion in result.get("suggestions", []):
+            # Only include suggestions with a suggested deadline
+            new_due_date = suggestion.get("suggestion", {}).get("suggested_deadline")
+            if new_due_date:
+                suggested_schedule.append({
+                    "task_id": suggestion["task_id"],
+                    "new_due_date": new_due_date
+                })
+        return {"suggested_schedule": suggested_schedule}
+    except Exception as e:
+        return {"suggested_schedule": [], "error": str(e)} 

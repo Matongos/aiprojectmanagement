@@ -1240,14 +1240,14 @@ export default function DashboardPage() {
                         {(teamDirectory.filter(u => u.name.toLowerCase().includes(teamSearch.toLowerCase()) || (u.job_title || '').toLowerCase().includes(teamSearch.toLowerCase()))).map((member) => (
                           <div key={member.id} className="p-3 rounded-lg border hover:bg-gray-50">
                             <div className="flex items-center space-x-3">
-                              <Avatar className="h-10 w-10">
-                                <AvatarImage src={"/default-avatar.png"} alt={member.name} />
-                                <AvatarFallback>{member.name[0]}</AvatarFallback>
-                              </Avatar>
-                              <div className="flex-1">
-                                <p className="text-sm font-medium">{member.name}</p>
-                                <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
-                              </div>
+                            <Avatar className="h-10 w-10">
+                              <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                              <AvatarFallback>{member.name[0]}</AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium">{member.name}</p>
+                              <p className="text-xs text-gray-500">{member.job_title || 'No job title'}</p>
+                            </div>
                               <div className="flex items-center space-x-2">
                                 <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">
                                   {member.tasks.length} tasks
@@ -1293,7 +1293,7 @@ export default function DashboardPage() {
                 )}
               </CardTitle>
             </CardHeader>
-                        <CardContent>
+            <CardContent>
               <div className="space-y-3 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
                 {isLoadingTeamDirectory ? (
                   <div className="flex justify-center py-4">
@@ -1306,13 +1306,13 @@ export default function DashboardPage() {
                     <div key={member.id} className="p-3 rounded-lg border hover:bg-gray-50">
                       <div className="flex items-center space-x-3">
                         <Avatar className="h-8 w-8">
-                          <AvatarImage src={"/default-avatar.png"} alt={member.name} />
-                          <AvatarFallback>{member.name[0]}</AvatarFallback>
-                        </Avatar>
+                        <AvatarImage src={"/default-avatar.png"} alt={member.name} />
+                        <AvatarFallback>{member.name[0]}</AvatarFallback>
+                      </Avatar>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{member.name}</p>
                           <p className="text-xs text-gray-500 truncate">{member.job_title || 'No job title'}</p>
-                        </div>
+                      </div>
                         <div className="flex items-center space-x-2">
                           <div className="text-xs text-gray-600 font-semibold whitespace-nowrap">
                             {member.tasks.length} tasks

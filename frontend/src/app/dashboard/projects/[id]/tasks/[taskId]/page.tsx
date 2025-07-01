@@ -257,9 +257,16 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   
-  // Unwrap params at the very start of the component
-  const resolvedParams = React.use(params);
-  const { id, taskId } = resolvedParams;
+  // --- PARAMS RESOLUTION FIX ---
+  const [resolvedParams, setResolvedParams] = useState<{ id: string; taskId: string } | null>(null);
+
+  useEffect(() => {
+    params.then(setResolvedParams);
+  }, [params]);
+
+  const id = resolvedParams?.id;
+  const taskId = resolvedParams?.taskId;
+  // --- PARAMS RESOLUTION FIX ---
 
   // Constants
   const itemsPerPage = 4;
@@ -364,8 +371,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     data: activitiesData, 
     isLoading: isLoadingActivities
   } = useQuery({
-    queryKey: ['activities', resolvedParams.taskId],
+    queryKey: ['activities', resolvedParams?.taskId],
     queryFn: async () => {
+      if (!resolvedParams?.taskId) return [];
       const response = await fetch(`${API_BASE_URL}/activities/task/${resolvedParams.taskId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -376,7 +384,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       if (!response.ok) throw new Error('Failed to fetch activities');
       return response.json();
     },
-    enabled: !!token && !!resolvedParams.taskId,
+    enabled: !!token && !!resolvedParams?.taskId,
     refetchInterval: 5000, // Refetch every 5 seconds
     refetchOnWindowFocus: true,
     refetchOnMount: true,
@@ -385,8 +393,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
 
   // Add log notes query
   const { data: logNotesData, isLoading: isLoadingLogNotes } = useQuery({
-    queryKey: ['log-notes', resolvedParams.taskId],
+    queryKey: ['log-notes', resolvedParams?.taskId],
     queryFn: async () => {
+      if (!resolvedParams?.taskId) return [];
       const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams.taskId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -398,7 +407,7 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       const data = await response.json();
       return data;
     },
-    enabled: !!token && !!resolvedParams.taskId,
+    enabled: !!token && !!resolvedParams?.taskId,
     refetchInterval: 5000, // Refetch every 5 seconds
     refetchOnWindowFocus: true,
     refetchOnMount: true,
@@ -464,6 +473,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // Add priority state and change handler
   const [currentPriority, setCurrentPriority] = useState<TaskPriority>(TaskPriority.NORMAL);
   const [isPriorityChanged, setIsPriorityChanged] = useState(false);
+  // --- AI SUGGESTED DUE DATE STATE ---
+  const [aiSuggestedDate, setAiSuggestedDate] = useState<string | null>(null);
+  const [showAiSuggestion, setShowAiSuggestion] = useState(false);
 
   // Add scroll handler to show/hide scroll to latest button
   const handleActivityScroll = useCallback(() => {
@@ -600,11 +612,11 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // Fetch log notes effect
   useEffect(() => {
     const fetchLogNotes = async () => {
-      if (!token || !resolvedParams.taskId) return;
+      if (!token || !resolvedParams?.taskId) return;
       
       try {
-        console.log('Fetching log notes for task:', resolvedParams.taskId);
-        const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams.taskId}`, {
+        console.log('Fetching log notes for task:', resolvedParams?.taskId);
+        const response = await fetch(`${API_BASE_URL}/log-notes/task/${resolvedParams?.taskId}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -629,10 +641,10 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       }
     };
 
-    if (resolvedParams.taskId) {
+    if (resolvedParams?.taskId) {
       fetchLogNotes();
     }
-  }, [resolvedParams.taskId, token]);
+  }, [resolvedParams?.taskId, token]);
 
   // Fetch comments
   const { data: comments = [], isLoading: isLoadingComments } = useQuery<Comment[]>({
@@ -807,6 +819,49 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       setIsAllocatedTimeChanged(false);
     }
   }, [task]);
+
+  // --- FETCH AI SUGGESTION EFFECT (DEFENSIVE + DEBUG) ---
+  useEffect(() => {
+    console.log('AI SUGGESTION FETCH', { id, taskId, token, task });
+    if (!token || !id || !taskId || !task) return;
+    const fetchAiSuggestion = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/ai/projects/${id}/optimize-timeline/latest`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.suggested_schedule && Array.isArray(data.suggested_schedule)) {
+            const suggestion = data.suggested_schedule.find(
+              (s: { task_id: number }) => s.task_id === Number(taskId)
+            );
+            if (suggestion && suggestion.new_due_date) {
+              const suggestedDate = new Date(suggestion.new_due_date);
+              const formattedDate = `${suggestedDate.getFullYear()}-${String(suggestedDate.getMonth() + 1).padStart(2, '0')}-${String(suggestedDate.getDate()).padStart(2, '0')}T${String(suggestedDate.getHours()).padStart(2, '0')}:${String(suggestedDate.getMinutes()).padStart(2, '0')}`;
+              const currentDeadline = task.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : null;
+              if (formattedDate !== currentDeadline) {
+                setAiSuggestedDate(formattedDate);
+                setShowAiSuggestion(true);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching AI suggestion:", error);
+      }
+    };
+    fetchAiSuggestion();
+  }, [id, taskId, token, task]);
+
+  // --- APPLY AI SUGGESTION HANDLER ---
+  const handleApplyAiSuggestion = () => {
+    if (aiSuggestedDate) {
+      setDeadline(aiSuggestedDate); // Set the deadline input to the AI date
+      const taskDeadline = task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : null;
+      setIsDeadlineChanged(aiSuggestedDate !== taskDeadline); // Mark as changed
+      setShowAiSuggestion(false); // Hide the suggestion
+    }
+  };
 
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
@@ -2815,6 +2870,32 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                   </div>
                 </div>
                 <div>
+                  {/* AI SUGGESTED DUE DATE UI */}
+                  {showAiSuggestion && aiSuggestedDate && (
+                    <div>
+                      <label className="block text-sm font-medium text-blue-700 mb-1">AI Suggested Due Date</label>
+                      <div 
+                        className="mt-1 p-2 bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-md cursor-pointer hover:border-blue-400 transition-all"
+                        onClick={handleApplyAiSuggestion}
+                        title="Click to apply this date"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <div className="flex items-center justify-center w-5 h-5 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full">
+                            <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                            </svg>
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-semibold text-blue-900">{aiSuggestedDate.replace('T', ' ')}</div>
+                          </div>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            AI
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* DEADLINE INPUT */}
                   <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
                   <Input 
                     type="datetime-local" 
