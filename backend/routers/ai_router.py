@@ -1,23 +1,30 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import Dict, List, Any
 from datetime import datetime, timedelta, timezone
 from celery.result import AsyncResult
 import json
+import redis
 
 from database import get_db
+from routers.auth import get_current_user
 from services.ai_service import get_ai_service
 from models.task import Task
+from models.user import User
 from models.task_risk import TaskRisk
 from services.redis_service import get_redis_client
 from crud.task_risk import TaskRiskCRUD
 from schemas.task_risk import TaskRiskAnalysisResponse, TaskRiskHistoryResponse, ProjectRiskSummaryResponse
 from tasks.task_risk import calculate_task_risk_analysis_task
+from tasks.analytics import optimize_resources_task
 
 router = APIRouter(
     prefix="/ai",
     tags=["AI Analysis"]
 )
+
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
 @router.get("/task/{task_id}/time-risk")
 async def calculate_task_time_risk(
@@ -468,7 +475,7 @@ async def calculate_all_active_tasks_time_risk(
         raise HTTPException(
             status_code=500,
             detail=f"Error calculating time risk for all active tasks: {str(e)}"
-)
+        )
 
 @router.get("/task/{task_id}/risk")
 async def analyze_task_risk(
@@ -999,7 +1006,7 @@ async def analyze_project_tasks_risk_batch(
         raise HTTPException(
             status_code=500,
             detail=f"Error queuing project risk analysis: {str(e)}"
-        ) 
+        )
 
 @router.get("/tasks/suggest-optimized-due-dates")
 async def suggest_optimized_due_dates(
@@ -1374,4 +1381,107 @@ async def get_latest_timeline_optimization(
                 })
         return {"suggested_schedule": suggested_schedule}
     except Exception as e:
-        return {"suggested_schedule": [], "error": str(e)} 
+        return {"suggested_schedule": [], "error": str(e)}
+
+@router.get("/projects/{project_id}/optimize-resources")
+async def start_optimize_resources(project_id: int):
+    celery_task = optimize_resources_task.delay(project_id)
+    return {"celery_task_id": celery_task.id, "status": "queued"}
+
+@router.get("/projects/{project_id}/optimize-resources/status/{celery_task_id}")
+async def get_optimize_resources_status(project_id: int, celery_task_id: str):
+    result = AsyncResult(celery_task_id)
+    if result.state == "PENDING":
+        return {"status": "pending"}
+    elif result.state == "SUCCESS":
+        return {"status": "success", "result": result.result}
+    elif result.state == "FAILURE":
+        return {"status": "failure", "error": str(result.result)}
+    else:
+        return {"status": result.state.lower()}
+
+@router.get("/personalized-ai-suggestions/{user_id}")
+async def get_personalized_ai_suggestions(user_id: int):
+    """
+    Retrieve personalized AI suggestions for a user.
+    
+    This endpoint retrieves suggestions based on the user's preferences and history.
+    
+    Returns:
+        Dict containing:
+        - status: str
+        - source: str
+        - data: Dict
+    """
+    try:
+        redis_client = get_redis_client()
+        cache_key = f"personalized_ai_suggestions:{user_id}"
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            # Parse the JSON string if needed
+            if isinstance(cached_data, str):
+                try:
+                    cached_data = json.loads(cached_data)
+                except Exception:
+                    pass
+            return {
+                "status": "success",
+                "source": "redis_latest",
+                "data": cached_data
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": "No personalized AI suggestions found for this user."
+            }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving personalized AI suggestions: {str(e)}"
+        )
+
+@router.get("/projects/{project_id}/optimize-resources/latest")
+async def get_latest_resource_suggestion(project_id: int):
+    redis_key = f"ai_assignment_suggestion:project:{project_id}"
+    cached = redis_client.get(redis_key)
+    if cached:
+        return json.loads(cached)
+    else:
+        return {"status": "not_found"}
+
+@router.get("/tasks/ai-suggestions/personalized/cached", response_model=Dict[str, Any])
+async def get_cached_personalized_ai_suggestions(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get the latest personalized AI suggestions for the user directly from Redis.
+    Always return the most recent available result (from personalized_ai_suggestions:{user_id}), regardless of expiration.
+    If none exists, return a not found message.
+    """
+    try:
+        from services.redis_service import get_redis_client
+        redis_client = get_redis_client()
+        cache_key = f"personalized_ai_suggestions:{current_user['id']}"
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            # Parse the JSON string if needed
+            if isinstance(cached_data, str):
+                try:
+                    cached_data = json.loads(cached_data)
+                except Exception:
+                    pass
+            return {
+                "status": "success",
+                "source": "redis_latest",
+                "data": cached_data
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": "No personalized AI suggestions found for this user."
+            }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting cached suggestions: {str(e)}"
+        ) 

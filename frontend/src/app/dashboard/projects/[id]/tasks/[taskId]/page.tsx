@@ -476,6 +476,9 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
   // --- AI SUGGESTED DUE DATE STATE ---
   const [aiSuggestedDate, setAiSuggestedDate] = useState<string | null>(null);
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
+  // --- AI SUGGESTED ASSIGNMENT STATE ---
+  const [aiSuggestedAssignee, setAiSuggestedAssignee] = useState<{id: number, name: string} | null>(null);
+  const [showAiAssignmentSuggestion, setShowAiAssignmentSuggestion] = useState(false);
 
   // Add scroll handler to show/hide scroll to latest button
   const handleActivityScroll = useCallback(() => {
@@ -863,6 +866,54 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
     }
   };
 
+  // --- FETCH AI ASSIGNMENT SUGGESTION EFFECT ---
+  useEffect(() => {
+    console.log('AI ASSIGNMENT SUGGESTION FETCH', { id, taskId, token, task });
+    if (!token || !id || !taskId || !task) return;
+    
+    // Only fetch if task is unassigned
+    if (task.assigned_to) return;
+    
+    const fetchAiAssignmentSuggestion = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/ai/projects/${id}/optimize-resources/latest`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.assignments && Array.isArray(data.assignments)) {
+            const suggestion = data.assignments.find(
+              (s: { task_id: number }) => s.task_id === Number(taskId)
+            );
+            if (suggestion && suggestion.assigned_to) {
+              setAiSuggestedAssignee({
+                id: suggestion.assigned_to,
+                name: suggestion.assigned_to_name
+              });
+              setShowAiAssignmentSuggestion(true);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching AI assignment suggestion:", error);
+      }
+    };
+    fetchAiAssignmentSuggestion();
+  }, [id, taskId, token, task]);
+
+  // --- APPLY AI ASSIGNMENT SUGGESTION HANDLER ---
+  const handleApplyAiAssignmentSuggestion = () => {
+    if (aiSuggestedAssignee) {
+      // Find the user in the users list
+      const suggestedUser = users.find(u => u.id === aiSuggestedAssignee.id);
+      if (suggestedUser) {
+        setSelectedAssignees([suggestedUser]);
+        setIsAssigneesChanged(true);
+        setShowAiAssignmentSuggestion(false);
+      }
+    }
+  };
+
   const actionButtons = (
     <div className="flex items-center gap-2 overflow-x-auto pb-2">
       <Button 
@@ -890,6 +941,29 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
       >
         <MessageSquare className="w-4 h-4" />
         Comments
+      </Button>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="flex items-center gap-2 whitespace-nowrap"
+        onClick={async () => {
+          try {
+            const response = await fetch(`${API_BASE_URL}/ai/projects/${id}/optimize-resources/latest`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (response.ok) {
+              const data = await response.json();
+              toast.success(`AI suggested ${data.suggested_assignments} assignments for ${data.total_unassigned_tasks} unassigned tasks`);
+              // Refresh the page to show new suggestions
+              window.location.reload();
+            }
+          } catch (error) {
+            toast.error('Failed to optimize resources');
+          }
+        }}
+      >
+        <Users className="w-4 h-4" />
+        AI Optimize Resources
       </Button>
       <Button 
         variant="outline" 
@@ -2737,6 +2811,32 @@ export default function TaskDetails({ params }: TaskDetailsProps) {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Assignees</label>
                   <div className="space-y-2">
+                    {/* AI SUGGESTED ASSIGNMENT UI */}
+                    {showAiAssignmentSuggestion && aiSuggestedAssignee && (
+                      <div>
+                        <label className="block text-sm font-medium text-green-700 mb-1">AI Suggested Assignee</label>
+                        <div 
+                          className="mt-1 p-2 bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-md cursor-pointer hover:border-green-400 transition-all"
+                          onClick={handleApplyAiAssignmentSuggestion}
+                          title="Click to assign this user"
+                        >
+                          <div className="flex items-center space-x-2">
+                            <div className="flex items-center justify-center w-5 h-5 bg-gradient-to-r from-green-500 to-blue-600 rounded-full">
+                              <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-sm font-semibold text-green-900">{aiSuggestedAssignee.name}</div>
+                            </div>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              AI
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {/* ASSIGNEE SELECTION */}
                     <div 
                       className="flex items-center cursor-pointer border rounded-md p-2 hover:bg-gray-50"
                       onClick={() => setShowAssigneeSelection(true)}

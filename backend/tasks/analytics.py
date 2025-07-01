@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 from typing import Dict, Any, List
 import json
+import redis
 
 from database import get_db
 from models.task import Task
@@ -15,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 # Import the Celery app
 from celery_app import celery_app
+from sqlalchemy.orm import sessionmaker
+from database import engine
+from models.user import User
+from models.task import Task
+import requests
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
 @celery_app.task(bind=True)
 def calculate_active_tasks_risks_task(self, user_id: int, is_superuser: bool, detailed: bool = True):
@@ -1157,4 +1167,116 @@ def _extract_key_recommendations(recommendations):
     if not key_recommendations:
         return "No specific recommendations available"
     
-    return "\n".join(key_recommendations[:5])  # Limit to top 5 recommendations 
+    return "\n".join(key_recommendations[:5])  # Limit to top 5 recommendations
+
+# Celery task for AI-driven resource allocation optimization
+@celery_app.task(bind=True)
+def optimize_resources_task(self, project_id):
+    db = SessionLocal()
+    try:
+        # Fetch users
+        users = db.query(User).filter(User.is_active == True).all()
+        # Fetch project tasks
+        project_tasks = db.query(Task).filter(
+            Task.project_id == project_id,
+            Task.state.in_(['in_progress', 'approved', 'changes_requested', 'to_do'])
+        ).all()
+        # Find unassigned tasks
+        unassigned_tasks = [task for task in project_tasks if not task.assigned_to]
+        # Prepare tasks data
+        tasks_data = []
+        for task in unassigned_tasks:
+            required_skills = []
+            if task.description:
+                desc = task.description.lower()
+                for skill in ["python", "devops", "ui/ux", "react", "sql", "docker", "aws", "design", "testing", "project management"]:
+                    if skill in desc:
+                        required_skills.append(skill)
+            tasks_data.append({
+                "id": task.id,
+                "name": task.name,
+                "priority": task.priority,
+                "description": task.description,
+                "required_skills": required_skills
+            })
+        # Prepare users data
+        users_data = []
+        for user in users:
+            active_tasks = db.query(Task).filter(
+                Task.assigned_to == user.id,
+                Task.state.in_(['in_progress', 'approved', 'changes_requested', 'to_do'])
+            ).count()
+            users_data.append({
+                "id": user.id,
+                "username": user.username,
+                "full_name": user.full_name,
+                "job_title": user.job_title,
+                "profession": user.profession,
+                "experience_level": user.experience_level,
+                "skills": user.skills or [],
+                "expertise": user.expertise or [],
+                "certifications": user.certifications or [],
+                "specializations": user.specializations or [],
+                "roles": [role.name for role in user.roles] if user.roles else [],
+                "current_workload": active_tasks,
+                "availability": "available"
+            })
+        # Build prompt
+        prompt = f"""
+Role: You are an AI project resource allocator. Your job is to assign tasks to the best available team member based on:
+- Skills match (required)
+- Current workload (lower is better)
+- Task priority (high priority takes precedence)
+- Availability (no conflicts)
+- Roles and expertise
+
+Data:
+{{
+  "users": {users_data},
+  "tasks": {tasks_data}
+}}
+
+Task: Assign each task to the best user. Return JSON in this format:
+{{
+  "task_analysis": [{{"task_id": int, "inferred_skills": list}}],
+  "assignments": [{{"task_id": int, "assigned_to": int, "reason": str}}]
+}}
+"""
+        ollama_payload = {
+            "model": "mistral",
+            "prompt": prompt,
+            "format": "json",
+            "stream": False
+        }
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json=ollama_payload,
+            timeout=120
+        )
+        response.raise_for_status()
+        ai_result = response.json()
+        ai_response = ai_result.get("response")
+        try:
+            parsed = json.loads(ai_response)
+            # Build user_id to name mapping
+            user_id_to_name = {user.id: user.full_name or user.username for user in users}
+            # Add assigned_to_name to each assignment
+            if "assignments" in parsed:
+                for assignment in parsed["assignments"]:
+                    best_user_id = assignment.get("assigned_to")
+                    assignment["assigned_to_name"] = user_id_to_name.get(best_user_id, "Unknown")
+            # Store in Redis for 1 hour
+            redis_key = f"ai_assignment_suggestion:project:{project_id}"
+            redis_client.set(redis_key, json.dumps(parsed), ex=3600)
+            return parsed
+        except Exception:
+            # Store raw result if parsing fails
+            redis_key = f"ai_assignment_suggestion:project:{project_id}"
+            redis_client.set(redis_key, json.dumps(ai_result), ex=3600)
+            return ai_result
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        return {"error": str(e), "traceback": tb}
+    finally:
+        db.close() 
