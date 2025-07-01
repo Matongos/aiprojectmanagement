@@ -108,6 +108,16 @@ class RedisService:
             logger.error(f"Error deleting key {key} from Redis: {str(e)}")
             return False
 
+    def set(self, key: str, value: Any) -> bool:
+        """Set value in Redis with no expiration."""
+        try:
+            serialized_value = json.dumps(value)
+            self._redis_client.set(key, serialized_value)
+            return True
+        except (redis.RedisError, TypeError) as e:
+            logger.error(f"Error setting key {key} in Redis: {str(e)}")
+            return False
+
 def get_redis_client() -> RedisService:
     """Get Redis service singleton instance"""
     return RedisService() 

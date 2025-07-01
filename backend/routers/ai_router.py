@@ -250,7 +250,7 @@ async def get_time_risk_result(
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving time risk result: {str(e)}"
-        )
+)
 
 @router.get("/task/{task_id}/risk")
 async def analyze_task_risk(

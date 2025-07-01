@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { KPICard } from "@/components/metrics/KPICard";
 import { ProjectMetricsChart } from "@/components/charts/ProjectMetricsChart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -128,33 +128,6 @@ interface Task {
   };
 }
 
-// Add interface for user risk score
-interface UserRiskScore {
-  scope: string;
-  user_id: number | null;
-  average_risk_score: number;
-  min_risk_score: number;
-  max_risk_score: number;
-  median_risk_score: number;
-  task_count: number;
-  risk_level: string;
-  ai_explanation: string;
-  high_risk_task_count: number;
-  critical_risk_task_count: number;
-}
-
-// Add interface for AI Task Insight
-interface AiTaskInsight {
-  task_id: number;
-  task_name: string;
-  assigned_to: string | null;
-  ai_insights: {
-    root_cause: string;
-    predicted_impact: string;
-    suggested_action: string;
-  };
-}
-
 // Add new interface for team directory user
 interface TeamDirectoryUser {
   id: number;
@@ -165,6 +138,108 @@ interface TeamDirectoryUser {
   tasks: { id: number; name: string; state: string; project_id: number; project_name: string; deadline?: string; priority?: string; assigned_to?: number }[];
 }
 
+// Add interface for active tasks risk summary
+interface ActiveTasksRiskSummary {
+  status: string;
+  summary: {
+    total_active_tasks: number;
+    average_risk_score: number;
+    highest_risk_score: number;
+    lowest_risk_score: number;
+    risk_distribution: {
+      extreme: number;
+      critical: number;
+      high: number;
+      medium: number;
+      low: number;
+      minimal: number;
+    };
+    tasks_needing_immediate_attention: number;
+    tasks_with_high_risk: number;
+    total_ai_insights: number;
+    total_specific_problems: number;
+    critical_insights: string[];
+    common_problems: string[];
+  };
+  tasks: Array<{
+    task_id: number;
+    task_name: string;
+    project_name: string;
+    assignee_name: string;
+    state: string;
+    progress: number;
+    deadline: string;
+    risk_score: number;
+    risk_level: string;
+    ai_insights: string[];
+    specific_problems: string[];
+    top_risk_factors: Array<{
+      factor: string;
+      score: number;
+    }>;
+    immediate_actions: string[];
+    overall_assessment: {
+      severity: string;
+      success_probability: number;
+      needs_attention: boolean;
+    };
+  }>;
+  message: string;
+}
+
+// Add interface for personalized AI suggestions
+interface PersonalizedAiSuggestions {
+  status: string;
+  source: string;
+  cache_expires_in_seconds: number;
+  data: {
+    status: string;
+    user_context: {
+      user_id: number;
+      user_name: string;
+      email: string;
+      role: string;
+      is_superuser: boolean;
+      current_workload: number;
+      managed_projects: number;
+      assigned_tasks: Task[];
+    };
+    top_risky_tasks: Array<{
+      task_id: number;
+      task_name: string;
+      project_name: string;
+      assignee_name: string;
+      risk_score: number;
+      risk_level: string;
+      user_relationship: string;
+    }>;
+    ai_suggestions: {
+      overall_assessment: string;
+      user_role_analysis: string;
+      task_suggestions: Array<{
+        task_id: number;
+        task_name: string;
+        risk_score: number;
+        risk_level: string;
+        user_relationship: string;
+        immediate_actions: string[];
+        strategic_recommendations: string[];
+        potential_impact: string;
+        timeframe: string;
+      }>;
+      overall_recommendations: string[];
+      next_steps: string[];
+      final_message: string;
+      ai_generated: boolean;
+      ai_model: string;
+    };
+    generated_at: string;
+    task_id: string;
+    processed_at: string;
+    cache_expires_at: string;
+  };
+}
+
 export default function DashboardPage() {
   const { user, token } = useAuthStore();
   const { loading, error, fetchMetrics } = useDashboardStore();
@@ -172,6 +247,8 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<string>("");
   const [teamSearch, setTeamSearch] = useState("");
+  const [aiSuggestionDisplayIndex, setAiSuggestionDisplayIndex] = useState<number>(0);
+  const hasRotatedThisVisit = useRef<boolean>(false);
 
   // WebSocket connection
   const wsStatus = useWebSocket("");
@@ -308,15 +385,36 @@ export default function DashboardPage() {
     enabled: !!token,
   });
 
-  // Add query for prioritized tasks
-  const { data: prioritizedTasks, isLoading: isLoadingPrioritizedTasks } = useQuery<Task[]>({
-    queryKey: ["prioritized-tasks"],
+  // Add query for top 3 personal tasks by priority
+  const { data: myTopTasks, isLoading: isLoadingMyTopTasks } = useQuery<Task[]>({
+    queryKey: ["my-top-tasks", user?.id],
+    queryFn: async () => {
+      if (!token) {
+        throw new Error("Authentication token is missing");
+      }
+      const response = await fetch(`${API_BASE_URL}/tasks/my?limit=3`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch my top tasks');
+      }
+      return response.json();
+    },
+    enabled: !!token && !!user?.id,
+  });
+
+  // Add query for personalized AI suggestions
+  const { data: personalizedAiSuggestions, isLoading: isLoadingPersonalizedAi } = useQuery<PersonalizedAiSuggestions>({
+    queryKey: ["personalized-ai-suggestions"],
     queryFn: async () => {
       if (!token) {
         throw new Error("Authentication token is missing");
       }
 
-      const response = await fetch(`${API_BASE_URL}/task-priority/tasks?limit=3`, {
+      const response = await fetch(`${API_BASE_URL}/analytics/tasks/ai-suggestions/personalized/cached`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -324,59 +422,14 @@ export default function DashboardPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch prioritized tasks');
+        throw new Error('Failed to fetch personalized AI suggestions');
       }
 
       return response.json();
     },
     enabled: !!token,
-  });
-
-  // Add user risk score query
-  const { data: userRiskScore, isLoading: isLoadingRiskScore, error: riskScoreError } = useQuery<UserRiskScore>({
-    queryKey: ["user-risk-score", user?.id],
-    queryFn: async () => {
-      if (!token || !user?.id) {
-        throw new Error("Authentication token or user ID is missing");
-      }
-      const response = await fetch(`${API_BASE_URL}/ai/user/${user.id}/risk-score/latest`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch user risk score');
-      }
-      return response.json();
-    },
-    enabled: !!token && !!user?.id,
     retry: 1,
-    staleTime: 10 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
-
-  // Add query for AI task insights (for superusers and users)
-  const { data: aiTaskInsights, isLoading: isLoadingAiTaskInsights, error: aiTaskInsightsError } = useQuery<AiTaskInsight[]>({
-    queryKey: ["ai-task-insights", user?.id],
-    queryFn: async () => {
-      if (!token || !user?.id) {
-        throw new Error("Authentication token or user ID is missing");
-      }
-      const response = await fetch(`${API_BASE_URL}/ai/ai/analyze-tasks/history?user_id=${user.id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch AI task insights');
-      }
-      return response.json();
-    },
-    enabled: !!token && !!user?.id,
-    retry: 1,
-    staleTime: 10 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // 5 minutes
     refetchOnWindowFocus: false,
   });
 
@@ -397,6 +450,33 @@ export default function DashboardPage() {
     enabled: !!token,
   });
 
+  // Add query for active tasks risk summary
+  const { data: activeTasksRiskSummary, isLoading: isLoadingActiveTasksRisk } = useQuery<ActiveTasksRiskSummary>({
+    queryKey: ["active-tasks-risk-summary"],
+    queryFn: async () => {
+      if (!token) {
+        throw new Error("Authentication token is missing");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/analytics/tasks/active-risks-summary`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch active tasks risk summary');
+      }
+
+      return response.json();
+    },
+    enabled: !!token,
+    retry: 1,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
+  });
+
   // Log the auth state
   useEffect(() => {
     console.log("Auth state:", {
@@ -405,6 +485,84 @@ export default function DashboardPage() {
       userId: user?.id
     });
   }, [token, user]);
+
+  // Rotate AI suggestions when user visits dashboard
+  useEffect(() => {
+    // Only rotate if we haven't already rotated this visit and AI suggestions are loaded
+    if (!hasRotatedThisVisit.current && personalizedAiSuggestions?.status === "success") {
+      const nextIndex = (aiSuggestionDisplayIndex + 1) % 3;
+      console.log(`Rotating AI suggestions: ${aiSuggestionDisplayIndex} -> ${nextIndex}`);
+      setAiSuggestionDisplayIndex(nextIndex);
+      hasRotatedThisVisit.current = true;
+    }
+  }, [personalizedAiSuggestions?.status, aiSuggestionDisplayIndex]);
+
+  // Debug: Log current state
+  useEffect(() => {
+    console.log("AI Suggestions Debug:", {
+      status: personalizedAiSuggestions?.status,
+      currentIndex: aiSuggestionDisplayIndex,
+      hasRotated: hasRotatedThisVisit.current,
+      data: personalizedAiSuggestions?.data?.ai_suggestions ? {
+        overall_recommendations: personalizedAiSuggestions.data.ai_suggestions.overall_recommendations?.length,
+        next_steps: personalizedAiSuggestions.data.ai_suggestions.next_steps?.length,
+        final_message: !!personalizedAiSuggestions.data.ai_suggestions.final_message
+      } : null
+    });
+  }, [personalizedAiSuggestions, aiSuggestionDisplayIndex, hasRotatedThisVisit.current]);
+
+  // Reset rotation flag when component unmounts (user leaves dashboard)
+  useEffect(() => {
+    return () => {
+      hasRotatedThisVisit.current = false;
+    };
+  }, []);
+
+  // Helper function to get current AI suggestion content
+  const getCurrentAiSuggestionContent = () => {
+    if (personalizedAiSuggestions?.status !== "success" || !personalizedAiSuggestions.data?.ai_suggestions) {
+      console.log("No AI suggestions data available");
+      return null;
+    }
+
+    const suggestions = personalizedAiSuggestions.data.ai_suggestions;
+    console.log("Available suggestions data:", {
+      overall_recommendations: suggestions.overall_recommendations,
+      next_steps: suggestions.next_steps,
+      final_message: suggestions.final_message
+    });
+    
+    switch (aiSuggestionDisplayIndex) {
+      case 0:
+        console.log("Returning Overall Recommendations");
+        return {
+          title: "Overall Recommendations",
+          content: suggestions.overall_recommendations || [],
+          type: "recommendations"
+        };
+      case 1:
+        console.log("Returning Next Steps");
+        return {
+          title: "Next Steps",
+          content: suggestions.next_steps || [],
+          type: "steps"
+        };
+      case 2:
+        console.log("Returning Final Summary");
+        return {
+          title: "Final Summary",
+          content: suggestions.final_message ? [suggestions.final_message] : [],
+          type: "summary"
+        };
+      default:
+        console.log("Returning default (Overall Recommendations)");
+        return {
+          title: "Overall Recommendations",
+          content: suggestions.overall_recommendations || [],
+          type: "recommendations"
+        };
+    }
+  };
 
   useEffect(() => {
     if (token) {
@@ -514,9 +672,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  // Get risk level from the new endpoint
-  const riskLevel = userRiskScore?.risk_level || 'Loading...';
 
   // Update the chart dataset using taskSummaryData
   const chartData = {
@@ -743,16 +898,16 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {isLoadingPrioritizedTasks ? (
+                {isLoadingMyTopTasks ? (
                   <div className="flex justify-center py-4">
                     <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600" />
                   </div>
-                ) : prioritizedTasks && prioritizedTasks.length > 0 ? (
-                  prioritizedTasks.map((task) => (
+                ) : myTopTasks && myTopTasks.length > 0 ? (
+                  myTopTasks.map((task) => (
                     <div key={task.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-lg">
                       <div className="flex flex-col">
                         <p className="text-sm font-medium">{task.name}</p>
-                        {task.assignee && (
+                        {user?.is_superuser && task.assignee && (
                           <p className="text-xs text-gray-500">
                             Assigned to: {task.assignee.full_name}
                           </p>
@@ -894,72 +1049,157 @@ export default function DashboardPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <h3 className="font-semibold mb-2">Risk Level</h3>
-                  {isLoadingRiskScore ? (
+                  {isLoadingActiveTasksRisk ? (
                     <div className="flex items-center space-x-2">
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
                       <span className="text-sm text-gray-500">Analyzing...</span>
                     </div>
-                  ) : riskScoreError ? (
-                    <p className="text-sm text-red-500">Failed to load risk level</p>
-                  ) : (
-                  <p className={`text-lg ${
-                      riskLevel === "Very Low" || riskLevel === "Low"
-                      ? "text-green-500"
-                      : riskLevel === "Medium"
-                      ? "text-yellow-500"
-                        : riskLevel === "High" || riskLevel === "Critical"
-                        ? "text-red-500"
-                        : "text-gray-500"
-                  }`}>
+                  ) : activeTasksRiskSummary ? (
+                    <div className="space-y-2">
+                      {(() => {
+                        const avgScore = activeTasksRiskSummary.summary.average_risk_score;
+                        let riskLevel = '';
+                        let colorClass = '';
+                        
+                        if (avgScore >= 80) {
+                          riskLevel = 'Extreme';
+                          colorClass = 'text-red-600';
+                        } else if (avgScore >= 60) {
+                          riskLevel = 'Critical';
+                          colorClass = 'text-orange-600';
+                        } else if (avgScore >= 40) {
+                          riskLevel = 'High';
+                          colorClass = 'text-yellow-600';
+                        } else if (avgScore >= 20) {
+                          riskLevel = 'Medium';
+                          colorClass = 'text-blue-600';
+                        } else {
+                          riskLevel = 'Low';
+                          colorClass = 'text-green-600';
+                        }
+                        
+                        return (
+                          <>
+                            <p className={`text-lg font-semibold ${colorClass}`}>
                     {riskLevel}
                   </p>
+                            <p className="text-xs text-gray-600">
+                              Average Score: {avgScore.toFixed(1)}
+                            </p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No risk data available</p>
                   )}
                 </div>
                 <div>
                   <h3 className="font-semibold mb-2">Tasks at Risk</h3>
-                  {isLoadingRiskScore ? (
+                  {isLoadingActiveTasksRisk ? (
                     <div className="flex items-center space-x-2">
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
                       <span className="text-sm text-gray-500">Analyzing...</span>
                     </div>
-                  ) : riskScoreError ? (
-                    <p className="text-sm text-red-500">Failed to load</p>
+                  ) : activeTasksRiskSummary ? (
+                    <div className="space-y-2">
+                      <p className="text-lg font-semibold text-red-600">
+                        {activeTasksRiskSummary.summary.risk_distribution.extreme + 
+                         activeTasksRiskSummary.summary.risk_distribution.critical + 
+                         activeTasksRiskSummary.summary.risk_distribution.high} task(s) at risk
+                      </p>
+                      <div className="text-xs text-gray-600 space-y-1">
+                        <div className="flex justify-between">
+                          <span>Extreme Risk:</span>
+                          <span className="text-red-600 font-medium">
+                            {activeTasksRiskSummary.summary.risk_distribution.extreme}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Critical Risk:</span>
+                          <span className="text-orange-600 font-medium">
+                            {activeTasksRiskSummary.summary.risk_distribution.critical}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>High Risk:</span>
+                          <span className="text-yellow-600 font-medium">
+                            {activeTasksRiskSummary.summary.risk_distribution.high}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   ) : (
-                  <p className="text-lg">
-                      {(userRiskScore?.high_risk_task_count ?? 0) + (userRiskScore?.critical_risk_task_count ?? 0)} task(s) at risk
-                  </p>
+                    <p className="text-sm text-gray-500">No risk data available</p>
                   )}
                 </div>
               </div>
               <div className="mt-4">
-                <h3 className="font-semibold mb-2">AI Task Suggestions</h3>
-                {isLoadingAiTaskInsights ? (
+                <h3 className="font-semibold mb-2">AI Insights</h3>
+                {isLoadingPersonalizedAi ? (
                   <div className="flex items-center space-x-2">
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600" />
-                    <span className="text-sm text-gray-500">Loading AI suggestions...</span>
+                    <span className="text-sm text-gray-500">Loading AI insights...</span>
                   </div>
-                ) : aiTaskInsightsError ? (
-                  <p className="text-sm text-red-500">Failed to load AI task suggestions</p>
-                ) : aiTaskInsights && aiTaskInsights.length > 0 ? (
-                  <ul className="space-y-4">
-                    {aiTaskInsights.map((insight) => (
-                      <li key={insight.task_id} className="bg-blue-50 rounded-lg p-3 shadow-sm">
-                        <div className="mb-1 text-sm text-gray-700 font-semibold">
-                          Task: <span className="text-blue-700">{insight.task_name}</span> (ID: {insight.task_id})
-                        </div>
-                        {insight.assigned_to && (
-                          <div className="mb-1 text-xs text-gray-500">
-                            Assigned to: <span className="font-medium text-gray-700">{insight.assigned_to}</span>
+                ) : personalizedAiSuggestions?.status === "success" ? (
+                  <div className="space-y-3">
+                    {(() => {
+                      const currentContent = getCurrentAiSuggestionContent();
+                      if (!currentContent) return null;
+                      
+                      return (
+                        <>
+                          <div 
+                            className="bg-blue-50 rounded-lg p-3 border-l-4 border-blue-400 cursor-pointer hover:bg-blue-100 transition-colors duration-200"
+                            onClick={() => {
+                              const nextIndex = (aiSuggestionDisplayIndex + 1) % 3;
+                              console.log(`Manual rotation: ${aiSuggestionDisplayIndex} -> ${nextIndex}`);
+                              setAiSuggestionDisplayIndex(nextIndex);
+                            }}
+                            title="Click to see different AI insights"
+                          >
+                            <h4 className="text-sm font-semibold text-blue-800 mb-2 flex items-center justify-between">
+                              {currentContent.title}
+                              <span className="text-xs text-blue-600 opacity-70">Click to rotate</span>
+                            </h4>
+                            <div className="space-y-2">
+                              {currentContent.content.map((item, index) => (
+                                <p key={index} className="text-xs text-blue-700">
+                                  • {item}
+                                </p>
+                              ))}
+                            </div>
                           </div>
-                        )}
-                        <div className="text-sm">
-                          <span className="font-semibold text-green-700">Suggested Action:</span> {insight.ai_insights.suggested_action || <span className="text-gray-400">No suggestion</span>}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+                          
+                          {/* Display indicator */}
+                          <div className="flex justify-center space-x-1">
+                            {[0, 1, 2].map((index) => (
+                              <div
+                                key={index}
+                                className={`w-2 h-2 rounded-full ${
+                                  index === aiSuggestionDisplayIndex 
+                                    ? 'bg-blue-500' 
+                                    : 'bg-gray-300'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                          
+
+                          
+                          {/* Cache Status */}
+                          <div className="text-xs text-gray-500 text-center pt-2">
+                            AI insights cached • Click to see different recommendations
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No AI task suggestions available</p>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">No AI insights available</p>
+                    <p className="text-xs text-gray-400">AI suggestions are generated based on your current tasks and role</p>
+                  </div>
                 )}
               </div>
             </CardContent>

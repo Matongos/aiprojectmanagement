@@ -12,112 +12,44 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def calculate_task_priority_score_task(self, task_id):
     db = SessionLocal()
     try:
-        # Import models here to avoid circular imports
-        from models.user import User
-        from models.notification import Notification
-        from models.log_note_attachment import LogNoteAttachment
-        
+        from services.priority_scoring_service import PriorityScoringService
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
             return {"success": False, "message": "Task not found"}
-        
-        # Check if task is completed or cancelled
         if task.state in ['done', 'cancelled']:
             return {
                 "success": True,
                 "task_id": task_id,
                 "score": 0,
                 "score_breakdown": {
-                    "priority_score": 0,
-                    "complexity_score": 0
+                    "risk_score_component": 0,
+                    "complexity_score_component": 0
                 },
                 "explanation": f"Task is {task.state}, priority calculation not needed",
-                "status": f"Task is {task.state}",
-                "priority_reasoning": [f"Task is {task.state}"]
+                "status": f"Task is {task.state}"
             }
-        
-        # Verify required fields
         missing_fields = []
         if not task.name:
             missing_fields.append("name")
-        if not task.priority:
-            missing_fields.append("priority level")
-            
         if missing_fields:
             return {
                 "success": False,
                 "message": f"Missing required fields for scoring: {', '.join(missing_fields)}"
             }
-        
-        # Calculate priority score (80% weight)
-        priority_weights = {
-            'low': 20,
-            'normal': 40,
-            'high': 60,
-            'urgent': 80
-        }
-        priority_score = priority_weights.get(task.priority.lower(), 40)  # Default to normal if unknown
-        
-        # Get stored task complexity (20% weight) - use stored data instead of recalculating
-        if task.complexity_score is not None and task.complexity_score > 0:
-            # Use stored complexity score, convert to 20% scale
-            complexity_score = (task.complexity_score / 100) * 20
-            complexity_source = "stored"
-        else:
-            # Fallback to default if no stored complexity
-            complexity_score = 10  # Default to medium complexity (50% of 20)
-            complexity_source = "default"
-            logger.warning(f"No stored complexity found for task {task.id}, using default")
-        
-        # Calculate total score
-        total_score = priority_score + complexity_score
-        
-        # Generate explanation
-        priority_level = task.priority.lower()
-        explanation_parts = [
-            f"Task priority is {priority_level} ({priority_score}% weight)",
-            f"Task complexity score adds {complexity_score:.1f}% weight (from {complexity_source} data)"
-        ]
-        
-        if hasattr(task, 'dependent_tasks') and task.dependent_tasks:
-            explanation_parts.append(f"Task is blocking {len(task.dependent_tasks)} other tasks")
-        
-        if task.deadline:
-            from datetime import datetime, timezone
-            days_to_deadline = (task.deadline - datetime.now(timezone.utc)).days
-            if days_to_deadline < 0:
-                explanation_parts.append(f"Task is overdue by {abs(days_to_deadline)} days")
-            elif days_to_deadline < 7:
-                explanation_parts.append(f"Task deadline is in {days_to_deadline} days")
-        
-        # Update task priority reasoning
-        task.priority_reasoning = explanation_parts
-        
+        scoring_service = PriorityScoringService(db)
+        import asyncio
+        result = asyncio.run(scoring_service.calculate_priority_score_with_breakdown(task))
         # Update the task with new score
-        task.priority_score = total_score
-        
-        # Invalidate any cached priority data
-        from services.priority_service import PriorityService
-        priority_service = PriorityService(db)
-        priority_service.invalidate_cache(task_id)
-        
-        # Commit changes to database
+        task.priority_score = result["score"]
         db.commit()
-        
         return {
             "success": True,
             "task_id": task_id,
-            "score": total_score,
-            "score_breakdown": {
-                "priority_score": priority_score,
-                "complexity_score": complexity_score
-            },
-            "explanation": f"Priority score calculated successfully using {complexity_source} complexity data",
-            "status": "completed",
-            "priority_reasoning": explanation_parts,
-            "complexity_source": complexity_source
+            "score": result["score"],
+            "score_breakdown": result["score_breakdown"],
+            "explanation": result["explanation"],
+            "status": "completed"
         }
-        
     except Exception as e:
         db.rollback()
         logger.error(f"Error calculating priority score for task {task_id}: {str(e)}")
@@ -128,54 +60,50 @@ def calculate_task_priority_score_task(self, task_id):
 @celery_app.task(bind=True)
 def auto_set_task_priority_task(self, task_id):
     """
-    Automatically calculate and set task priority using rules and AI.
-    
-    The priority is determined by:
-    1. First applying rule-based logic for common cases
-    2. Using AI for more nuanced decisions when rules are inconclusive
-    3. Respecting manual priority if set
+    Automatically set task priority based only on the priority_score value.
+    - If priority_score >= 80: 'urgent'
+    - If priority_score >= 60: 'high'
+    - If priority_score >= 40: 'normal'
+    - Else: 'low'
+    Sets priority_source to 'auto'.
     """
     db = SessionLocal()
     try:
-        # Import models here to avoid circular imports
-        from models.user import User
-        from models.notification import Notification
-        from models.log_note_attachment import LogNoteAttachment
-        
+        from models.task import Task
+        from services.priority_scoring_service import PriorityScoringService
+        import asyncio
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
             return {"success": False, "message": "Task not found"}
-        
-        # Import services
-        from services.priority_service import PriorityService
-        from services.priority_scoring_service import PriorityScoringService
-        
-        # Calculate priority using AI and rules
-        priority_service = PriorityService(db)
-        import asyncio
-        result = asyncio.run(priority_service.calculate_priority(task_id))
-        
-        # Update task priority if not manually set
-        if result["priority_source"] != "MANUAL":
-            task = db.query(Task).filter(Task.id == task_id).first()
-            if task:
-                # Update priority fields
-                task.priority = result["final_priority"]
-                task.priority_source = result["priority_source"]
-                task.priority_reasoning = result.get("reasoning", [])
-                
-                # Calculate priority score using dedicated scoring service
-                scoring_service = PriorityScoringService(db)
-                task.priority_score = asyncio.run(scoring_service.calculate_priority_score(task))
-                
-                db.commit()
-        
+        # Only auto-set if not manual
+        if getattr(task, 'priority_source', None) == 'MANUAL':
+            return {"success": True, "task_id": task_id, "priority": task.priority, "priority_score": task.priority_score, "priority_source": task.priority_source, "message": "Manual priority, not changed."}
+        # Calculate priority score using dedicated scoring service
+        scoring_service = PriorityScoringService(db)
+        result = asyncio.run(scoring_service.calculate_priority_score_with_breakdown(task))
+        score = result["score"]
+        # Set priority based on score
+        if score >= 80:
+            new_priority = 'urgent'
+        elif score >= 60:
+            new_priority = 'high'
+        elif score >= 40:
+            new_priority = 'normal'
+        else:
+            new_priority = 'low'
+        task.priority = new_priority
+        task.priority_score = score
+        task.priority_source = 'auto'
+        db.commit()
         return {
             "success": True,
             "task_id": task_id,
-            "result": result
+            "priority": new_priority,
+            "priority_score": score,
+            "priority_source": 'auto',
+            "score_breakdown": result["score_breakdown"],
+            "explanation": result["explanation"]
         }
-        
     except Exception as e:
         db.rollback()
         logger.error(f"Error auto-setting priority for task {task_id}: {str(e)}")

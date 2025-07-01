@@ -14,73 +14,77 @@ class PriorityScoringService:
 
     async def calculate_priority_score(self, task: Task) -> float:
         """
-        Calculate a priority score (0-100) for a task based on its attributes.
-        Uses AI to analyze task content and determine importance.
-        
-        The score is calculated considering:
-        - Task name and description content analysis
-        - Current priority level
-        - Priority reasoning
-        - Task characteristics
-        
+        Calculate a priority score for a task based only on:
+        - risk_score (50%) from /ai/task/{task_id}/risk/stored
+        - complexity_score (50%) from /task-complexity/stored/{task_id}
         Returns:
-            float: Priority score between 0 and 100
+            float: Priority score (can exceed 100 if risk_score is high)
         """
+        import httpx
+        risk_score = 0.0
+        complexity_score = 0.0
         try:
-            # Prepare task context for AI analysis
-            context = {
-                "task_name": task.name,
-                "description": task.description or "",
-                "priority_level": task.priority,
-                "priority_reasoning": task.priority_reasoning or [],
-                "deadline": str(task.deadline) if task.deadline else None,
-                "state": task.state,
-                "is_blocking": len(task.dependent_tasks) > 0
-            }
-
-            # Get AI analysis for priority score
-            analysis = await self.ai_service.analyze_content(
-                content_type="task_priority",
-                content=context,
-                analysis_prompt="""
-                Analyze this task and assign a priority score from 0 to 100 based on:
-                1. Task name and description importance (40% weight)
-                2. Current priority level (30% weight)
-                3. Priority reasoning validity (20% weight)
-                4. Task characteristics (10% weight)
-                
-                Consider:
-                - Higher scores for tasks with urgent/critical keywords
-                - Impact on project/business
-                - Dependencies and blocking status
-                - Deadline proximity if present
-                
-                Return a JSON with:
-                {
-                    "score": float,  # 0-100
-                    "score_breakdown": {
-                        "content_score": float,  # 0-40
-                        "priority_level_score": float,  # 0-30
-                        "reasoning_score": float,  # 0-20
-                        "characteristics_score": float  # 0-10
-                    },
-                    "explanation": string
-                }
-                """
-            )
-
-            # Extract and validate score
-            score = float(analysis.get("score", 50.0))
-            return min(max(score, 0.0), 100.0)  # Ensure score is between 0 and 100
-
+            # Fetch risk_score
+            async with httpx.AsyncClient() as client:
+                risk_resp = await client.get(f"http://localhost:8003/ai/task/{task.id}/risk/stored")
+                if risk_resp.status_code == 200:
+                    risk_data = risk_resp.json()
+                    risk_score = float(risk_data.get("risk_score", 0.0))
+                else:
+                    risk_score = 0.0
+                # Fetch complexity_score
+                comp_resp = await client.get(f"http://localhost:8003/task-complexity/stored/{task.id}")
+                if comp_resp.status_code == 200:
+                    comp_data = comp_resp.json()
+                    complexity_score = float(comp_data.get("complexity_score", 0.0))
+                else:
+                    complexity_score = 0.0
         except Exception as e:
-            logger.error(f"Error calculating priority score for task {task.id}: {str(e)}")
-            # Return a default middle score in case of error
-            return 50.0
+            logger.error(f"Error fetching risk or complexity for task {task.id}: {str(e)}")
+            risk_score = 0.0
+            complexity_score = 0.0
+        # Calculate final score (no capping)
+        final_score = (risk_score * 0.5) + (complexity_score * 0.5)
+        # Optionally, you can round for display
+        return final_score
+
+    async def calculate_priority_score_with_breakdown(self, task: Task) -> dict:
+        """
+        Same as calculate_priority_score, but returns breakdown and explanation.
+        """
+        import httpx
+        risk_score = 0.0
+        complexity_score = 0.0
+        try:
+            async with httpx.AsyncClient() as client:
+                risk_resp = await client.get(f"http://localhost:8003/ai/task/{task.id}/risk/stored")
+                if risk_resp.status_code == 200:
+                    risk_data = risk_resp.json()
+                    risk_score = float(risk_data.get("risk_score", 0.0))
+                else:
+                    risk_score = 0.0
+                comp_resp = await client.get(f"http://localhost:8003/task-complexity/stored/{task.id}")
+                if comp_resp.status_code == 200:
+                    comp_data = comp_resp.json()
+                    complexity_score = float(comp_data.get("complexity_score", 0.0))
+                else:
+                    complexity_score = 0.0
+        except Exception as e:
+            logger.error(f"Error fetching risk or complexity for task {task.id}: {str(e)}")
+            risk_score = 0.0
+            complexity_score = 0.0
+        final_score = (risk_score * 0.5) + (complexity_score * 0.5)
+        return {
+            "score": final_score,
+            "score_breakdown": {
+                "risk_score_component": risk_score,
+                "complexity_score_component": complexity_score
+            },
+            "explanation": "Priority score is a 50/50 weighted sum of risk score and complexity score (no capping)."
+        }
 
     def _analyze_task_content(self, name: str, description: str) -> float:
-        """Analyze task name and description for importance indicators"""
-        # This is a fallback if AI service fails
+        """Analyze task name and description for importance indicators (max 40, but will be scaled to 20)"""
         importance_keywords = {
             'urgent': 10,
             'critical': 10,
@@ -93,32 +97,19 @@ class PriorityScoringService:
             'significant': 5,
             'key': 4
         }
-        
         content = f"{name} {description}".lower()
         score = 0.0
-        
         for keyword, weight in importance_keywords.items():
             if keyword in content:
                 score += weight
-        
-        return min(score, 40.0)  # Cap at 40 as per weighting
+        return min(score, 40.0)
 
     def _get_priority_level_score(self, priority: str) -> float:
-        """Convert priority level to score component"""
+        """Convert priority level to score component (max 30)"""
         priority_scores = {
             'urgent': 30.0,
             'high': 22.5,
             'normal': 15.0,
             'low': 7.5
         }
-        return priority_scores.get(priority.lower(), 15.0)
-
-    def _evaluate_reasoning(self, reasoning: List[str]) -> float:
-        """Evaluate priority reasoning for validity and strength"""
-        if not reasoning:
-            return 10.0  # Default middle score
-            
-        # Basic scoring based on number and length of reasons
-        score = min(len(reasoning) * 5, 20.0)  # Up to 20 points
-        
-        return score 
+        return priority_scores.get(priority.lower(), 15.0) 

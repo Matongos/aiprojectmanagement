@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone, date
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
 import json
+import logging
 
 from database import get_db
 from routers.auth import get_current_user
@@ -28,6 +29,13 @@ from models.task_stage import TaskStage
 from services.redis_service import get_redis_client
 from tasks.project_progress import calculate_project_progress_task
 from celery.result import AsyncResult
+from crud.task_risk import TaskRiskCRUD
+from models.task_risk import TaskRisk
+from models.project import Project, ProjectMember, ProjectRole
+from services.ai_service import get_ollama_client
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/analytics",
@@ -1512,3 +1520,667 @@ async def get_stored_project_progress(project_id: int):
     if result:
         return result
     return {"status": "not_ready", "message": "No stored progress found for this project. Please trigger calculation."}
+
+@router.get("/tasks/active-risks", response_model=Dict[str, Any])
+async def get_active_tasks_with_risks(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all active tasks with their risk levels, sorted by highest risk first.
+    
+    Returns:
+    - List of active tasks with risk analysis
+    - Each task includes: risk score, risk level, causes, and mitigation recommendations
+    - Sorted by risk score (highest to lowest)
+    - Includes AI-generated insights and specific problems
+    """
+    try:
+        # Get active task states
+        active_states = ['in_progress', 'approved', 'changes_requested']
+        
+        # Get all active tasks with their latest risk analysis
+        active_tasks_with_risks = []
+        
+        # Query active tasks
+        active_tasks = db.query(Task).filter(
+            Task.state.in_(active_states)
+        ).all()
+        
+        task_risk_crud = TaskRiskCRUD(db)
+        
+        for task in active_tasks:
+            # Get latest risk analysis for this task
+            latest_risk = task_risk_crud.get_latest_risk_analysis(task.id)
+            
+            if latest_risk:
+                # Extract risk factors and recommendations
+                risk_factors = latest_risk.risk_factors or {}
+                recommendations = latest_risk.recommendations or {}
+                metrics = latest_risk.metrics or {}
+                
+                # Ensure risk_factors and recommendations are dictionaries
+                if not isinstance(risk_factors, dict):
+                    risk_factors = {}
+                if not isinstance(recommendations, dict):
+                    recommendations = {}
+                if not isinstance(metrics, dict):
+                    metrics = {}
+                
+                # Prepare risk causes (from risk factors)
+                causes = []
+                ai_insights = []
+                specific_problems = []
+                
+                if risk_factors:
+                    for factor_name, factor_data in risk_factors.items():
+                        if isinstance(factor_data, dict):
+                            score = factor_data.get('score', 0)
+                            details = factor_data.get('details', {})
+                            risk_level = factor_data.get('risk_level', 'medium')
+                            
+                            # Create detailed cause description
+                            cause_description = f"{factor_name.replace('_', ' ').title()}: {score:.1f} points"
+                            problem_description = ""
+                            
+                            if details:
+                                if isinstance(details, dict):
+                                    # Extract specific problems from details
+                                    if 'time_risk_percentage' in details:
+                                        time_risk = details['time_risk_percentage']
+                                        cause_description += f" (Time risk: {time_risk:.1f}%)"
+                                        if time_risk > 100:
+                                            problem_description = f"Task needs {time_risk:.1f}% more time than available"
+                                        elif time_risk > 60:
+                                            problem_description = f"Significant time pressure with {time_risk:.1f}% risk"
+                                    
+                                    elif 'complexity_score' in details:
+                                        complexity = details['complexity_score']
+                                        cause_description += f" (Complexity: {complexity:.1f})"
+                                        if complexity > 70:
+                                            problem_description = f"High complexity task requiring specialized skills"
+                                        elif complexity > 50:
+                                            problem_description = f"Moderate complexity that may need additional resources"
+                                    
+                                    elif 'dependency_score' in details:
+                                        dep_score = details['dependency_score']
+                                        cause_description += f" (Dependencies: {dep_score:.1f})"
+                                        if dep_score > 5:
+                                            problem_description = f"Multiple blocking dependencies affecting progress"
+                                        elif dep_score > 2:
+                                            problem_description = f"Some dependencies may cause delays"
+                                    
+                                    # Extract AI analysis if available
+                                    if 'ai_analysis' in details:
+                                        ai_analysis = details['ai_analysis']
+                                        if isinstance(ai_analysis, dict):
+                                            if 'insights' in ai_analysis:
+                                                ai_insights.extend(ai_analysis['insights'])
+                                            if 'problems' in ai_analysis:
+                                                specific_problems.extend(ai_analysis['problems'])
+                                            if 'warnings' in ai_analysis:
+                                                specific_problems.extend(ai_analysis['warnings'])
+                                else:
+                                    cause_description += f" - {str(details)}"
+                            
+                            causes.append({
+                                "factor": factor_name,
+                                "score": score,
+                                "description": cause_description,
+                                "risk_level": risk_level,
+                                "details": details,
+                                "problem": problem_description
+                            })
+                
+                # Prepare mitigation recommendations with AI insights
+                mitigations = []
+                ai_recommendations = []
+                
+                if recommendations:
+                    for category, actions in recommendations.items():
+                        if isinstance(actions, list):
+                            for action in actions:
+                                priority = "immediate" if category == "immediate_actions" else "short_term" if category == "short_term" else "long_term"
+                                
+                                mitigations.append({
+                                    "category": category.replace('_', ' ').title(),
+                                    "action": action,
+                                    "priority": priority
+                                })
+                                
+                                # Add AI recommendation context
+                                ai_recommendations.append({
+                                    "priority": priority,
+                                    "recommendation": action,
+                                    "rationale": f"AI-suggested {priority} action to address {category.replace('_', ' ')} risks"
+                                })
+                
+                # Extract additional AI insights from metrics
+                if metrics:
+                    if 'ai_insights' in metrics:
+                        ai_insights.extend(metrics['ai_insights'])
+                    if 'critical_insights' in metrics:
+                        ai_insights.extend(metrics['critical_insights'])
+                    if 'warning_insights' in metrics:
+                        ai_insights.extend(metrics['warning_insights'])
+                    if 'problems' in metrics:
+                        specific_problems.extend(metrics['problems'])
+                    if 'bottlenecks' in metrics:
+                        specific_problems.extend(metrics['bottlenecks'])
+                
+                # Generate task-specific AI insights based on risk factors
+                if not ai_insights:
+                    if latest_risk.risk_score >= 80:
+                        ai_insights.append("CRITICAL: This task requires immediate attention due to extreme risk factors")
+                    elif latest_risk.risk_score >= 60:
+                        ai_insights.append("HIGH RISK: Multiple risk factors indicate potential failure points")
+                    elif latest_risk.risk_score >= 40:
+                        ai_insights.append("MODERATE RISK: Some risk factors need monitoring and mitigation")
+                
+                # Generate specific problems if none found
+                if not specific_problems:
+                    if latest_risk.time_sensitivity > 25:
+                        specific_problems.append("Time pressure: Task may not meet deadline with current progress")
+                    if latest_risk.complexity > 15:
+                        specific_problems.append("Complexity: Task requires specialized skills or additional resources")
+                    if task.progress < 20 and task.start_date:
+                        days_since_start = (datetime.now(timezone.utc) - task.start_date).days
+                        if days_since_start > 3:
+                            specific_problems.append(f"Slow progress: Only {task.progress}% complete after {days_since_start} days")
+                
+                # Create comprehensive task risk summary
+                task_risk_summary = {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "task_description": task.description or "",
+                    "project_id": task.project_id,
+                    "project_name": task.project.name if task.project else "Unknown",
+                    "assigned_to": task.assigned_to,
+                    "assignee_name": task.assignee.full_name if task.assignee else None,
+                    "state": task.state,
+                    "progress": task.progress or 0.0,
+                    "deadline": task.deadline.isoformat() if task.deadline else None,
+                    "planned_hours": task.planned_hours or 0.0,
+                    "start_date": task.start_date.isoformat() if task.start_date else None,
+                    
+                    # Risk analysis data
+                    "risk_score": round(latest_risk.risk_score, 2),
+                    "risk_level": latest_risk.risk_level,
+                    "risk_analysis_date": latest_risk.created_at.isoformat(),
+                    
+                    # Component scores
+                    "time_sensitivity": round(latest_risk.time_sensitivity, 2),
+                    "complexity": round(latest_risk.complexity, 2),
+                    "priority": round(latest_risk.priority, 2),
+                    
+                    # AI Analysis and Insights
+                    "ai_insights": list(set(ai_insights)),  # Remove duplicates
+                    "specific_problems": list(set(specific_problems)),  # Remove duplicates
+                    "ai_recommendations": ai_recommendations,
+                    
+                    # Detailed analysis
+                    "causes": sorted(causes, key=lambda x: x['score'], reverse=True),
+                    "mitigations": sorted(mitigations, key=lambda x: 0 if x['priority'] == 'immediate' else 1 if x['priority'] == 'short_term' else 2),
+                    
+                    # Risk factors summary
+                    "risk_factors_summary": {
+                        "total_factors": len(causes),
+                        "high_risk_factors": len([c for c in causes if c['risk_level'] in ['high', 'critical', 'extreme']]),
+                        "medium_risk_factors": len([c for c in causes if c['risk_level'] == 'medium']),
+                        "low_risk_factors": len([c for c in causes if c['risk_level'] == 'low'])
+                    },
+                    
+                    # Overall assessment
+                    "overall_assessment": {
+                        "severity": "critical" if latest_risk.risk_score >= 80 else "high" if latest_risk.risk_score >= 60 else "medium" if latest_risk.risk_score >= 40 else "low",
+                        "main_concern": max(causes, key=lambda x: x['score'])['factor'] if causes else "No specific concerns",
+                        "immediate_actions_needed": len([m for m in mitigations if m['priority'] == 'immediate']),
+                        "success_probability": max(0, 100 - latest_risk.risk_score)
+                    }
+                }
+                
+                active_tasks_with_risks.append(task_risk_summary)
+        
+        # Sort by risk score (highest to lowest)
+        active_tasks_with_risks.sort(key=lambda x: x['risk_score'], reverse=True)
+        
+        # Calculate summary statistics
+        if active_tasks_with_risks:
+            risk_scores = [task['risk_score'] for task in active_tasks_with_risks]
+            risk_levels = [task['risk_level'] for task in active_tasks_with_risks]
+            
+            # Collect all AI insights and problems
+            all_ai_insights = []
+            all_specific_problems = []
+            for task in active_tasks_with_risks:
+                all_ai_insights.extend(task.get('ai_insights', []))
+                all_specific_problems.extend(task.get('specific_problems', []))
+            
+            summary_stats = {
+                "total_active_tasks": len(active_tasks_with_risks),
+                "average_risk_score": round(sum(risk_scores) / len(risk_scores), 2),
+                "highest_risk_score": max(risk_scores),
+                "lowest_risk_score": min(risk_scores),
+                "risk_distribution": {
+                    "extreme": risk_levels.count("extreme"),
+                    "critical": risk_levels.count("critical"),
+                    "high": risk_levels.count("high"),
+                    "medium": risk_levels.count("medium"),
+                    "low": risk_levels.count("low"),
+                    "minimal": risk_levels.count("minimal")
+                },
+                "tasks_needing_immediate_attention": len([t for t in active_tasks_with_risks if t['risk_score'] >= 70]),
+                "tasks_with_high_risk": len([t for t in active_tasks_with_risks if t['risk_score'] >= 50]),
+                "total_ai_insights": len(set(all_ai_insights)),
+                "total_specific_problems": len(set(all_specific_problems)),
+                "critical_insights": list(set([insight for insight in all_ai_insights if "CRITICAL" in insight.upper() or "IMMEDIATE" in insight.upper()])),
+                "common_problems": list(set(all_specific_problems))[:5]  # Top 5 common problems
+            }
+        else:
+            summary_stats = {
+                "total_active_tasks": 0,
+                "average_risk_score": 0,
+                "highest_risk_score": 0,
+                "lowest_risk_score": 0,
+                "risk_distribution": {"extreme": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "minimal": 0},
+                "tasks_needing_immediate_attention": 0,
+                "tasks_with_high_risk": 0,
+                "total_ai_insights": 0,
+                "total_specific_problems": 0,
+                "critical_insights": [],
+                "common_problems": []
+            }
+        
+        return {
+            "status": "success",
+            "summary": summary_stats,
+            "tasks": active_tasks_with_risks,
+            "message": f"Found {len(active_tasks_with_risks)} active tasks with comprehensive risk analysis and AI insights"
+        }
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"Error fetching active tasks with risks: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching active tasks with risks: {str(e)}"
+        )
+
+@router.get("/tasks/active-risks-summary", response_model=Dict[str, Any])
+async def get_active_tasks_risk_summary(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get a summary of active tasks with their risk levels, sorted by highest risk first.
+    This is a simplified version that shows just the essential risk information.
+    
+    Returns:
+    - List of active tasks with basic risk information
+    - Sorted by risk score (highest to lowest)
+    - Includes only essential risk data for quick overview
+    - Includes AI insights and specific problems
+    """
+    try:
+        # Get active task states
+        active_states = ['in_progress', 'approved', 'changes_requested']
+        
+        # Get all active tasks with their latest risk analysis
+        active_tasks_with_risks = []
+        
+        # Query active tasks
+        active_tasks = db.query(Task).filter(
+            Task.state.in_(active_states)
+        ).all()
+        
+        task_risk_crud = TaskRiskCRUD(db)
+        
+        for task in active_tasks:
+            # Get latest risk analysis for this task
+            latest_risk = task_risk_crud.get_latest_risk_analysis(task.id)
+            
+            if latest_risk:
+                # Extract risk factors and recommendations
+                risk_factors = latest_risk.risk_factors or {}
+                recommendations = latest_risk.recommendations or {}
+                metrics = latest_risk.metrics or {}
+                
+                # Ensure risk_factors and recommendations are dictionaries
+                if not isinstance(risk_factors, dict):
+                    risk_factors = {}
+                if not isinstance(recommendations, dict):
+                    recommendations = {}
+                if not isinstance(metrics, dict):
+                    metrics = {}
+                
+                # Prepare AI insights and problems
+                ai_insights = []
+                specific_problems = []
+                
+                # Extract AI insights from risk factors
+                if risk_factors:
+                    for factor_name, factor_data in risk_factors.items():
+                        if isinstance(factor_data, dict):
+                            details = factor_data.get('details', {})
+                            if isinstance(details, dict) and 'ai_analysis' in details:
+                                ai_analysis = details['ai_analysis']
+                                if isinstance(ai_analysis, dict):
+                                    if 'insights' in ai_analysis:
+                                        ai_insights.extend(ai_analysis['insights'])
+                                    if 'problems' in ai_analysis:
+                                        specific_problems.extend(ai_analysis['problems'])
+                                    if 'warnings' in ai_analysis:
+                                        specific_problems.extend(ai_analysis['warnings'])
+                
+                # Extract additional AI insights from metrics
+                if metrics:
+                    if 'ai_insights' in metrics:
+                        ai_insights.extend(metrics['ai_insights'])
+                    if 'critical_insights' in metrics:
+                        ai_insights.extend(metrics['critical_insights'])
+                    if 'warning_insights' in metrics:
+                        ai_insights.extend(metrics['warning_insights'])
+                    if 'problems' in metrics:
+                        specific_problems.extend(metrics['problems'])
+                    if 'bottlenecks' in metrics:
+                        specific_problems.extend(metrics['bottlenecks'])
+                
+                # Generate task-specific AI insights based on risk factors
+                if not ai_insights:
+                    if latest_risk.risk_score >= 80:
+                        ai_insights.append("CRITICAL: This task requires immediate attention due to extreme risk factors")
+                    elif latest_risk.risk_score >= 60:
+                        ai_insights.append("HIGH RISK: Multiple risk factors indicate potential failure points")
+                    elif latest_risk.risk_score >= 40:
+                        ai_insights.append("MODERATE RISK: Some risk factors need monitoring and mitigation")
+                
+                # Generate specific problems if none found
+                if not specific_problems:
+                    if latest_risk.time_sensitivity > 25:
+                        specific_problems.append("Time pressure: Task may not meet deadline with current progress")
+                    if latest_risk.complexity > 15:
+                        specific_problems.append("Complexity: Task requires specialized skills or additional resources")
+                    if task.progress < 20 and task.start_date:
+                        days_since_start = (datetime.now(timezone.utc) - task.start_date).days
+                        if days_since_start > 3:
+                            specific_problems.append(f"Slow progress: Only {task.progress}% complete after {days_since_start} days")
+                
+                # Create simplified task risk summary
+                task_risk_summary = {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "project_name": task.project.name if task.project else "Unknown",
+                    "assignee_name": task.assignee.full_name if task.assignee else "Unassigned",
+                    "state": task.state,
+                    "progress": task.progress or 0.0,
+                    "deadline": task.deadline.isoformat() if task.deadline else None,
+                    
+                    # Risk analysis data
+                    "risk_score": round(latest_risk.risk_score, 2),
+                    "risk_level": latest_risk.risk_level,
+                    "risk_analysis_date": latest_risk.created_at.isoformat(),
+                    
+                    # AI Analysis and Insights
+                    "ai_insights": list(set(ai_insights))[:3],  # Top 3 insights
+                    "specific_problems": list(set(specific_problems))[:3],  # Top 3 problems
+                    
+                    # Top risk factors (simplified)
+                    "top_risk_factors": []
+                }
+                
+                # Extract top 3 risk factors
+                if risk_factors:
+                    factor_scores = []
+                    for factor_name, factor_data in risk_factors.items():
+                        if isinstance(factor_data, dict):
+                            score = factor_data.get('score', 0)
+                            factor_scores.append({
+                                "factor": factor_name.replace('_', ' ').title(),
+                                "score": score
+                            })
+                    
+                    # Sort by score and take top 3
+                    factor_scores.sort(key=lambda x: x['score'], reverse=True)
+                    task_risk_summary["top_risk_factors"] = factor_scores[:3]
+                
+                # Add immediate actions needed
+                immediate_actions = []
+                if recommendations:
+                    for category, actions in recommendations.items():
+                        if category == "immediate_actions" and isinstance(actions, list):
+                            immediate_actions.extend(actions[:2])  # Top 2 immediate actions
+                
+                task_risk_summary["immediate_actions"] = immediate_actions
+                
+                # Add overall assessment
+                task_risk_summary["overall_assessment"] = {
+                    "severity": "critical" if latest_risk.risk_score >= 80 else "high" if latest_risk.risk_score >= 60 else "medium" if latest_risk.risk_score >= 40 else "low",
+                    "success_probability": max(0, 100 - latest_risk.risk_score),
+                    "needs_attention": latest_risk.risk_score >= 50
+                }
+                
+                active_tasks_with_risks.append(task_risk_summary)
+        
+        # Sort by risk score (highest to lowest)
+        active_tasks_with_risks.sort(key=lambda x: x['risk_score'], reverse=True)
+        
+        # Calculate summary statistics
+        if active_tasks_with_risks:
+            risk_scores = [task['risk_score'] for task in active_tasks_with_risks]
+            risk_levels = [task['risk_level'] for task in active_tasks_with_risks]
+            
+            # Collect all AI insights and problems
+            all_ai_insights = []
+            all_specific_problems = []
+            for task in active_tasks_with_risks:
+                all_ai_insights.extend(task.get('ai_insights', []))
+                all_specific_problems.extend(task.get('specific_problems', []))
+            
+            summary_stats = {
+                "total_active_tasks": len(active_tasks_with_risks),
+                "average_risk_score": round(sum(risk_scores) / len(risk_scores), 2),
+                "highest_risk_score": max(risk_scores),
+                "lowest_risk_score": min(risk_scores),
+                "risk_distribution": {
+                    "extreme": risk_levels.count("extreme"),
+                    "critical": risk_levels.count("critical"),
+                    "high": risk_levels.count("high"),
+                    "medium": risk_levels.count("medium"),
+                    "low": risk_levels.count("low"),
+                    "minimal": risk_levels.count("minimal")
+                },
+                "tasks_needing_immediate_attention": len([t for t in active_tasks_with_risks if t['risk_score'] >= 70]),
+                "tasks_with_high_risk": len([t for t in active_tasks_with_risks if t['risk_score'] >= 50]),
+                "total_ai_insights": len(set(all_ai_insights)),
+                "total_specific_problems": len(set(all_specific_problems)),
+                "critical_insights": list(set([insight for insight in all_ai_insights if "CRITICAL" in insight.upper() or "IMMEDIATE" in insight.upper()]))[:3],
+                "common_problems": list(set(all_specific_problems))[:5]  # Top 5 common problems
+            }
+        else:
+            summary_stats = {
+                "total_active_tasks": 0,
+                "average_risk_score": 0,
+                "highest_risk_score": 0,
+                "lowest_risk_score": 0,
+                "risk_distribution": {"extreme": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "minimal": 0},
+                "tasks_needing_immediate_attention": 0,
+                "tasks_with_high_risk": 0,
+                "total_ai_insights": 0,
+                "total_specific_problems": 0,
+                "critical_insights": [],
+                "common_problems": []
+            }
+        
+        return {
+            "status": "success",
+            "summary": summary_stats,
+            "tasks": active_tasks_with_risks,
+            "message": f"Found {len(active_tasks_with_risks)} active tasks with risk analysis and AI insights"
+        }
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"Error fetching active tasks risk summary: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching active tasks risk summary: {str(e)}"
+        )
+
+@router.get("/tasks/ai-suggestions/personalized", response_model=Dict[str, Any])
+async def get_personalized_ai_suggestions(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get personalized AI suggestions for the top 3 highest-risk tasks.
+    This endpoint:
+    1. Always queues a new Celery job to generate new suggestions (does NOT check or return cache)
+    2. Returns celery_task_id for status tracking
+    The result will be stored in Redis by the Celery task after processing.
+    """
+    try:
+        from tasks.analytics import generate_personalized_ai_suggestions_task
+        celery_task = generate_personalized_ai_suggestions_task.delay(
+            user_id=current_user["id"],
+            is_superuser=current_user.get("is_superuser", False)
+        )
+        return {
+            "status": "queued",
+            "user_id": current_user["id"],
+            "celery_task_id": celery_task.id,
+            "message": "Personalized AI suggestions job queued successfully. Use the celery_task_id to check status.",
+            "is_superuser": current_user.get("is_superuser", False),
+            "source": "always_new_generation"
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error queuing personalized AI suggestions: {str(e)}"
+        )
+
+@router.get("/tasks/ai-suggestions/status/{celery_task_id}")
+async def get_personalized_ai_suggestions_status(
+    celery_task_id: str
+) -> Dict[str, Any]:
+    """
+    Check the status of a personalized AI suggestions job.
+    
+    Returns:
+        Dict containing:
+        - task_id: str
+        - state: str (PENDING, PROGRESS, SUCCESS, FAILURE, etc.)
+        - result: Dict (if completed successfully)
+        - meta: Dict (progress information if in progress)
+    """
+    try:
+        from celery.result import AsyncResult
+        
+        result = AsyncResult(celery_task_id)
+        response = {
+            "task_id": celery_task_id,
+            "state": result.state,
+            "result": result.result if result.ready() else None,
+            "meta": result.info if hasattr(result, 'info') and result.info else None
+        }
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking personalized AI suggestions status: {str(e)}"
+        )
+
+@router.post("/tasks/ai-suggestions/personalized/refresh", response_model=Dict[str, Any])
+async def refresh_personalized_ai_suggestions(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Manually refresh personalized AI suggestions for the top 3 highest-risk tasks.
+    
+    This endpoint:
+    1. Forces regeneration of personalized AI suggestions
+    2. Clears any existing cache
+    3. Queues a new background job
+    4. Returns job ID for status tracking
+    
+    Use this when you want fresh suggestions regardless of cache status.
+    
+    Returns:
+        Dict containing:
+        - status: "queued"
+        - user_id: int
+        - celery_task_id: str (for status checking)
+    """
+    try:
+        from services.redis_service import get_redis_client
+        from tasks.analytics import generate_personalized_ai_suggestions_task
+        
+        # Clear existing cache
+        redis_client = get_redis_client()
+        cache_key = f"personalized_ai_suggestions:{current_user['id']}"
+        
+        try:
+            redis_client.delete(cache_key)
+            logger.info(f"Cleared existing cache for user {current_user['id']}")
+        except Exception as cache_error:
+            logger.warning(f"Error clearing cache for user {current_user['id']}: {str(cache_error)}")
+        
+        # Queue new task
+        celery_task = generate_personalized_ai_suggestions_task.delay(
+            user_id=current_user["id"],
+            is_superuser=current_user.get("is_superuser", False)
+        )
+        
+        return {
+            "status": "queued",
+            "user_id": current_user["id"],
+            "celery_task_id": celery_task.id,
+            "message": "Personalized AI suggestions refresh job queued successfully. Use the celery_task_id to check status.",
+            "is_superuser": current_user.get("is_superuser", False),
+            "source": "manual_refresh"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error refreshing personalized AI suggestions: {str(e)}"
+        )
+
+@router.get("/tasks/ai-suggestions/personalized/cached", response_model=Dict[str, Any])
+async def get_cached_personalized_ai_suggestions(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get the latest personalized AI suggestions for the user directly from Redis.
+    Always return the most recent available result (from personalized_ai_suggestions:{user_id}), regardless of expiration.
+    If none exists, return a not found message.
+    """
+    try:
+        from services.redis_service import get_redis_client
+        redis_client = get_redis_client()
+        cache_key = f"personalized_ai_suggestions:{current_user['id']}"
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            # Parse the JSON string if needed
+            if isinstance(cached_data, str):
+                try:
+                    cached_data = json.loads(cached_data)
+                except Exception:
+                    pass
+            return {
+                "status": "success",
+                "source": "redis_latest",
+                "data": cached_data
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": "No personalized AI suggestions found for this user."
+            }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting cached suggestions: {str(e)}"
+        )

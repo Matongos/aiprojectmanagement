@@ -12,6 +12,7 @@ celery_app = Celery(
         'tasks.task_priority',
         'tasks.project_progress',
         'tasks.task_risk',
+        'tasks.analytics',
     ]
 )
 

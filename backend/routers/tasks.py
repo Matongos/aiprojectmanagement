@@ -135,6 +135,9 @@ async def read_tasks(
                 "name": task.name,
                 "description": task.description,
                 "priority": task.priority,
+                "priority_source": getattr(task, "priority_source", None),
+                "priority_score": getattr(task, "priority_score", 0.0),
+                "priority_reasoning": getattr(task, "priority_reasoning", []),
                 "state": task.state,
                 "project_id": task.project_id,
                 "stage_id": task.stage_id,
@@ -155,7 +158,11 @@ async def read_tasks(
                 "milestone": None,
                 "company": None,
                 "depends_on_ids": [],
-                "subtask_ids": []
+                "subtask_ids": [],
+                "attachments": [],
+                "complexity_score": getattr(task, "complexity_score", 0.0),
+                "complexity_factors": getattr(task, "complexity_factors", {}),
+                "complexity_last_updated": getattr(task, "complexity_last_updated", None)
             }
             
             # Handle assignee
@@ -195,6 +202,8 @@ async def read_tasks(
             
             result.append(TaskSchema.model_validate(task_dict))
             
+        # Sort by priority_score descending
+        result.sort(key=lambda t: getattr(t, 'priority_score', 0.0), reverse=True)
         return result
         
     except Exception as e:
@@ -225,6 +234,9 @@ async def read_my_tasks(
                 "name": task.name,
                 "description": task.description,
                 "priority": task.priority,
+                "priority_source": getattr(task, "priority_source", None),
+                "priority_score": getattr(task, "priority_score", 0.0),
+                "priority_reasoning": getattr(task, "priority_reasoning", []),
                 "state": task.state,
                 "project_id": task.project_id,
                 "stage_id": task.stage_id,
@@ -246,7 +258,10 @@ async def read_my_tasks(
                 "company": None,
                 "depends_on_ids": [],
                 "subtask_ids": [],
-                "attachments": []
+                "attachments": [],
+                "complexity_score": getattr(task, "complexity_score", 0.0),
+                "complexity_factors": getattr(task, "complexity_factors", {}),
+                "complexity_last_updated": getattr(task, "complexity_last_updated", None)
             }
             
             # Handle assignee
@@ -286,6 +301,8 @@ async def read_my_tasks(
             
             result.append(TaskSchema.model_validate(task_dict))
             
+        # Sort by priority_score descending
+        result.sort(key=lambda t: getattr(t, 'priority_score', 0.0), reverse=True)
         return result
     except Exception as e:
         raise HTTPException(
@@ -337,7 +354,10 @@ async def read_task(
             "company": None,
             "depends_on_ids": [],
             "subtask_ids": [],
-            "attachments": []
+            "attachments": [],
+            "complexity_score": getattr(db_task, "complexity_score", 0.0),
+            "complexity_factors": getattr(db_task, "complexity_factors", {}),
+            "complexity_last_updated": getattr(db_task, "complexity_last_updated", None)
         }
         
         # Handle assignee
@@ -513,6 +533,14 @@ async def update_task(
                 logger.info(f"Queued comprehensive risk analysis for task {task_id} due to deadline activation (4s delay)")
             except Exception as e:
                 logger.warning(f"Failed to trigger comprehensive risk analysis for task {task_id}: {str(e)}")
+            
+            # Trigger AI suggestions for all users when deadline changes
+            try:
+                from tasks.analytics import trigger_ai_suggestions_for_all_users_task
+                trigger_ai_suggestions_for_all_users_task.delay()
+                logger.info(f"Queued AI suggestions refresh for all users due to deadline change on task {task_id}")
+            except Exception as e:
+                logger.warning(f"Failed to trigger AI suggestions for all users due to deadline change on task {task_id}: {str(e)}")
 
         # Also trigger risk analysis when task becomes active (start_date is set)
         if "start_date" in update_data and not task.start_date and update_data["start_date"]:
@@ -757,7 +785,10 @@ async def update_task_state(
             "depends_on_ids": [],
             "subtask_ids": [],
             "is_active": updated_task.is_active if hasattr(updated_task, 'is_active') else True,
-            "completion_status": updated_task.completion_status if hasattr(updated_task, 'completion_status') else CompletionStatus.NOT_COMPLETED
+            "completion_status": updated_task.completion_status if hasattr(updated_task, 'completion_status') else CompletionStatus.NOT_COMPLETED,
+            "complexity_score": getattr(updated_task, "complexity_score", 0.0),
+            "complexity_factors": getattr(updated_task, "complexity_factors", {}),
+            "complexity_last_updated": getattr(updated_task, "complexity_last_updated", None)
         }
         
         # Handle assignee
